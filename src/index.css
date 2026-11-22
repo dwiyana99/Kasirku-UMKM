@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    color: #1c1917;
+    background-color: #fafaf9;
+  }
+
+  body {
+    color: #1c1917;
+    background-color: #fafaf9;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid #059669;
+    outline-offset: 2px;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  /* Mode 1: Thermal Receipt 80mm Print */
+  body:not(.printing-management-report) #thermal-receipt-printable,
+  body:not(.printing-management-report) #thermal-receipt-printable * {
+    visibility: visible;
+  }
+  body:not(.printing-management-report) #thermal-receipt-printable {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 80mm;
+    margin: 0;
+    padding: 4mm;
+    background: #ffffff;
+    color: #1c1917;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Mode 2: A4 Management Revenue & KPI Report Print */
+  body.printing-management-report #management-report-printable,
+  body.printing-management-report #management-report-printable * {
+    visibility: visible;
+  }
+  body.printing-management-report #management-report-printable {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 12mm;
+    background: #ffffff;
+    color: #1c1917;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  body.printing-management-report .no-print {
+    display: none !important;
+  }
+}

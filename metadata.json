@@ -1,0 +1,6 @@
+{
+  "name": "KasirAkun UMKM",
+  "description": "Platform SaaS all-in-one POS Kasir, QR Table Self-Order, Akuntansi Double-Entry Otomatis (SAK EMKM/PSAK), dan Kepatuhan Pajak DJP Coretax untuk UMKM Indonesia.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

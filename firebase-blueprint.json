@@ -1,0 +1,312 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated UMKM business owner profile (isolated private document).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accountScope": {
+          "type": "string",
+          "enum": ["DEMO", "REAL"]
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "activeTenantId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "accountScope", "displayName", "activeTenantId", "createdAt", "updatedAt"]
+    },
+    "TenantLedger": {
+      "title": "TenantLedger",
+      "description": "Multi-tenant UMKM workspace document storing CoA, hierarchical taxonomy, products, recipes, purchase orders, orders, journals, expenses, fixed assets, receipt design, and custom fields.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accountScope": {
+          "type": "string",
+          "enum": ["DEMO", "REAL"]
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[a-z0-9\\-]+$"
+        },
+        "vertical": {
+          "type": "string",
+          "enum": ["WARUNG_SEMBAKO", "KEDAI_MAKAN", "RESTORAN", "FREELANCE"]
+        },
+        "taxEntity": {
+          "type": "string",
+          "enum": ["WP_OP", "PT_PERORANGAN", "CV_FIRMA", "PT_BIASA"]
+        },
+        "workspacePayload": {
+          "type": "object",
+          "description": "Structured map containing accounts, categories, taxonomy, products, recipes, purchaseOrders, orders, journalEntries, expenses, fixedAssets, customFields, and tables."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "accountScope", "tenantId", "name", "slug", "vertical", "taxEntity", "workspacePayload", "createdAt", "updatedAt"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "Realtime Firestore inventory / menu / raw-material item belonging strictly to a tenant.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "productId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "sku": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "itemType": {
+          "type": "string",
+          "enum": ["RETAIL_GOODS", "MENU_ITEM", "RAW_MATERIAL", "SERVICE_FREELANCE"]
+        },
+        "sellingPrice": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "costPriceAvg": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "stockQty": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "payload": {
+          "type": "object",
+          "description": "Full Product JSON payload including taxonomy, customAttributes, and minStockAlert."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "tenantId", "productId", "name", "sku", "itemType", "sellingPrice", "costPriceAvg", "stockQty", "unit", "payload", "createdAt", "updatedAt"]
+    },
+    "PosTransaction": {
+      "title": "PosTransaction",
+      "description": "Realtime Firestore POS or QR Self-Order transaction record belonging strictly to a tenant.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "orderSource": {
+          "type": "string",
+          "enum": ["POS_CASHIER", "QR_SELF_ORDER", "FREELANCE_INVOICE"]
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["CASH", "QRIS_DYNAMIC", "BANK_TRANSFER", "TRANSFER", "CARD"]
+        },
+        "paymentStatus": {
+          "type": "string",
+          "enum": ["UNPAID", "PENDING_QRIS", "PAID", "VOID"]
+        },
+        "kitchenStatus": {
+          "type": "string",
+          "enum": ["PENDING", "COOKING", "READY", "SERVED"]
+        },
+        "grandTotal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "payload": {
+          "type": "object",
+          "description": "Full Order JSON payload including line items, tax breakdown, and customAttributes."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "tenantId", "orderId", "orderNumber", "orderSource", "paymentMethod", "paymentStatus", "kitchenStatus", "grandTotal", "payload", "createdAt", "updatedAt"]
+    },
+    "ManagedCustomer": {
+      "title": "ManagedCustomer",
+      "description": "Subscribed UMKM customer account record managed by the Master SaaS Owner with strict DEMO vs REAL separation.",
+      "type": "object",
+      "properties": {
+        "customerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accountScope": {
+          "type": "string",
+          "enum": ["DEMO", "REAL"]
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 255
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "TRIAL", "SUSPENDED", "PENDING_PAYMENT", "DEACTIVATED"]
+        },
+        "billingCycle": {
+          "type": "string",
+          "enum": ["MONTHLY", "ANNUAL"]
+        },
+        "customerPayload": {
+          "type": "object",
+          "description": "Structured customer subscription & per-user operational settings map."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["customerId", "ownerId", "accountScope", "fullName", "email", "status", "billingCycle", "customerPayload", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private REAL owner profile keyed by Firebase Auth UID."
+    },
+    "/users/{userId}/tenants/{tenantId}": {
+      "schema": { "$ref": "#/entities/TenantLedger" },
+      "description": "Multi-UMKM REAL tenant ledger owned strictly by userId."
+    },
+    "/users/{userId}/tenants/{tenantId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/InventoryItem" },
+      "description": "Realtime Firestore inventory items subcollection under the tenant."
+    },
+    "/users/{userId}/tenants/{tenantId}/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/PosTransaction" },
+      "description": "Realtime Firestore POS transactions subcollection under the tenant."
+    },
+    "/demo_sandboxes/{sandboxId}": {
+      "schema": { "$ref": "#/entities/TenantLedger" },
+      "description": "Isolated DEMO tenant sandbox separated from REAL user production collections."
+    },
+    "/managed_customers/{customerId}": {
+      "schema": { "$ref": "#/entities/ManagedCustomer" },
+      "description": "SaaS subscriber accounts & per-user configuration managed by Master Admin or owning user."
+    }
+  }
+}

@@ -1,0 +1,1145 @@
+// KasirAkun UMKM — Complete PostgreSQL / Google Cloud SQL Prisma Schema (Backward-Compatible Additive Update)
+// Uses NUMERIC(19, 4) for all monetary, stock, and tax fields (zero floating-point arithmetic)
+// Supports 6 UMKM Verticals, Multi-Branch/Warehouse, 3-Step Stock Transfers, Supplier PO, Blind Opname,
+// Boarding House (Kost), Agro/Livestock Batch WIP, Cashier Shifts & Anti-Fraud Audit Log,
+// Hybrid Subscription Plans + Add-Ons, AI Assistant Quota/Cache, and Master Demo Control.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BusinessVertical {
+  WARUNG_SEMBAKO
+  TOKO_RETAIL
+  BARBERSHOP_SALON
+  KEDAI_MAKAN
+  RESTORAN
+  FREELANCE
+  KOST_KONTRAKAN
+  PETERNAKAN_PERTANIAN
+
+  @@map("business_vertical")
+}
+
+enum TaxEntityType {
+  WP_OP
+  PT_PERORANGAN
+  CV_FIRMA
+  PT_BIASA
+
+  @@map("tax_entity_type")
+}
+
+enum MemberRole {
+  OWNER
+  MANAGER
+  CASHIER
+  KITCHEN
+  ACCOUNTANT
+
+  @@map("member_role")
+}
+
+enum AccountCategory {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+
+  @@map("account_category")
+}
+
+enum BalanceSide {
+  DEBIT
+  CREDIT
+
+  @@map("balance_side")
+}
+
+enum BranchType {
+  OUTLET
+  CENTRAL_WAREHOUSE
+
+  @@map("branch_type")
+}
+
+enum BoardingRoomStatus {
+  AVAILABLE
+  OCCUPIED
+  MAINTENANCE
+
+  @@map("boarding_room_status")
+}
+
+enum AgroBatchKind {
+  TERNAK
+  TANAMAN
+
+  @@map("agro_batch_kind")
+}
+
+enum AgroBatchStatus {
+  ACTIVE
+  HARVESTED
+
+  @@map("agro_batch_status")
+}
+
+enum StockTransferStatus {
+  REQUESTED
+  IN_TRANSIT
+  RECEIVED
+  CANCELLED
+
+  @@map("stock_transfer_status")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIAL
+  RECEIVED
+  CANCELLED
+
+  @@map("purchase_order_status")
+}
+
+enum OpnameStatus {
+  IN_PROGRESS
+  APPROVED
+  CANCELLED
+
+  @@map("opname_status")
+}
+
+enum GlobalDemoMode {
+  PUBLIC_INSTANT
+  APPOINTMENT_APPROVAL
+
+  @@map("global_demo_mode")
+}
+
+enum DemoRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("demo_request_status")
+}
+
+enum PaymentGatewayProvider {
+  SIMULATOR
+  MIDTRANS
+  DUITKU
+  TRIPAY
+  MANUAL_ONLY
+
+  @@map("payment_gateway_provider")
+}
+
+enum GatewayEnvironment {
+  SANDBOX
+  PRODUCTION
+
+  @@map("gateway_environment")
+}
+
+enum FeeBearer {
+  MERCHANT
+  CUSTOMER
+
+  @@map("fee_bearer")
+}
+
+model User {
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                String                @unique @db.VarChar(255)
+  passwordHash         String                @map("password_hash")
+  fullName             String                @map("full_name") @db.VarChar(150)
+  phone                String?               @db.VarChar(30)
+  isSuperAdmin         Boolean               @default(false) @map("is_super_admin")
+  accountStatus        String                @default("ACTIVE") @map("account_status") @db.VarChar(20)
+  maxTenantsAllowed    Int                   @default(3) @map("max_tenants_allowed")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  memberships          TenantMembership[]
+  subscriptionInvoices SubscriptionInvoice[]
+
+  @@map("users")
+}
+
+model SubscriptionInvoice {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  invoiceNumber   String    @unique @map("invoice_number") @db.VarChar(64)
+  userId          String?   @map("user_id") @db.Uuid
+  customerEmail   String    @map("customer_email") @db.VarChar(255)
+  planCode        String    @default("BASIC") @map("plan_code") @db.VarChar(30)
+  billingCycle    String    @default("MONTHLY") @map("billing_cycle") @db.VarChar(20)
+  selectedModules Json      @default("[]") @map("selected_modules") @db.JsonB
+  subtotalAmount  Decimal   @default(0) @map("subtotal_amount") @db.Decimal(19, 4)
+  dppNilaiLain    Decimal   @default(0) @map("dpp_nilai_lain") @db.Decimal(19, 4)
+  ppnAmount       Decimal   @default(0) @map("ppn_amount") @db.Decimal(19, 4)
+  grandTotal      Decimal   @default(0) @map("grand_total") @db.Decimal(19, 4)
+  paymentMethod   String    @default("QRIS_DYNAMIC") @map("payment_method") @db.VarChar(30)
+  paymentStatus   String    @default("PENDING_PAYMENT") @map("payment_status") @db.VarChar(30)
+  gatewayRefId    String?   @unique @map("gateway_ref_id") @db.VarChar(120)
+  paidAt          DateTime? @map("paid_at") @db.Timestamptz()
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("subscription_invoices")
+}
+
+model Tenant {
+  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                   String                  @db.VarChar(150)
+  slug                   String                  @unique @db.VarChar(100)
+  vertical               BusinessVertical
+  taxEntity              TaxEntityType           @default(WP_OP) @map("tax_entity")
+  isPkp                  Boolean                 @default(false) @map("is_pkp")
+  npwp16                 String?                 @map("npwp_16") @db.VarChar(16)
+  nitku22                String?                 @map("nitku_22") @db.VarChar(22)
+  address                String?
+  logoUrl                String?                 @map("logo_url")
+  receiptFooter          String?                 @default("Terima kasih atas kunjungan Anda!") @map("receipt_footer")
+  planCode               String                  @default("BASIC") @map("plan_code") @db.VarChar(30)
+  settings               Json                    @default("{}") @db.JsonB
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz()
+
+  memberships            TenantMembership[]
+  subscriptions          TenantSubscription[]
+  branches               Branch[]
+  branchStocks           BranchStock[]
+  stockTransfers         StockTransfer[]
+  suppliers              Supplier[]
+  purchaseOrders         PurchaseOrder[]
+  stockOpnameSessions    StockOpnameSession[]
+  customFieldDefinitions CustomFieldDefinition[]
+  categories             Category[]
+  products               Product[]
+  productRecipes         ProductRecipe[]
+  inventoryMovements     InventoryMovement[]
+  restaurantTables       RestaurantTable[]
+  orders                 Order[]
+  payments               Payment[]
+  operationalExpenses    OperationalExpense[]
+  fixedAssets            FixedAsset[]
+  accounts               Account[]
+  journalEntries         JournalEntry[]
+  boardingRooms          BoardingRoom[]
+  boardingTenants        BoardingTenant[]
+  boardingInvoices       BoardingInvoice[]
+  agroBatches            AgroBatch[]
+  cashierShifts          CashierShift[]
+  auditLogs              AuditLog[]
+  promotions             Promotion[]
+  priceTiers             PriceTier[]
+  customers              Customer[]
+  aiUsageLogs            AiUsageLog[]
+  aiInsightCaches        AiInsightCache[]
+  paymentConfig          TenantPaymentConfig?
+  paymentTransactions    PaymentTransaction[]
+  paymentAssistRequests  PaymentSetupAssistanceRequest[]
+  settlementBatches      SettlementBatch[]
+
+  @@map("tenants")
+}
+
+model Branch {
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String               @map("tenant_id") @db.Uuid
+  code                String               @db.VarChar(32)
+  name                String               @db.VarChar(120)
+  branchType          BranchType           @default(OUTLET) @map("branch_type")
+  address             String?
+  phone               String?              @db.VarChar(30)
+  nitku22             String?              @map("nitku_22") @db.VarChar(22)
+  isDefault           Boolean              @default(false) @map("is_default")
+  isActive            Boolean              @default(true) @map("is_active")
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchStocks        BranchStock[]
+  outgoingTransfers   StockTransfer[]      @relation("SourceBranch")
+  incomingTransfers   StockTransfer[]      @relation("DestinationBranch")
+  purchaseOrders      PurchaseOrder[]
+  opnameSessions      StockOpnameSession[]
+  orders              Order[]
+  cashierShifts       CashierShift[]
+  operationalExpenses OperationalExpense[]
+  journalEntries      JournalEntry[]
+  paymentTransactions PaymentTransaction[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId], map: "idx_branches_tenant")
+  @@map("branches")
+}
+
+model BranchStock {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  branchId            String   @map("branch_id") @db.Uuid
+  productId           String   @map("product_id") @db.Uuid
+  stockQty            Decimal  @default(0) @map("stock_qty") @db.Decimal(19, 4)
+  minStockAlert       Decimal  @default(0) @map("min_stock_alert") @db.Decimal(19, 4)
+  sellingPriceOverride Decimal? @map("selling_price_override") @db.Decimal(19, 4)
+  movingAvgCost       Decimal  @default(0) @map("moving_avg_cost") @db.Decimal(19, 4)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch              Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product             Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, productId])
+  @@index([tenantId, branchId], map: "idx_branch_stocks_tenant_branch")
+  @@map("branch_stocks")
+}
+
+model StockTransfer {
+  id                  String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String              @map("tenant_id") @db.Uuid
+  transferNumber      String              @map("transfer_number") @db.VarChar(50)
+  sourceBranchId      String              @map("source_branch_id") @db.Uuid
+  destinationBranchId String              @map("destination_branch_id") @db.Uuid
+  status              StockTransferStatus @default(REQUESTED)
+  notes               String?
+  requestedBy         String?             @map("requested_by") @db.VarChar(120)
+  shippedAt           DateTime?           @map("shipped_at") @db.Timestamptz()
+  receivedAt          DateTime?           @map("received_at") @db.Timestamptz()
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sourceBranch        Branch              @relation("SourceBranch", fields: [sourceBranchId], references: [id], onDelete: Restrict)
+  destinationBranch   Branch              @relation("DestinationBranch", fields: [destinationBranchId], references: [id], onDelete: Restrict)
+  items               StockTransferItem[]
+
+  @@unique([tenantId, transferNumber])
+  @@index([tenantId, status], map: "idx_stock_transfers_tenant_status")
+  @@map("stock_transfers")
+}
+
+model StockTransferItem {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stockTransferId String        @map("stock_transfer_id") @db.Uuid
+  productId       String        @map("product_id") @db.Uuid
+  requestedQty    Decimal       @map("requested_qty") @db.Decimal(19, 4)
+  shippedQty      Decimal       @default(0) @map("shipped_qty") @db.Decimal(19, 4)
+  receivedQty     Decimal       @default(0) @map("received_qty") @db.Decimal(19, 4)
+  damagedQty      Decimal       @default(0) @map("damaged_qty") @db.Decimal(19, 4)
+  unitCostAtShip  Decimal       @default(0) @map("unit_cost_at_ship") @db.Decimal(19, 4)
+
+  transfer        StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("stock_transfer_items")
+}
+
+model Supplier {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String          @map("tenant_id") @db.Uuid
+  name           String          @db.VarChar(150)
+  phone          String?         @db.VarChar(30)
+  address        String?
+  paymentTermDays Int            @default(0) @map("payment_term_days")
+  isActive       Boolean         @default(true) @map("is_active")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+
+  @@index([tenantId], map: "idx_suppliers_tenant")
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String              @map("tenant_id") @db.Uuid
+  branchId          String?             @map("branch_id") @db.Uuid
+  supplierId        String?             @map("supplier_id") @db.Uuid
+  poNumber          String              @map("po_number") @db.VarChar(50)
+  status            PurchaseOrderStatus @default(DRAFT)
+  paymentType       String              @default("TUNAI") @map("payment_type") @db.VarChar(20)
+  dueDate           DateTime?           @map("due_date") @db.Date
+  subtotalAmount    Decimal             @default(0) @map("subtotal_amount") @db.Decimal(19, 4)
+  landedCostShipping Decimal            @default(0) @map("landed_cost_shipping") @db.Decimal(19, 4)
+  grandTotal        Decimal             @default(0) @map("grand_total") @db.Decimal(19, 4)
+  amountPaid        Decimal             @default(0) @map("amount_paid") @db.Decimal(19, 4)
+  notes             String?
+  receiptImageUrl   String?             @map("receipt_image_url")
+  receivedAt        DateTime?           @map("received_at") @db.Timestamptz()
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch            Branch?             @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  supplier          Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  items             PurchaseOrderItem[]
+
+  @@unique([tenantId, poNumber])
+  @@index([tenantId, branchId], map: "idx_po_tenant_branch")
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  purchaseOrderId String        @map("purchase_order_id") @db.Uuid
+  productId       String        @map("product_id") @db.Uuid
+  orderedQty      Decimal       @map("ordered_qty") @db.Decimal(19, 4)
+  receivedQty     Decimal       @default(0) @map("received_qty") @db.Decimal(19, 4)
+  unitCost        Decimal       @map("unit_cost") @db.Decimal(19, 4)
+  lineTotal       Decimal       @map("line_total") @db.Decimal(19, 4)
+
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("purchase_order_items")
+}
+
+model StockOpnameSession {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String            @map("tenant_id") @db.Uuid
+  branchId       String            @map("branch_id") @db.Uuid
+  sessionNumber  String            @map("session_number") @db.VarChar(50)
+  status         OpnameStatus      @default(IN_PROGRESS)
+  isBlindCount   Boolean           @default(false) @map("is_blind_count")
+  totalVarianceValue Decimal       @default(0) @map("total_variance_value") @db.Decimal(19, 4)
+  notes          String?
+  approvedBy     String?           @map("approved_by") @db.VarChar(120)
+  approvedAt     DateTime?         @map("approved_at") @db.Timestamptz()
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch         Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  items          StockOpnameItem[]
+
+  @@unique([tenantId, sessionNumber])
+  @@map("stock_opname_sessions")
+}
+
+model StockOpnameItem {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  opnameSessionId  String             @map("opname_session_id") @db.Uuid
+  productId        String             @map("product_id") @db.Uuid
+  systemQtySnapshot Decimal           @map("system_qty_snapshot") @db.Decimal(19, 4)
+  physicalQty      Decimal            @map("physical_qty") @db.Decimal(19, 4)
+  varianceQty      Decimal            @map("variance_qty") @db.Decimal(19, 4)
+  unitCostSnapshot Decimal            @map("unit_cost_snapshot") @db.Decimal(19, 4)
+  varianceValue    Decimal            @map("variance_value") @db.Decimal(19, 4)
+  reasonCode       String?            @map("reason_code") @db.VarChar(30)
+
+  session          StockOpnameSession @relation(fields: [opnameSessionId], references: [id], onDelete: Cascade)
+  product          Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("stock_opname_items")
+}
+
+model BoardingRoom {
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String             @map("tenant_id") @db.Uuid
+  roomNumber   String             @map("room_number") @db.VarChar(30)
+  roomType     String             @map("room_type") @db.VarChar(60)
+  monthlyPrice Decimal            @map("monthly_price") @db.Decimal(19, 4)
+  annualPrice  Decimal            @default(0) @map("annual_price") @db.Decimal(19, 4)
+  status       BoardingRoomStatus @default(AVAILABLE)
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenants      BoardingTenant[]
+  invoices     BoardingInvoice[]
+
+  @@unique([tenantId, roomNumber])
+  @@map("boarding_rooms")
+}
+
+model BoardingTenant {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String            @map("tenant_id") @db.Uuid
+  roomId           String?           @map("room_id") @db.Uuid
+  fullName         String            @map("full_name") @db.VarChar(150)
+  nikKtp           String            @map("nik_ktp") @db.VarChar(20)
+  phoneWa          String            @map("phone_wa") @db.VarChar(30)
+  emergencyContact String?           @map("emergency_contact") @db.VarChar(120)
+  checkInDate      DateTime          @map("check_in_date") @db.Date
+  depositAmount    Decimal           @default(0) @map("deposit_amount") @db.Decimal(19, 4)
+  isActive         Boolean           @default(true) @map("is_active")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room             BoardingRoom?     @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  invoices         BoardingInvoice[]
+
+  @@map("boarding_tenants")
+}
+
+model BoardingInvoice {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  roomId          String         @map("room_id") @db.Uuid
+  boardingTenantId String        @map("boarding_tenant_id") @db.Uuid
+  periodMonth     String         @map("period_month") @db.VarChar(7)
+  rentAmount      Decimal        @map("rent_amount") @db.Decimal(19, 4)
+  utilityFee      Decimal        @default(0) @map("utility_fee") @db.Decimal(19, 4)
+  lateFee         Decimal        @default(0) @map("late_fee") @db.Decimal(19, 4)
+  totalAmount     Decimal        @map("total_amount") @db.Decimal(19, 4)
+  pph42Amount     Decimal        @default(0) @map("pph_4_2_amount") @db.Decimal(19, 4)
+  paymentStatus   String         @default("UNPAID") @map("payment_status") @db.VarChar(20)
+  paidAt          DateTime?      @map("paid_at") @db.Timestamptz()
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room            BoardingRoom         @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  boardingTenant  BoardingTenant       @relation(fields: [boardingTenantId], references: [id], onDelete: Restrict)
+  paymentTxns     PaymentTransaction[]
+
+  @@map("boarding_invoices")
+}
+
+model AgroBatch {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String           @map("tenant_id") @db.Uuid
+  name             String           @db.VarChar(150)
+  batchKind        AgroBatchKind    @map("batch_kind")
+  startDate        DateTime         @map("start_date") @db.Date
+  initialQty       Decimal          @map("initial_qty") @db.Decimal(19, 4)
+  mortalityQty     Decimal          @default(0) @map("mortality_qty") @db.Decimal(19, 4)
+  status           AgroBatchStatus  @default(ACTIVE)
+  accumulatedCost  Decimal          @default(0) @map("accumulated_cost") @db.Decimal(19, 4)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  usages           AgroBatchUsage[]
+  harvests         AgroHarvest[]
+
+  @@map("agro_batches")
+}
+
+model AgroBatchUsage {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agroBatchId String    @map("agro_batch_id") @db.Uuid
+  productId   String?   @map("product_id") @db.Uuid
+  usageCategory String  @map("usage_category") @db.VarChar(30)
+  description String    @db.VarChar(180)
+  qtyUsed     Decimal   @map("qty_used") @db.Decimal(19, 4)
+  unitCost    Decimal   @map("unit_cost") @db.Decimal(19, 4)
+  totalCost   Decimal   @map("total_cost") @db.Decimal(19, 4)
+  usageDate   DateTime  @map("usage_date") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  batch       AgroBatch @relation(fields: [agroBatchId], references: [id], onDelete: Cascade)
+
+  @@map("agro_batch_usages")
+}
+
+model AgroHarvest {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agroBatchId     String    @map("agro_batch_id") @db.Uuid
+  targetProductId String    @map("target_product_id") @db.Uuid
+  harvestDate     DateTime  @map("harvest_date") @db.Date
+  netHarvestQty   Decimal   @map("net_harvest_qty") @db.Decimal(19, 4)
+  unit            String    @db.VarChar(20)
+  totalBatchCost  Decimal   @map("total_batch_cost") @db.Decimal(19, 4)
+  unitHppComputed Decimal   @map("unit_hpp_computed") @db.Decimal(19, 4)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  batch           AgroBatch @relation(fields: [agroBatchId], references: [id], onDelete: Cascade)
+
+  @@map("agro_harvests")
+}
+
+model CashierShift {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  branchId          String?   @map("branch_id") @db.Uuid
+  cashierName       String    @map("cashier_name") @db.VarChar(120)
+  cashierEmail      String    @map("cashier_email") @db.VarChar(255)
+  openingCash       Decimal   @map("opening_cash") @db.Decimal(19, 4)
+  expectedCash      Decimal   @default(0) @map("expected_cash") @db.Decimal(19, 4)
+  nonCashTotal      Decimal   @default(0) @map("non_cash_total") @db.Decimal(19, 4)
+  actualClosingCash Decimal?  @map("actual_closing_cash") @db.Decimal(19, 4)
+  cashVariance      Decimal   @default(0) @map("cash_variance") @db.Decimal(19, 4)
+  status            String    @default("OPEN") @db.VarChar(20)
+  openedAt          DateTime  @default(now()) @map("opened_at") @db.Timestamptz()
+  closedAt          DateTime? @map("closed_at") @db.Timestamptz()
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch            Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, branchId], map: "idx_cashier_shifts_tenant_branch")
+  @@map("cashier_shifts")
+}
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  branchId   String?  @map("branch_id") @db.Uuid
+  actorName  String   @map("actor_name") @db.VarChar(120)
+  actorEmail String   @map("actor_email") @db.VarChar(255)
+  actionType String   @map("action_type") @db.VarChar(40)
+  referenceId String? @map("reference_id") @db.VarChar(80)
+  amount     Decimal? @db.Decimal(19, 4)
+  reason     String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, actionType], map: "idx_audit_logs_tenant_action")
+  @@map("audit_logs")
+}
+
+model Promotion {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  code          String    @db.VarChar(40)
+  name          String    @db.VarChar(150)
+  promoType     String    @map("promo_type") @db.VarChar(20)
+  discountValue Decimal   @default(0) @map("discount_value") @db.Decimal(19, 4)
+  minPurchase   Decimal   @default(0) @map("min_purchase") @db.Decimal(19, 4)
+  buyQty        Int?      @map("buy_qty")
+  getQty        Int?      @map("get_qty")
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@map("promotions")
+}
+
+model PriceTier {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  productId  String   @map("product_id") @db.Uuid
+  minQty     Decimal  @map("min_qty") @db.Decimal(19, 4)
+  tierPrice  Decimal  @map("tier_price") @db.Decimal(19, 4)
+  label      String?  @db.VarChar(60)
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, productId], map: "idx_price_tiers_tenant_product")
+  @@map("price_tiers")
+}
+
+model Customer {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  name          String   @db.VarChar(150)
+  phoneWa       String   @map("phone_wa") @db.VarChar(30)
+  totalSpent    Decimal  @default(0) @map("total_spent") @db.Decimal(19, 4)
+  loyaltyPoints Int      @default(0) @map("loyalty_points")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phoneWa])
+  @@map("customers")
+}
+
+model AiUsageLog {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  monthYear    String   @map("month_year") @db.VarChar(7)
+  requestCount Int      @default(0) @map("request_count")
+  tokensUsed   Int      @default(0) @map("tokens_used")
+  quotaLimit   Int      @default(60) @map("quota_limit")
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, monthYear])
+  @@map("ai_usage_logs")
+}
+
+model AiInsightCache {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  cacheKey    String   @map("cache_key") @db.VarChar(128)
+  answerText  String   @map("answer_text")
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz()
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, cacheKey])
+  @@map("ai_insight_caches")
+}
+
+model SystemDemoConfig {
+  id                       String         @id @default("default") @db.VarChar(40)
+  globalDemoMode           GlobalDemoMode @default(PUBLIC_INSTANT) @map("global_demo_mode")
+  demoVisibilityJson       Json           @default("{}") @map("demo_visibility_json") @db.JsonB
+  defaultDemoDurationDays  Int            @default(7) @map("default_demo_duration_days")
+  customEnabledModulesJson Json           @default("[]") @map("custom_enabled_modules_json") @db.JsonB
+  updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("system_demo_configs")
+}
+
+model DemoAppointmentRequest {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName          String            @map("full_name") @db.VarChar(150)
+  businessName      String            @map("business_name") @db.VarChar(150)
+  phoneWa           String            @map("phone_wa") @db.VarChar(30)
+  email             String            @db.VarChar(255)
+  vertical          BusinessVertical
+  branchCount       Int               @default(1) @map("branch_count")
+  requestedModules  Json              @default("[]") @map("requested_modules") @db.JsonB
+  preferredDate     String?           @map("preferred_date") @db.VarChar(30)
+  notes             String?
+  status            DemoRequestStatus @default(PENDING)
+  approvedAccountId String?           @map("approved_account_id") @db.VarChar(80)
+  demoExpiresAt     DateTime?         @map("demo_expires_at") @db.Timestamptz()
+  magicAccessToken  String?           @unique @map("magic_access_token") @db.VarChar(120)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@map("demo_appointment_requests")
+}
+
+model TenantMembership {
+  id       String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId   String     @map("user_id") @db.Uuid
+  tenantId String     @map("tenant_id") @db.Uuid
+  role     MemberRole @default(OWNER)
+  isActive Boolean    @default(true) @map("is_active")
+
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@map("tenant_memberships")
+}
+
+model FeatureModule {
+  code          String               @id @db.VarChar(50)
+  name          String               @db.VarChar(100)
+  description   String?
+  monthlyPrice  Decimal              @default(0) @map("monthly_price") @db.Decimal(19, 4)
+  isCore        Boolean              @default(false) @map("is_core")
+  subscriptions TenantSubscription[]
+
+  @@map("feature_modules")
+}
+
+model TenantSubscription {
+  id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String        @map("tenant_id") @db.Uuid
+  moduleCode String        @map("module_code") @db.VarChar(50)
+  status     String        @default("ACTIVE") @db.VarChar(20)
+  validUntil DateTime?     @map("valid_until") @db.Timestamptz()
+
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  module     FeatureModule @relation(fields: [moduleCode], references: [code])
+
+  @@unique([tenantId, moduleCode])
+  @@map("tenant_subscriptions")
+}
+
+model CustomFieldDefinition {
+  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String  @map("tenant_id") @db.Uuid
+  targetEntity String  @map("target_entity") @db.VarChar(50)
+  fieldKey     String  @map("field_key") @db.VarChar(64)
+  fieldLabel   String  @map("field_label") @db.VarChar(100)
+  fieldType    String  @map("field_type") @db.VarChar(20)
+  options      Json    @default("[]") @db.JsonB
+  isRequired   Boolean @default(false) @map("is_required")
+
+  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, targetEntity, fieldKey])
+  @@map("custom_field_definitions")
+}
+
+model Category {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  name      String    @db.VarChar(100)
+  sortOrder Int       @default(0) @map("sort_order")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String              @map("tenant_id") @db.Uuid
+  categoryId         String?             @map("category_id") @db.Uuid
+  sku                String?             @db.VarChar(64)
+  barcodeQr          String?             @map("barcode_qr") @db.VarChar(128)
+  name               String              @db.VarChar(180)
+  description        String?
+  imageUrl           String?             @map("image_url")
+  itemType           String              @map("item_type") @db.VarChar(20)
+  unit               String              @default("pcs") @db.VarChar(30)
+  sellingPrice       Decimal             @default(0) @map("selling_price") @db.Decimal(19, 4)
+  costPriceAvg       Decimal             @default(0) @map("cost_price_avg") @db.Decimal(19, 4)
+  stockQty           Decimal             @default(0) @map("stock_qty") @db.Decimal(19, 4)
+  minStockAlert      Decimal             @default(0) @map("min_stock_alert") @db.Decimal(19, 4)
+  isLuxuryGoods      Boolean             @default(false) @map("is_luxury_goods")
+  isTaxExempt        Boolean             @default(false) @map("is_tax_exempt")
+  isAvailable        Boolean             @default(true) @map("is_available")
+  customAttributes   Json                @default("{}") @map("custom_attributes") @db.JsonB
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category           Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  menuRecipes        ProductRecipe[]     @relation("MenuProduct")
+  usedInRecipes      ProductRecipe[]     @relation("IngredientProduct")
+  inventoryMoves     InventoryMovement[]
+  orderItems         OrderItem[]
+  branchStocks       BranchStock[]
+  transferItems      StockTransferItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+  opnameItems        StockOpnameItem[]
+  priceTiers         PriceTier[]
+
+  @@index([tenantId, barcodeQr], map: "idx_products_tenant_barcode")
+  @@index([customAttributes], type: Gin, map: "idx_products_custom_attr")
+  @@map("products")
+}
+
+model ProductRecipe {
+  id                  String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String  @map("tenant_id") @db.Uuid
+  menuProductId       String  @map("menu_product_id") @db.Uuid
+  ingredientProductId String  @map("ingredient_product_id") @db.Uuid
+  quantityRequired    Decimal @map("quantity_required") @db.Decimal(19, 4)
+
+  tenant              Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  menuProduct         Product @relation("MenuProduct", fields: [menuProductId], references: [id], onDelete: Cascade)
+  ingredientProduct   Product @relation("IngredientProduct", fields: [ingredientProductId], references: [id], onDelete: Restrict)
+
+  @@unique([menuProductId, ingredientProductId])
+  @@map("product_recipes")
+}
+
+model InventoryMovement {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  branchId     String?  @map("branch_id") @db.Uuid
+  productId    String   @map("product_id") @db.Uuid
+  movementType String   @map("movement_type") @db.VarChar(20)
+  qtyChange    Decimal  @map("qty_change") @db.Decimal(19, 4)
+  unitCost     Decimal  @map("unit_cost") @db.Decimal(19, 4)
+  referenceId  String?  @map("reference_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("inventory_movements")
+}
+
+model RestaurantTable {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String  @map("tenant_id") @db.Uuid
+  branchId    String? @map("branch_id") @db.Uuid
+  tableNumber String  @map("table_number") @db.VarChar(20)
+  qrToken     String  @unique @map("qr_token") @db.VarChar(100)
+  isActive    Boolean @default(true) @map("is_active")
+
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders      Order[]
+
+  @@unique([tenantId, tableNumber])
+  @@map("restaurant_tables")
+}
+
+model Order {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String           @map("tenant_id") @db.Uuid
+  branchId         String?          @map("branch_id") @db.Uuid
+  parentOrderId    String?          @map("parent_order_id") @db.Uuid
+  orderNumber      String           @map("order_number") @db.VarChar(50)
+  orderSource      String           @map("order_source") @db.VarChar(20)
+  orderMode        String           @default("DINE_IN") @map("order_mode") @db.VarChar(20)
+  tableId          String?          @map("table_id") @db.Uuid
+  customerName     String?          @map("customer_name") @db.VarChar(120)
+  customerPhoneWa  String?          @map("customer_phone_wa") @db.VarChar(30)
+  subtotal         Decimal          @default(0) @db.Decimal(19, 4)
+  discountAmount   Decimal          @default(0) @map("discount_amount") @db.Decimal(19, 4)
+  serviceCharge    Decimal          @default(0) @map("service_charge") @db.Decimal(19, 4)
+  taxType          String           @default("NONE") @map("tax_type") @db.VarChar(20)
+  taxAmount        Decimal          @default(0) @map("tax_amount") @db.Decimal(19, 4)
+  grandTotal       Decimal          @default(0) @map("grand_total") @db.Decimal(19, 4)
+  totalCogs        Decimal          @default(0) @map("total_cogs") @db.Decimal(19, 4)
+  paymentStatus    String           @default("UNPAID") @map("payment_status") @db.VarChar(20)
+  kitchenStatus    String           @default("PENDING") @map("kitchen_status") @db.VarChar(20)
+  isOpenBill       Boolean          @default(false) @map("is_open_bill")
+  isReceiptPrinted Boolean          @default(false) @map("is_receipt_printed")
+  customAttributes Json             @default("{}") @map("custom_attributes") @db.JsonB
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch           Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  table            RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  items            OrderItem[]
+  payments         Payment[]
+  paymentTxns      PaymentTransaction[]
+
+  @@index([tenantId, createdAt(sort: Desc)], map: "idx_orders_tenant_date")
+  @@index([tenantId, branchId], map: "idx_orders_tenant_branch")
+  @@map("orders")
+}
+
+model OrderItem {
+  id               String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId          String  @map("order_id") @db.Uuid
+  productId        String  @map("product_id") @db.Uuid
+  itemNameSnapshot String  @map("item_name_snapshot") @db.VarChar(180)
+  qty              Decimal @db.Decimal(19, 4)
+  unitPrice        Decimal @map("unit_price") @db.Decimal(19, 4)
+  unitCogs         Decimal @default(0) @map("unit_cogs") @db.Decimal(19, 4)
+  notes            String?
+
+  order            Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product          Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@map("order_items")
+}
+
+model Payment {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  orderId           String    @map("order_id") @db.Uuid
+  paymentMethod     String    @map("payment_method") @db.VarChar(30)
+  amountPaid        Decimal   @map("amount_paid") @db.Decimal(19, 4)
+  mdrFee            Decimal   @default(0) @map("mdr_fee") @db.Decimal(19, 4)
+  gatewayRefId      String?   @unique @map("gateway_ref_id") @db.VarChar(120)
+  rawWebhookPayload Json?     @map("raw_webhook_payload") @db.JsonB
+  paidAt            DateTime? @map("paid_at") @db.Timestamptz()
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order             Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model OperationalExpense {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  branchId             String?  @map("branch_id") @db.Uuid
+  expenseAccountId     String   @map("expense_account_id") @db.Uuid
+  paymentAccountId     String   @map("payment_account_id") @db.Uuid
+  expenseDate          DateTime @map("expense_date") @db.Date
+  description          String
+  amount               Decimal  @db.Decimal(19, 4)
+  withholdingTaxType   String?  @default("NONE") @map("withholding_tax_type") @db.VarChar(20)
+  withholdingTaxAmount Decimal  @default(0) @map("withholding_tax_amount") @db.Decimal(19, 4)
+  receiptImageUrl      String?  @map("receipt_image_url")
+  customAttributes     Json     @default("{}") @map("custom_attributes") @db.JsonB
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch               Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@map("operational_expenses")
+}
+
+model FixedAsset {
+  id                      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                String   @map("tenant_id") @db.Uuid
+  assetCode               String   @map("asset_code") @db.VarChar(50)
+  name                    String   @db.VarChar(150)
+  acquisitionDate         DateTime @map("acquisition_date") @db.Date
+  acquisitionCost         Decimal  @map("acquisition_cost") @db.Decimal(19, 4)
+  salvageValue            Decimal  @default(0) @map("salvage_value") @db.Decimal(19, 4)
+  usefulLifeMonths        Int      @map("useful_life_months")
+  depreciationMethod      String   @default("STRAIGHT_LINE") @map("depreciation_method") @db.VarChar(20)
+  accumulatedDepreciation Decimal  @default(0) @map("accumulated_depreciation") @db.Decimal(19, 4)
+  assetAccountId          String   @map("asset_account_id") @db.Uuid
+  accumDeprAccountId      String   @map("accum_depr_account_id") @db.Uuid
+  deprExpenseAccountId    String   @map("depr_expense_account_id") @db.Uuid
+  status                  String   @default("ACTIVE") @db.VarChar(20)
+
+  tenant                  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("fixed_assets")
+}
+
+model Account {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String          @map("tenant_id") @db.Uuid
+  code           String          @db.VarChar(20)
+  name           String          @db.VarChar(120)
+  category       AccountCategory
+  normalBalance  BalanceSide     @map("normal_balance")
+  isSystemLocked Boolean         @default(true) @map("is_system_locked")
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  journalLines   JournalLine[]
+
+  @@unique([tenantId, code])
+  @@map("accounts")
+}
+
+model JournalEntry {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  branchId        String?        @map("branch_id") @db.Uuid
+  entryNumber     String         @map("entry_number") @db.VarChar(50)
+  entryDate       DateTime       @map("entry_date") @db.Date
+  sourceModule    String         @map("source_module") @db.VarChar(30)
+  sourceId        String?        @map("source_id") @db.Uuid
+  description     String
+  status          String         @default("POSTED") @db.VarChar(20)
+  reversedEntryId String?        @map("reversed_entry_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch          Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  reversedEntry   JournalEntry?  @relation("JournalReversal", fields: [reversedEntryId], references: [id])
+  reversals       JournalEntry[] @relation("JournalReversal")
+  lines           JournalLine[]
+
+  @@index([tenantId, branchId], map: "idx_journal_entries_tenant_branch")
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  journalEntryId String       @map("journal_entry_id") @db.Uuid
+  accountId      String       @map("account_id") @db.Uuid
+  debit          Decimal      @default(0) @db.Decimal(19, 4)
+  credit         Decimal      @default(0) @db.Decimal(19, 4)
+  memo           String?      @db.VarChar(255)
+
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account        Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([accountId], map: "idx_journal_lines_account")
+  @@map("journal_lines")
+}
+
+// =========================================================================
+// MULTI-PROVIDER NON-CASH PAYMENTS (MIDTRANS, DUITKU, TRIPAY, SIMULATOR),
+// ASSISTANCE TICKETS, SETTLEMENT BATCHES & MASTER ADMIN CUSTOM WA TEMPLATES
+// =========================================================================
+
+model TenantPaymentConfig {
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String                 @unique @map("tenant_id") @db.Uuid
+  provider            PaymentGatewayProvider @default(SIMULATOR)
+  environment         GatewayEnvironment     @default(SANDBOX)
+  merchantCode        String?                @map("merchant_code") @db.VarChar(120)
+  encryptedServerKey  String?                @map("encrypted_server_key") @db.Text
+  encryptedClientKey  String?                @map("encrypted_client_key") @db.Text
+  encryptedPrivateKey String?                @map("encrypted_private_key") @db.Text
+  feeBearer           FeeBearer              @default(CUSTOMER) @map("fee_bearer")
+  qrisMdrPercent      Decimal                @default(0.0070) @map("qris_mdr_percent") @db.Decimal(5, 4)
+  vaFlatFee           Decimal                @default(4250) @map("va_flat_fee") @db.Decimal(19, 4)
+  ewalletFeePercent   Decimal                @default(0.0200) @map("ewallet_fee_percent") @db.Decimal(5, 4)
+  enabledChannels     Json                   @default("{\"cash\":true,\"qris_dynamic\":true,\"ewallet_gopay\":true,\"ewallet_shopeepay\":true,\"ewallet_dana\":true,\"ewallet_ovo\":true,\"va_bca\":true,\"va_mandiri\":true,\"va_bri\":true,\"va_bni\":true,\"va_bsi\":true,\"va_permata\":true,\"manual_transfer\":true}") @map("enabled_channels") @db.JsonB
+  manualBankAccounts  Json                   @default("[]") @map("manual_bank_accounts") @db.JsonB
+  setupStatus         String                 @default("SIMULATOR_MODE") @map("setup_status") @db.VarChar(32)
+  lastTestedAt        DateTime?              @map("last_tested_at") @db.Timestamptz()
+  configuredByAdminId String?                @map("configured_by_admin_id") @db.VarChar(120)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_payment_configs")
+}
+
+model PaymentTransaction {
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String                 @map("tenant_id") @db.Uuid
+  branchId            String?                @map("branch_id") @db.Uuid
+  orderId             String?                @map("order_id") @db.Uuid
+  boardingInvoiceId   String?                @map("boarding_invoice_id") @db.Uuid
+  provider            PaymentGatewayProvider @default(SIMULATOR)
+  checkoutMode        String                 @default("COUNTER_SCREEN") @map("checkout_mode") @db.VarChar(32)
+  paymentCategory     String                 @map("payment_category") @db.VarChar(32)
+  channelCode         String                 @map("channel_code") @db.VarChar(32)
+  baseAmount          Decimal                @map("base_amount") @db.Decimal(19, 4)
+  uniqueCode          Int?                   @map("unique_code")
+  customerAdminFee    Decimal                @default(0) @map("customer_admin_fee") @db.Decimal(19, 4)
+  gatewayMdrFee       Decimal                @default(0) @map("gateway_mdr_fee") @db.Decimal(19, 4)
+  totalPayable        Decimal                @map("total_payable") @db.Decimal(19, 4)
+  netSettlementAmount Decimal                @map("net_settlement_amount") @db.Decimal(19, 4)
+  gatewayRefId        String?                @unique @map("gateway_ref_id") @db.VarChar(150)
+  qrString            String?                @map("qr_string") @db.Text
+  qrImageUrl          String?                @map("qr_image_url") @db.Text
+  vaNumber            String?                @map("va_number") @db.VarChar(64)
+  deeplinkUrl         String?                @map("deeplink_url") @db.Text
+  ovoPhoneNumber      String?                @map("ovo_phone_number") @db.VarChar(30)
+  manualProofUrl      String?                @map("manual_proof_url") @db.Text
+  status              String                 @default("PENDING") @db.VarChar(32)
+  expiresAt           DateTime?              @map("expires_at") @db.Timestamptz()
+  paidAt              DateTime?              @map("paid_at") @db.Timestamptz()
+  rawWebhookPayload   Json?                  @map("raw_webhook_payload") @db.JsonB
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch              Branch?                @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  order               Order?                 @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  boardingInvoice     BoardingInvoice?       @relation(fields: [boardingInvoiceId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status], map: "idx_payment_txns_tenant_status")
+  @@index([branchId, createdAt(sort: Desc)], map: "idx_payment_txns_branch_date")
+  @@map("payment_transactions")
+}
+
+model PaymentSetupAssistanceRequest {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                String                 @map("tenant_id") @db.Uuid
+  requestedByUserId       String                 @map("requested_by_user_id") @db.VarChar(120)
+  preferredProvider       PaymentGatewayProvider @default(MIDTRANS) @map("preferred_provider")
+  hasExistingAccount      Boolean                @default(false) @map("has_existing_account")
+  settlementBankName      String                 @map("settlement_bank_name") @db.VarChar(80)
+  settlementAccountHolder String                 @map("settlement_account_holder") @db.VarChar(150)
+  whatsappNumber          String                 @map("whatsapp_number") @db.VarChar(30)
+  businessLegality        String                 @default("PERORANGAN_KTP") @map("business_legality") @db.VarChar(30)
+  notes                   String?                @db.Text
+  status                  String                 @default("PENDING") @db.VarChar(24)
+  adminNotes              String?                @map("admin_notes") @db.Text
+  handledByAdminId        String?                @map("handled_by_admin_id") @db.VarChar(120)
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant                  Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt(sort: Desc)], map: "idx_payment_assist_status_date")
+  @@map("payment_setup_assistance_requests")
+}
+
+model SettlementBatch {
+  id                       String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                 String                 @map("tenant_id") @db.Uuid
+  provider                 PaymentGatewayProvider
+  settlementDate           DateTime               @map("settlement_date") @db.Date
+  totalGross               Decimal                @map("total_gross") @db.Decimal(19, 4)
+  totalGatewayFee          Decimal                @map("total_gateway_fee") @db.Decimal(19, 4)
+  totalNetReceived         Decimal                @map("total_net_received") @db.Decimal(19, 4)
+  destinationBankAccountId String                 @map("destination_bank_account_id") @db.VarChar(80)
+  journalEntryId           String?                @map("journal_entry_id") @db.VarChar(80)
+  notes                    String?                @db.Text
+  createdAt                DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant                   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, settlementDate(sort: Desc)], map: "idx_settlement_batches_tenant_date")
+  @@map("settlement_batches")
+}
+
+model WaMessageTemplate {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code             String   @unique @db.VarChar(64)
+  title            String   @db.VarChar(150)
+  category         String   @default("GENERAL") @db.VarChar(32)
+  bodyTemplate     String   @map("body_template") @db.Text
+  isActive         Boolean  @default(true) @map("is_active")
+  updatedByAdminId String?  @map("updated_by_admin_id") @db.VarChar(120)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("wa_message_templates")
+}
+

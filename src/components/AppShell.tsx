@@ -27,11 +27,15 @@ import {
   Activity,
   Bell,
   ClipboardList,
+  RotateCcw,
+  FileSignature,
+  Globe,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { AccountModal } from './AccountModal';
 import { AiAssistantDrawer } from './ai/AiAssistantDrawer';
 import { Navbar } from './Navbar';
+import { PWAInstallButton } from './PWAInstallButton';
 import { getVerticalCapabilities } from '../lib/catalog/recipe-bom-utils';
 import { evaluateStockAlerts } from '../lib/inventory/stock-monitoring';
 import { computeDueReminders } from '../lib/analytics/owner-insights-engine';
@@ -74,6 +78,9 @@ const SIDEBAR_ICON_MAP: Record<
   activity: Activity,
   settings: SlidersHorizontal,
   master: ShieldCheck,
+  returns: RotateCcw,
+  contracts: FileSignature,
+  globe: Globe,
 };
 
 export function AppShell({
@@ -168,7 +175,7 @@ export function AppShell({
               onClick={() => navigate('/demo')}
               className="w-full py-2.5 px-4 text-sm font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
             >
-              Coba Demo Gratis (8 Bidang UMKM)
+              Coba Demo Gratis (22 Bidang UMKM)
             </button>
             <button
               type="button"
@@ -459,6 +466,7 @@ export function AppShell({
 
         {/* Account Management & Logout Footer */}
         <div className="p-4 border-t border-slate-200 space-y-2">
+          <PWAInstallButton compact />
           {isMaster && (
             <button
               type="button"
@@ -553,22 +561,6 @@ export function AppShell({
                 className="ml-1 px-3 py-1 rounded-md text-[11px] font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors whitespace-nowrap"
               >
                 Berlangganan Akun Asli →
-              </button>
-              <button
-                type="button"
-                data-testid="demo-sim-toggle-ai"
-                onClick={() =>
-                  hasAiActive
-                    ? deactivateAddOn('ADDON_AI_ASSISTANT')
-                    : activateAddOn('ADDON_AI_ASSISTANT')
-                }
-                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
-                  hasAiActive
-                    ? 'bg-amber-400 text-slate-950'
-                    : 'bg-white/10 text-amber-200 hover:bg-white/20'
-                }`}
-              >
-                {hasAiActive ? 'AI Aktif (+35rb)' : '+ Simulasi AI (+35rb)'}
               </button>
             </div>
           </div>
@@ -673,6 +665,7 @@ export function AppShell({
             </div>
             {renderSidebarNav(() => setMobileMenuOpen(false))}
             <div className="p-4 border-t border-stone-200 space-y-2 shrink-0">
+              <PWAInstallButton compact />
               {isMaster && (
                 <button
                   type="button"

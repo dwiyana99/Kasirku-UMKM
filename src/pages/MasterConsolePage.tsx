@@ -6,6 +6,8 @@ import {
   Check,
   CheckCircle2,
   Database,
+  FileSignature,
+  Globe,
   KeyRound,
   Landmark,
   LogOut,
@@ -21,9 +23,11 @@ import {
   X,
 } from 'lucide-react';
 import { AccountModal } from '../components/AccountModal';
+import { ContractTemplatesPanel } from '../components/master/ContractTemplatesPanel';
 import { DemoControlPanel } from '../components/master/DemoControlPanel';
 import { EnvSecretsPanel } from '../components/master/EnvSecretsPanel';
 import { InfraMigrationPanel } from '../components/master/InfraMigrationPanel';
+import { MasterLandingPagesPanel } from '../components/master/MasterLandingPagesPanel';
 import { RegionalTaxPanel } from '../components/master/RegionalTaxPanel';
 import { WaTemplatesPanel } from '../components/master/WaTemplatesPanel';
 import { PaymentAssistancePanel } from '../components/master/PaymentAssistancePanel';
@@ -84,13 +88,16 @@ export function MasterConsolePage() {
 
   const [masterTab, setMasterTab] = useState<
     | 'CUSTOMERS'
+    | 'LANDING_PAGES'
     | 'DEMO_CONTROL'
     | 'REGIONAL_TAX'
+    | 'CONTRACT_TEMPLATES'
     | 'PAYMENT_ASSIST'
     | 'WA_TEMPLATES'
     | 'ENV_SECRETS'
     | 'INFRA_MIGRATION'
   >('CUSTOMERS');
+  const [pendingLandingAssistCount, setPendingLandingAssistCount] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'ALL' | CustomerAccountStatus>('ALL');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -229,6 +236,11 @@ export function MasterConsolePage() {
       subtitle:
         'Pantau seluruh pengguna berbayar, atur paket aktif, status akun, batas cabang, dan parameter operasional.',
     },
+    LANDING_PAGES: {
+      title: 'Landing Page UMKM & Bantuan Kustomisasi Gratis',
+      subtitle:
+        'Kelola tiket bantuan kustomisasi gratis dari UMKM atau bantu menyetel, pratinjau, dan menerbitkan Landing Page secara proaktif.',
+    },
     DEMO_CONTROL: {
       title: 'Kontrol Demo & Persetujuan Jadwal',
       subtitle:
@@ -238,6 +250,11 @@ export function MasterConsolePage() {
       title: 'Pajak Daerah Indonesia (PBJT / UU HKPD)',
       subtitle:
         'Kelola tarif PBJT 38+ Kota/Kabupaten (Makanan, Homestay/Villa, SPA, Parkir) dan sinkronkan otomatis ke tenant sesuai domisili.',
+    },
+    CONTRACT_TEMPLATES: {
+      title: 'Master Template Kontrak Digital',
+      subtitle:
+        'Kelola template standar kontrak sewa kendaraan, properti, jasa proyek, dan layanan rutin untuk seluruh pelanggan UMKM.',
     },
     PAYMENT_ASSIST: {
       title: 'Pembayaran Non-Tunai User (Terpisah Per Akun)',
@@ -326,6 +343,30 @@ export function MasterConsolePage() {
 
           <button
             type="button"
+            data-testid="master-tab-landing-pages"
+            onClick={() => {
+              setMasterTab('LANDING_PAGES');
+              setMobileMenuOpen(false);
+            }}
+            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+              masterTab === 'LANDING_PAGES'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <span className="flex items-center gap-2.5 min-w-0">
+              <Globe className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
+              <span className="truncate">Landing Page UMKM</span>
+            </span>
+            {pendingLandingAssistCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-[10px] tabular-nums">
+                {pendingLandingAssistCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
             data-testid="master-tab-demo-control"
             onClick={() => {
               setMasterTab('DEMO_CONTROL');
@@ -356,6 +397,23 @@ export function MasterConsolePage() {
           >
             <Landmark className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
             <span className="truncate">Pajak Daerah (PBJT)</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="master-tab-contract-templates"
+            onClick={() => {
+              setMasterTab('CONTRACT_TEMPLATES');
+              setMobileMenuOpen(false);
+            }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+              masterTab === 'CONTRACT_TEMPLATES'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <FileSignature className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
+            <span className="truncate">Template Kontrak Digital</span>
           </button>
 
           <button
@@ -575,10 +633,14 @@ export function MasterConsolePage() {
             </section>
           )}
 
-          {masterTab === 'DEMO_CONTROL' ? (
+          {masterTab === 'LANDING_PAGES' ? (
+            <MasterLandingPagesPanel onPendingCountChange={setPendingLandingAssistCount} />
+          ) : masterTab === 'DEMO_CONTROL' ? (
             <DemoControlPanel />
           ) : masterTab === 'REGIONAL_TAX' ? (
             <RegionalTaxPanel />
+          ) : masterTab === 'CONTRACT_TEMPLATES' ? (
+            <ContractTemplatesPanel />
           ) : masterTab === 'PAYMENT_ASSIST' ? (
             <PaymentAssistancePanel authToken={session.token} />
           ) : masterTab === 'WA_TEMPLATES' ? (

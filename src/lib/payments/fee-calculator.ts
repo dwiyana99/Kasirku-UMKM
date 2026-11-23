@@ -13,7 +13,7 @@ import type {
   EnabledPaymentChannels,
   FeeBearer,
   PaymentCategory,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 Decimal.set({ precision: 24, rounding: Decimal.ROUND_HALF_UP });
 

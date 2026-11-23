@@ -11,7 +11,7 @@ import type {
   BusinessVertical,
   ItemType,
   SubscriptionPlanCode,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 export type VerticalCategoryGroup =
   | 'RETAIL_DAGANG'
@@ -80,7 +80,7 @@ export const ALL_VERTICAL_DEFINITIONS: VerticalDefinition[] = [
     keyBenefitTitle: 'Manfaat Langsung untuk Pemilik Warung',
     keyBenefits: [
       'Paket LITE Rp49rb sangat ringkas: khusus bayar tunai tanpa cetak struk dan tanpa menu PO.',
-      'Beli per dus, jual eceran per bungkus atau pcs — stok otomatis terhitung.',
+      'Beli per dus, jual eceran per bungkus atau pcs, stok otomatis terhitung.',
       'Peringatan otomatis saat stok barang laris mulai menipis.',
     ],
     features: [
@@ -467,7 +467,7 @@ export const ALL_VERTICAL_DEFINITIONS: VerticalDefinition[] = [
     keyBenefitTitle: 'Manfaat Langsung untuk Barbershop',
     keyBenefits: [
       'Menu ringkas khusus perawatan pria (Haircut, Beard Trim, Hair Wash, Coloring) tanpa menu salon wanita.',
-      'Pilih nama kapster di setiap layanan — komisi harian/bulanan kapster langsung terekap.',
+      'Pilih nama kapster di setiap layanan agar komisi harian/bulanan langsung terekap.',
       'Kelola stok pomade, powder, dan sampo yang dijual eceran di meja kasir.',
     ],
     features: [
@@ -818,7 +818,7 @@ export const ALL_VERTICAL_DEFINITIONS: VerticalDefinition[] = [
       'Khusus pemilik usaha sewa garasi mobil bulanan atau harian di area perumahan/perkotaan. Catat nomor petak garasi, plat nomor mobil, jatuh tempo sewa, dan kirim pengingat WA.',
     keyBenefitTitle: 'Manfaat Langsung untuk Usaha Sewa Garasi',
     keyBenefits: [
-      'Tampilan sangat sederhana cocok untuk Paket LITE Rp49rb — tanpa menu gudang atau stok yang ribet.',
+      'Tampilan sangat sederhana cocok untuk Paket LITE Rp49rb, tanpa menu gudang atau stok yang ribet.',
       'Lihat petak garasi mana yang kosong, terisi, atau sudah jatuh tempo pembayaran.',
       'Kirim pengingat perpanjangan sewa bulanan lewat WhatsApp langsung (wa.me).',
     ],

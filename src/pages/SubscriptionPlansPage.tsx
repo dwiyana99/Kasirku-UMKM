@@ -257,7 +257,14 @@ export function SubscriptionPlansPage() {
                           className="mt-1 rounded border-slate-300 text-emerald-600"
                         />
                         <div>
-                          <p className="text-xs font-semibold text-slate-900">{addon.name}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-xs font-semibold text-slate-900">{addon.name}</p>
+                            {addon.badgeLabel && (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-800">
+                                {addon.badgeLabel}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">
                             {addon.description}
                           </p>

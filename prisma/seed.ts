@@ -45,6 +45,13 @@ export const DEFAULT_FEATURE_MODULES = [
     monthlyPrice: '39000.0000',
     isCore: false,
   },
+  {
+    code: 'ADDON_LANDING_PAGE',
+    name: 'Landing Page Usaha & Katalog Online',
+    description: 'Halaman website profil usaha & katalog online publik (/toko/nama-usaha, siap migrasi subdomain), adaptif sesuai jenis UMKM, termasuk bantuan kustomisasi awal gratis oleh Master Admin.',
+    monthlyPrice: '25000.0000',
+    isCore: false,
+  },
 ] as const;
 
 export const DEFAULT_CHART_OF_ACCOUNTS = [

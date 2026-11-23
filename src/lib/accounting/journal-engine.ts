@@ -19,7 +19,7 @@ import type {
   OperationalExpense,
   Order,
   Payment,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

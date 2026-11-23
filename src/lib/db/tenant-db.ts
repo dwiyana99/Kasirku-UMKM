@@ -17,7 +17,7 @@ import type {
   AccountScope,
   ManagedCustomerAccount,
   TenantWorkspaceData,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 export interface SignedSessionPayload {
   role: 'MASTER_ADMIN' | 'CUSTOMER' | 'STAFF';

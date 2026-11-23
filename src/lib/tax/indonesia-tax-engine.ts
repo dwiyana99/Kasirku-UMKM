@@ -22,11 +22,11 @@ import type {
   TaxType,
   TenantRegionalTaxSettings,
   WithholdingTaxType,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 import {
   DEFAULT_INDONESIA_REGIONAL_TAXES,
   resolveEffectiveRegionalTax,
-} from './regional-tax-indonesia';
+} from './regional-tax-indonesia.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

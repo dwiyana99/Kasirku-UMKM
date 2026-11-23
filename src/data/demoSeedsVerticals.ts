@@ -19,12 +19,12 @@
  * 15. SEWA_GARASI (Garasi Aman Residence — slot garasi mobil, plat nomor, tagihan bulanan)
  */
 
-import { DEFAULT_CHART_OF_ACCOUNTS } from '../../prisma/seed';
-import { buildJournalEntry } from '../lib/accounting/journal-engine';
-import { buildHierarchicalTaxonomyFromPresets } from '../lib/catalog/taxonomy-presets';
-import { ensureBranchStocksForTenant } from '../lib/inventory/multi-branch-engine';
-import { buildDefaultTenantRegionalTax } from '../lib/tax/regional-tax-indonesia';
-import { getVerticalMeta } from '../lib/verticals/vertical-registry';
+import { DEFAULT_CHART_OF_ACCOUNTS } from '../../prisma/seed.ts';
+import { buildJournalEntry } from '../lib/accounting/journal-engine.ts';
+import { buildHierarchicalTaxonomyFromPresets } from '../lib/catalog/taxonomy-presets.ts';
+import { ensureBranchStocksForTenant } from '../lib/inventory/multi-branch-engine.ts';
+import { buildDefaultTenantRegionalTax } from '../lib/tax/regional-tax-indonesia.ts';
+import { getVerticalMeta } from '../lib/verticals/vertical-registry.ts';
 import type {
   Account,
   Branch,
@@ -36,7 +36,7 @@ import type {
   Tenant,
   TenantWorkspaceData,
   VerticalOperationsState,
-} from '../types/domain';
+} from '../types/domain.ts';
 
 function makeAccounts(tenantId: string): Account[] {
   return DEFAULT_CHART_OF_ACCOUNTS.map((a) => ({
@@ -1451,7 +1451,7 @@ export function createNewVerticalDemoWorkspaces(): TenantWorkspaceData[] {
       sourceId: null,
       description: `Saldo Awal Kas & Modal Usaha ${meta.demoBusinessName}`,
       accounts,
-      lines: [
+      draftLines: [
         { accountCode: '1101', debit: spec.openingCash, credit: '0' },
         { accountCode: '3101', debit: '0', credit: spec.openingCash },
       ],
@@ -1478,6 +1478,7 @@ export function createNewVerticalDemoWorkspaces(): TenantWorkspaceData[] {
       phoneWa: c.phone,
       totalSpend: c.totalSpend,
       receivableBalance: '0.0000',
+      loyaltyPoints: 0,
       notes: c.notes,
       createdAt: '2026-10-01T08:00:00.000Z',
     }));
@@ -1486,7 +1487,7 @@ export function createNewVerticalDemoWorkspaces(): TenantWorkspaceData[] {
       tenant,
       accounts,
       categories,
-      taxonomy: buildHierarchicalTaxonomyFromPresets(categories, []),
+      taxonomy: buildHierarchicalTaxonomyFromPresets(spec.vertical, categories),
       products,
       recipes: [],
       inventoryMovements: [],
@@ -1500,7 +1501,12 @@ export function createNewVerticalDemoWorkspaces(): TenantWorkspaceData[] {
       staffAccounts: [],
       activityLogs: [],
       branches: [branch],
-      branchStocks: ensureBranchStocksForTenant(spec.tenantId, [branch], products, []),
+      branchStocks: ensureBranchStocksForTenant({
+        tenantId: spec.tenantId,
+        branches: [branch],
+        products,
+        existingStocks: [],
+      }),
       stockTransfers: [],
       suppliers: [],
       opnameSessions: [],

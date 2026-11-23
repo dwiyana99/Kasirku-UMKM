@@ -9,18 +9,18 @@
  * 6. Agro Ternak Mandiri (PETERNAKAN_PERTANIAN): Ayam Broiler Batch #4 & Padi Blok B, Pemakaian Pakan/Pupuk WIP (1109), Panen & HPP/Kg (1110)
  */
 
-import { DEFAULT_CHART_OF_ACCOUNTS } from '../../prisma/seed';
-import { buildJournalEntry } from '../lib/accounting/journal-engine';
-import { buildHierarchicalTaxonomyFromPresets } from '../lib/catalog/taxonomy-presets';
-import { ensureBranchStocksForTenant } from '../lib/inventory/multi-branch-engine';
-import { processOrderCheckout } from '../lib/pos/checkout-service';
+import { DEFAULT_CHART_OF_ACCOUNTS } from '../../prisma/seed.ts';
+import { buildJournalEntry } from '../lib/accounting/journal-engine.ts';
+import { buildHierarchicalTaxonomyFromPresets } from '../lib/catalog/taxonomy-presets.ts';
+import { ensureBranchStocksForTenant } from '../lib/inventory/multi-branch-engine.ts';
+import { processOrderCheckout } from '../lib/pos/checkout-service.ts';
 import {
   calculateBoardingInvoice,
   createBoardingDepositJournal,
   createBoardingRentPaymentJournal,
   recordAgroBatchUsage,
   recordAgroHarvest,
-} from '../lib/verticals/kost-agro-engine';
+} from '../lib/verticals/kost-agro-engine.ts';
 import type {
   Account,
   AgroBatch,
@@ -44,7 +44,7 @@ import type {
   SystemDemoConfig,
   Tenant,
   TenantWorkspaceData,
-} from '../types/domain';
+} from '../types/domain.ts';
 
 function makeAccounts(tenantId: string): Account[] {
   return DEFAULT_CHART_OF_ACCOUNTS.map((a) => ({

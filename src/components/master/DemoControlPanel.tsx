@@ -21,7 +21,7 @@ const VERTICAL_LIST: Array<{ id: BusinessVertical; label: string; demoName: stri
   ACTIVE_VERTICAL_DEFINITIONS.map((v) => ({
     id: v.id,
     label: v.shortLabel,
-    demoName: `${v.demoBusinessName} (${v.demoHighlight})`,
+    demoName: `${v.demoBusinessName} (${v.recommendedPlan})`,
   }));
 
 export function DemoControlPanel() {
@@ -212,7 +212,7 @@ export function DemoControlPanel() {
               Kontrol Halaman Demo (/demo) &amp; Akun Uji Coba
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Atur akses halaman Coba Demo Gratis (/demo): apakah pengunjung langsung memilih 8 demo UMKM, wajib daftar akun trial dahulu, atau melalui jadwal appointment.
+              Atur akses halaman Coba Demo Gratis (/demo): apakah pengunjung langsung memilih 22 demo UMKM, wajib daftar akun trial dahulu, atau melalui jadwal appointment.
             </p>
           </div>
           <button
@@ -243,7 +243,7 @@ export function DemoControlPanel() {
                 >
                   <p className="text-xs font-bold">PUBLIC_INSTANT (Aktif di /demo)</p>
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Pengunjung dapat memilih 8 bidang UMKM &amp; simulasi paket/add-on langsung di halaman /demo.
+                    Pengunjung dapat memilih 22 bidang UMKM &amp; simulasi paket/add-on langsung di halaman /demo.
                   </p>
                 </button>
                 <button
@@ -328,7 +328,7 @@ export function DemoControlPanel() {
 
           <div className="space-y-2.5">
             <p className="text-xs font-semibold text-slate-700">
-              Visibilitas 8 Akun Demo UMKM (di Halaman /demo)
+              Visibilitas {VERTICAL_LIST.length} Akun Demo UMKM (di Halaman /demo)
             </p>
             <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl px-4">
               {VERTICAL_LIST.map((v) => (

@@ -17,7 +17,7 @@ import type {
   TaxonomySize,
   TaxonomyUnit,
   TenantWorkspaceData,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 export interface HierarchicalPresetGroup {
   categoryName: string;

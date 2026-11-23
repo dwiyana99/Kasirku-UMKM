@@ -4,25 +4,19 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
-  Building2,
   CalendarClock,
   Check,
   CheckCircle2,
   ChevronDown,
   GitBranch,
-  LogOut,
   Menu,
   ShieldCheck,
   Sparkles,
-  UserCog,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { evaluateStockAlerts } from '../lib/inventory/stock-monitoring';
 import { computeDueReminders } from '../lib/analytics/owner-insights-engine';
 import { ModalShell } from './ui/ModalShell';
-import { VERTICAL_LABELS_MAP } from '../lib/verticals/vertical-registry';
-
-const VERTICAL_LABELS = VERTICAL_LABELS_MAP;
 
 export interface NavbarProps {
   title: string;
@@ -45,14 +39,10 @@ export function Navbar({
   subtitle,
   primaryAction,
   onOpenMobileMenu,
-  onOpenAccountModal,
   onOpenAiDrawer,
-  onLogout,
 }: NavbarProps) {
   const {
-    visibleWorkspaces,
     activeWorkspace,
-    switchTenant,
     activeBranchId,
     setActiveBranchId,
     navigate,
@@ -61,10 +51,8 @@ export function Navbar({
     hasAddOn,
   } = useApp();
 
-  const [tenantMenuOpen, setTenantMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [notifModalOpen, setNotifModalOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const branchRef = useRef<HTMLDivElement | null>(null);
 
   const isMaster = session.role === 'MASTER_ADMIN';
@@ -87,20 +75,16 @@ export function Navbar({
   const totalNotifCount = stockEvaluation.counts.total + dueReminders.length;
   const showNotifBell = stockEvaluation.totalTrackedCount > 0 || dueReminders.length > 0;
 
-  // Close desktop dropdowns on outside click or Escape key
+  // Close branch dropdown on outside click or Escape key
   useEffect(() => {
-    if (!tenantMenuOpen && !branchMenuOpen) return;
+    if (!branchMenuOpen) return;
     const handleOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setTenantMenuOpen(false);
-      }
       if (branchRef.current && !branchRef.current.contains(e.target as Node)) {
         setBranchMenuOpen(false);
       }
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setTenantMenuOpen(false);
         setBranchMenuOpen(false);
       }
     };
@@ -110,7 +94,7 @@ export function Navbar({
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [tenantMenuOpen, branchMenuOpen]);
+  }, [branchMenuOpen]);
 
   return (
     <div className="sticky top-0 z-30 w-full max-w-full">
@@ -192,7 +176,6 @@ export function Navbar({
             <button
               type="button"
               onClick={() => {
-                setTenantMenuOpen(false);
                 setBranchMenuOpen(false);
                 setNotifModalOpen(true);
               }}
@@ -224,7 +207,6 @@ export function Navbar({
               <button
                 type="button"
                 onClick={() => {
-                  setTenantMenuOpen(false);
                   setBranchMenuOpen((o) => !o);
                 }}
                 aria-haspopup="menu"
@@ -312,79 +294,6 @@ export function Navbar({
             </div>
           )}
 
-          {/* Tenant / Business Selector Dropdown (Desktop lg+ only; mobile uses sidebar drawer) */}
-          <div className="relative hidden lg:block" ref={dropdownRef}>
-            <button
-              type="button"
-              onClick={() => {
-                setBranchMenuOpen(false);
-                setTenantMenuOpen((o) => !o);
-              }}
-              aria-haspopup="menu"
-              aria-expanded={tenantMenuOpen}
-              aria-label="Pilih Usaha / Tenant"
-              data-testid="navbar-tenant-selector"
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-stone-800 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors whitespace-nowrap max-w-[220px]"
-            >
-              <Building2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" strokeWidth={1.75} />
-              <span className="truncate">{activeWorkspace.tenant.name}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-stone-400 shrink-0" strokeWidth={1.75} />
-            </button>
-
-            {tenantMenuOpen && (
-              <div
-                role="menu"
-                aria-label="Daftar Usaha Anda"
-                data-testid="navbar-tenant-dropdown-menu"
-                className="absolute right-0 mt-1.5 w-72 bg-white border border-stone-200 rounded-xl shadow-lg py-1.5 z-50"
-              >
-                <div className="px-3 py-1.5 border-b border-stone-100">
-                  <p className="text-[11px] font-semibold text-stone-500">
-                    {isMaster ? 'Workspace Terbuka (Mode Master)' : 'Usaha / Bisnis Anda'}
-                  </p>
-                </div>
-                <div className="max-h-64 overflow-y-auto py-1">
-                  {visibleWorkspaces.map((ws) => {
-                    const isSelected = ws.tenant.id === activeWorkspace.tenant.id;
-                    return (
-                      <button
-                        key={ws.tenant.id}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          switchTenant(ws.tenant.id);
-                          setTenantMenuOpen(false);
-                        }}
-                        className={`w-full px-3 py-2 text-left transition-colors flex items-start justify-between gap-2 ${
-                          isSelected
-                            ? 'bg-emerald-50 text-emerald-950'
-                            : 'hover:bg-stone-50 text-stone-700'
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold truncate">{ws.tenant.name}</p>
-                          <p className="text-[11px] text-stone-500 truncate">
-                            {VERTICAL_LABELS[ws.tenant.vertical]} · {ws.tenant.taxEntity}
-                          </p>
-                        </div>
-                        {isSelected && (
-                          <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" strokeWidth={1.75} />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-                {!isMaster && visibleWorkspaces.length === 1 && (
-                  <div className="px-3 py-1.5 border-t border-stone-100">
-                    <p className="text-[11px] text-stone-400">
-                      Data usaha Anda terisolasi penuh demi privasi akun.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           {/* Dedicated Back to Master link — Desktop lg+ only */}
           {isMaster && (
             <button
@@ -397,30 +306,6 @@ export function Navbar({
               <span>Kembali ke Master</span>
             </button>
           )}
-
-          {/* Account Management Trigger — Desktop lg+ only (mobile lives in Left Sidebar Drawer) */}
-          <button
-            type="button"
-            onClick={onOpenAccountModal}
-            data-testid="topbar-account-btn"
-            className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
-          >
-            <UserCog className="w-3.5 h-3.5 text-emerald-700 shrink-0" strokeWidth={1.75} />
-            <span className="hidden xl:inline max-w-[120px] truncate">{session.fullName}</span>
-            <span className="xl:hidden">Akun</span>
-          </button>
-
-          {/* Persistent Logout Button — Desktop lg+ only (mobile lives in Left Sidebar Drawer) */}
-          <button
-            type="button"
-            onClick={() => void onLogout()}
-            data-testid="topbar-logout-btn"
-            aria-label="Keluar dari akun"
-            className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors whitespace-nowrap"
-          >
-            <LogOut className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
-            <span>Keluar</span>
-          </button>
         </div>
       </header>
 

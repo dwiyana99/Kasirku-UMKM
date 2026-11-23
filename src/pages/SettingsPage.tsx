@@ -139,15 +139,15 @@ export function SettingsPage() {
     setProdPrice('');
     setProdCost('');
     setProdCustomValues({});
-    flashNotice(`Produk "${prodName.trim()}" berhasil disimpan beserta atribut JSONB kustom.`);
+    flashNotice(`Produk "${prodName.trim()}" berhasil disimpan beserta catatan tambahannya.`);
   };
 
   const originUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   return (
     <AppShell
-      title="Pengaturan & Custom Fields"
-      subtitle="Mesin Custom Fields JSONB tanpa ubah skema, katalog produk, QR meja cetak, dan profil entitas pajak"
+      title="Pengaturan Usaha"
+      subtitle="Atur profil usaha, desain struk, kolom catatan tambahan, QR meja, dan data pajak"
     >
       <div className="space-y-6">
         {notice && (
@@ -157,13 +157,13 @@ export function SettingsPage() {
           </div>
         )}
 
-        <div className="inline-flex flex-wrap gap-1.5 p-1 bg-white border border-slate-200 rounded-xl">
+        <div className="inline-flex flex-wrap gap-1.5 p-1 bg-white border border-stone-200 rounded-xl">
           {(
             [
               { id: 'TENANT_PROFILE', label: 'Profil Usaha', icon: Building2 },
               { id: 'RECEIPT_DESIGNER', label: 'Desainer Struk', icon: Receipt },
-              { id: 'CUSTOM_FIELDS', label: 'Custom Fields Engine', icon: SlidersHorizontal },
-              { id: 'PRODUCTS', label: 'Katalog & Form Dinamis', icon: Package },
+              { id: 'CUSTOM_FIELDS', label: 'Kolom Tambahan', icon: SlidersHorizontal },
+              { id: 'PRODUCTS', label: 'Katalog & Info Produk', icon: Package },
               { id: 'TABLES_PROFILE', label: 'QR Meja & Modul', icon: QrCode },
             ] as const
           ).map((item) => {
@@ -485,7 +485,7 @@ export function SettingsPage() {
               {productCustomFields.length > 0 && (
                 <div className="pt-3 border-t border-slate-100 space-y-3">
                   <p className="text-xs font-semibold text-emerald-700">
-                    Atribut Dinamis (Custom Fields JSONB)
+                    Info Tambahan Produk
                   </p>
                   {productCustomFields.map((cf) => (
                     <div key={cf.id}>
@@ -568,7 +568,7 @@ export function SettingsPage() {
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-                      <th className="py-3 px-5">Produk &amp; Custom JSONB</th>
+                      <th className="py-3 px-5">Produk &amp; Info Tambahan</th>
                       <th className="py-3 px-4 text-right">Harga Jual</th>
                       <th className="py-3 px-5 text-right">Stok</th>
                     </tr>

@@ -12,7 +12,7 @@ import type {
   SubscriptionPlanCode,
   Tenant,
   TenantWorkspaceData,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 
@@ -39,6 +39,7 @@ export interface AddOnDefinition {
   monthlyPrice: string; // NUMERIC(19,4)
   isSeparateAi?: boolean;
   quotaLabel?: string;
+  badgeLabel?: string;
   unlocksLegacyModule?: FeatureModule['code'];
   includedInPlans: SubscriptionPlanCode[];
 }
@@ -252,6 +253,16 @@ export const ADDON_DEFINITIONS: AddOnDefinition[] = [
     description:
       'Perluas slot akun kasir, kapster, gudang, petugas opname, atau staf akuntansi dengan kontrol hak akses RBAC.',
     monthlyPrice: '10000.0000',
+    includedInPlans: [],
+  },
+  {
+    code: 'ADDON_LANDING_PAGE',
+    name: 'Landing Page Usaha & Katalog Online',
+    shortLabel: 'Landing Page Usaha',
+    description:
+      'Halaman website profil usaha & katalog online publik (/toko/nama-usaha, siap migrasi subdomain), adaptif sesuai jenis UMKM, termasuk bantuan kustomisasi awal gratis oleh Master Admin.',
+    monthlyPrice: '25000.0000',
+    badgeLabel: 'Gratis Bantuan Kustomisasi Admin',
     includedInPlans: [],
   },
   {

@@ -195,7 +195,7 @@ export function ExpensesPage() {
                 >
                   {expenseAccounts.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.code} — {a.name}
+                      {a.code} · {a.name}
                     </option>
                   ))}
                 </select>

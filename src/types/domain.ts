@@ -76,6 +76,7 @@ export type AddOnModuleCode =
   | 'ADDON_EXTRA_BRANCH'
   | 'ADDON_EXTRA_STAFF'
   | 'ADDON_WA_FONNTE'
+  | 'ADDON_LANDING_PAGE'
   | 'ADDON_AI_ASSISTANT';
 
 export type PostgresProviderCode = 'CURRENT_LOCAL_FIRESTORE' | 'SUPABASE_POSTGRES' | 'NEON_POSTGRES';
@@ -312,6 +313,7 @@ export interface BoardingRoom {
   annualPrice?: string; // NUMERIC(19,4)
   yearlyRate?: string; // Alias NUMERIC(19,4)
   status: BoardingRoomStatus;
+  showOnLanding?: boolean;
   facilities?: string;
   notes?: string;
   createdAt?: string;
@@ -426,7 +428,9 @@ export type SensitiveAuditAction =
   | 'REFUND'
   | 'MANUAL_DISCOUNT'
   | 'PRICE_OVERRIDE'
-  | 'SHIFT_VARIANCE';
+  | 'SHIFT_VARIANCE'
+  | 'ADMIN_UPDATE_LANDING_PAGE'
+  | 'ADMIN_COMPLETE_LANDING_ASSISTANCE';
 
 export interface AuditLog {
   id: string;
@@ -597,6 +601,7 @@ export interface Product {
   isLuxuryGoods: boolean;
   isTaxExempt: boolean; // e.g., staple foods PP 49/2022
   isAvailable: boolean;
+  showOnLanding?: boolean;
   recipeTemplateId?: string | null;
   customAttributes: Record<string, string | number | boolean>;
   createdAt: string;
@@ -639,7 +644,16 @@ export interface InventoryMovement {
   tenantId: string;
   branchId?: string | null;
   productId: string;
-  movementType: 'IN_PURCHASE' | 'OUT_SALE' | 'OUT_RECIPE' | 'OPNAME_ADJ' | 'TRANSFER_OUT' | 'TRANSFER_IN' | 'AGRO_USAGE' | 'AGRO_HARVEST';
+  movementType:
+    | 'IN_PURCHASE'
+    | 'OUT_SALE'
+    | 'OUT_RECIPE'
+    | 'OPNAME_ADJ'
+    | 'TRANSFER_OUT'
+    | 'TRANSFER_IN'
+    | 'AGRO_USAGE'
+    | 'AGRO_HARVEST'
+    | 'RETURN_IN';
   qtyChange: string;
   unitCost: string;
   referenceId: string | null;
@@ -795,7 +809,8 @@ export interface JournalEntry {
     | 'OPNAME'
     | 'SHIFT'
     | 'KOST'
-    | 'AGRO';
+    | 'AGRO'
+    | 'SALES_RETURN';
   sourceId: string | null;
   description: string;
   status: 'POSTED' | 'REVERSED';
@@ -926,7 +941,9 @@ export type ActivityActionType =
   | 'SETTINGS_UPDATE'
   | 'SHIFT_CLOSE'
   | 'KOST_BILLING'
-  | 'AGRO_HARVEST';
+  | 'AGRO_HARVEST'
+  | 'SALES_RETURN'
+  | 'CONTRACT_GENERATED';
 
 export interface ActivityLogEntry {
   id: string;
@@ -982,6 +999,10 @@ export interface TenantWorkspaceData {
   aiUsageLog?: AiUsageLog;
   // Specialized UMKM Vertical Operational Modules (Laundry, Rental, Courts, Homestay, Bimbel, PetShop, Manufaktur, Bakery PO, etc.)
   verticalOps?: VerticalOperationsState;
+  // Sales Returns & Digital Contract Generator
+  salesReturns?: SalesReturnRecord[];
+  contractTemplates?: DigitalContractTemplate[];
+  digitalContracts?: DigitalContractRecord[];
 }
 
 export type CustomerAccountStatus =
@@ -1601,5 +1622,244 @@ export interface VerticalOperationsState {
   beautyAppointments?: BeautySpaAppointment[];
   buildingDeliveries?: BuildingDeliveryOrder[];
 }
+
+// =========================================================================
+// SALES RETURN MODULE (RETUR PENJUALAN + AUTO STOCK & DOUBLE-ENTRY REVERSAL)
+// =========================================================================
+
+export type SalesReturnReason =
+  | 'BARANG_RUSAK'
+  | 'SALAH_BARANG_UKURAN'
+  | 'KADALUARSA'
+  | 'PELANGGAN_BATAL'
+  | 'LAINNYA';
+
+export interface SalesReturnItem {
+  productId: string;
+  itemNameSnapshot: string;
+  qtyReturned: string; // NUMERIC(19,4)
+  unitPrice: string; // NUMERIC(19,4)
+  unitCogs: string; // NUMERIC(19,4)
+  lineRefundSubtotal: string; // NUMERIC(19,4)
+  lineCogsRestored: string; // NUMERIC(19,4)
+  restockToWarehouse: boolean;
+}
+
+export interface SalesReturnRecord {
+  id: string;
+  tenantId: string;
+  branchId?: string | null;
+  returnNumber: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  reason: SalesReturnReason;
+  notes?: string;
+  refundAccountCode: '1101' | '1102'; // 1101 Kas Tunai, 1102 Bank/Transfer
+  subtotalRefund: string; // NUMERIC(19,4)
+  taxReversed: string; // NUMERIC(19,4)
+  totalRefundAmount: string; // NUMERIC(19,4)
+  totalCogsRestored: string; // NUMERIC(19,4)
+  journalEntryId: string;
+  items: SalesReturnItem[];
+  processedByName: string;
+  createdAt: string;
+}
+
+// =========================================================================
+// DIGITAL CONTRACT GENERATOR (RENTAL, JASA, PROPERTI & LAYANAN RUTIN)
+// =========================================================================
+
+export type ContractCategory =
+  | 'RENTAL_KENDARAAN'
+  | 'JASA_PROYEK'
+  | 'SEWA_PROPERTI'
+  | 'LAYANAN_RUTIN';
+
+export interface DigitalContractTemplate {
+  id: string;
+  code: string;
+  name: string;
+  category: ContractCategory;
+  scope: 'GLOBAL_MASTER' | 'TENANT_CUSTOM';
+  applicableVerticals: BusinessVertical[];
+  headerTitle: string;
+  bodyTemplate: string; // Uses {{placeholders}}
+  footerTerms: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+export interface DigitalContractRecord {
+  id: string;
+  tenantId: string;
+  contractNumber: string;
+  templateId: string;
+  templateName: string;
+  category: ContractCategory;
+  customerName: string;
+  customerPhone: string;
+  customerIdNumber?: string;
+  objectSummary: string;
+  contractValue: string; // NUMERIC(19,4)
+  depositValue: string; // NUMERIC(19,4)
+  startDate: string;
+  endDate: string;
+  renderedText: string;
+  status: 'DRAFT' | 'SENT_WA' | 'SIGNED';
+  createdAt: string;
+}
+
+// =========================================================================
+// ADD-ON LANDING PAGE USAHA PER UMKM (+Rp25.000/BLN) & BANTUAN MASTER ADMIN
+// =========================================================================
+
+export type LandingThemePreset =
+  | 'WARM_EMERALD'
+  | 'TERRACOTTA_CRAFT'
+  | 'SLATE_NAVY'
+  | 'ORGANIC_SAGE';
+
+export type LandingAssistanceStatus =
+  | 'PENDING'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'NEEDS_INFO';
+
+export interface LandingPageOpeningHour {
+  day: string;
+  hours: string;
+  isClosed?: boolean;
+}
+
+export interface LandingPageSocialLinks {
+  instagram?: string;
+  tiktok?: string;
+  facebook?: string;
+  website?: string;
+}
+
+export interface LandingPageSectionsVisibility {
+  hero: boolean;
+  catalog: boolean;
+  highlights: boolean;
+  about: boolean;
+  location: boolean;
+  contact: boolean;
+}
+
+export interface LandingPageRequirementsChecklist {
+  hasActiveAddon: boolean;
+  hasValidWhatsapp: boolean;
+  hasHeroBanner: boolean;
+  hasCatalogOrFeaturedNotes: boolean;
+  agreedToTerms: boolean;
+}
+
+export interface TenantLandingPageConfig {
+  id: string;
+  tenantId: string;
+  slug: string;
+  customDomain?: string | null;
+  isPublished: boolean;
+  themePreset: LandingThemePreset;
+  logoUrl?: string | null;
+  heroTitle: string;
+  heroSubtitle?: string | null;
+  heroImageUrl?: string | null;
+  aboutText?: string | null;
+  whatsappNumber?: string | null;
+  address?: string | null;
+  googleMapsUrl?: string | null;
+  openingHoursJson: LandingPageOpeningHour[];
+  socialLinksJson: LandingPageSocialLinks;
+  highlightsJson: string[];
+  sectionsVisibilityJson: LandingPageSectionsVisibility;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  updatedByAdminId?: string | null;
+  lastCustomizedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LandingPageAssistanceRequest {
+  id: string;
+  tenantId: string;
+  tenantName?: string;
+  tenantVertical?: BusinessVertical;
+  tenantSlug?: string;
+  ownerName?: string;
+  requestedByUserId: string;
+  contactWhatsapp: string;
+  logoAssetUrl?: string | null;
+  heroBannerUrl?: string | null;
+  galleryAssetUrls: string[];
+  preferredTheme?: LandingThemePreset | null;
+  featuredItemsNotes?: string | null;
+  customBrief: string;
+  requirementsChecklistJson: LandingPageRequirementsChecklist;
+  agreedToTerms: boolean;
+  freeRevisionQuotaUsed: number;
+  status: LandingAssistanceStatus;
+  adminNotes?: string | null;
+  handledByAdminId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublicLandingCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  categoryName: string;
+  imageUrl?: string | null;
+  unit: string;
+  sellingPrice: string; // NUMERIC(19,4)
+  stockQty: string; // NUMERIC(19,4)
+  isAvailable: boolean;
+  wholesaleBadge?: string | null;
+  brand?: string | null;
+  sizeLabel?: string | null;
+}
+
+export interface PublicLandingRoomItem {
+  id: string;
+  roomNumber: string;
+  roomType: string;
+  monthlyPrice: string; // NUMERIC(19,4)
+  annualPrice?: string | null;
+  status: BoardingRoomStatus;
+  facilities?: string | null;
+}
+
+export interface PublicLandingAssetItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  rateLabel: string;
+  rateAmount: string; // NUMERIC(19,4)
+  statusLabel: string;
+  isAvailable: boolean;
+}
+
+export interface PublicTenantLandingPayload {
+  isPreview: boolean;
+  tenant: {
+    id: string;
+    name: string;
+    vertical: BusinessVertical;
+    address: string;
+    logoUrl?: string | null;
+  };
+  landingPage: TenantLandingPageConfig;
+  categories: string[];
+  products: PublicLandingCatalogItem[];
+  boardingRooms: PublicLandingRoomItem[];
+  availableRoomsCount: number;
+  specializedAssets: PublicLandingAssetItem[];
+}
+
+
 
 

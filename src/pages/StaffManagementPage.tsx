@@ -44,6 +44,8 @@ const ACTION_TYPE_LABELS: Record<ActivityActionType, string> = {
   SHIFT_CLOSE: 'Tutup Shift Kasir',
   KOST_BILLING: 'Tagihan & Sewa Kost',
   AGRO_HARVEST: 'Panen & Batch Agro',
+  SALES_RETURN: 'Retur Penjualan',
+  CONTRACT_GENERATED: 'Kontrak Digital',
 };
 
 export function StaffManagementPage() {

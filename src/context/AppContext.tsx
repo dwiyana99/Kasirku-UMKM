@@ -36,6 +36,8 @@ import type {
   CrmCustomer,
   CustomFieldDefinition,
   DemoAppointmentRequest,
+  DigitalContractRecord,
+  DigitalContractTemplate,
   FeatureModule,
   FixedAsset,
   InventoryMovement,
@@ -56,6 +58,8 @@ import type {
   RecipeTemplateIngredient,
   RegionalTaxRule,
   RestaurantTable,
+  SalesReturnReason,
+  SalesReturnRecord,
   StaffAccount,
   StaffPermission,
   StockAdjustmentReasonCode,
@@ -88,6 +92,22 @@ import {
   createSaleJournalEntries,
 } from '../lib/accounting/journal-engine';
 import { processOrderCheckout, type CartLineInput } from '../lib/pos/checkout-service';
+import {
+  buildSalesReturnExecution,
+  type ReturnLineRequest,
+} from '../lib/pos/sales-return-engine';
+import { DEFAULT_GLOBAL_CONTRACT_TEMPLATES } from '../lib/contracts/digital-contract-engine';
+import {
+  enqueueOfflineTransaction,
+  publishOfflineSyncStatus,
+  removeOfflineTransactionsForTenant,
+} from '../lib/offline/offline-queue';
+import {
+  deletePendingWorkspaceSnapshot,
+  listPendingWorkspaceSnapshots,
+  mergeServerWorkspacesWithPendingSnapshots,
+  savePendingWorkspaceSnapshot,
+} from '../lib/offline/offline-store';
 import { calculateWithholdingTax } from '../lib/tax/indonesia-tax-engine';
 import {
   DEFAULT_INDONESIA_REGIONAL_TAXES,
@@ -616,6 +636,27 @@ interface AppContextValue {
       paymentAccountCode?: '1101' | '1102';
     }
   ) => void;
+  // Sales Returns (Retur Penjualan + Auto Stock & Reversal Journal)
+  processSalesReturn: (input: {
+    orderId: string;
+    lines: ReturnLineRequest[];
+    reason: SalesReturnReason;
+    notes?: string;
+    refundAccountCode: '1101' | '1102';
+  }) => { ok: boolean; error?: string; record?: SalesReturnRecord };
+  // Digital Contract Generator (Global Master + Custom Tenant Templates & Records)
+  globalContractTemplates: DigitalContractTemplate[];
+  updateGlobalContractTemplate: (template: DigitalContractTemplate) => void;
+  deleteGlobalContractTemplate: (templateId: string) => void;
+  saveTenantContractTemplate: (template: DigitalContractTemplate) => void;
+  deleteTenantContractTemplate: (templateId: string) => void;
+  createDigitalContract: (
+    contract: Omit<DigitalContractRecord, 'id' | 'tenantId' | 'createdAt'>
+  ) => DigitalContractRecord;
+  updateDigitalContractStatus: (
+    contractId: string,
+    status: DigitalContractRecord['status']
+  ) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -738,7 +779,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (raw) {
         const parsed = JSON.parse(raw) as RegionalTaxRule[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return mergeLatestRegionalTaxRegistry(parsed).merged;
+          return mergeLatestRegionalTaxRegistry(parsed);
         }
       }
     } catch {
@@ -757,6 +798,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // ignore storage quota errors
     }
   }, [regionalTaxRegistry]);
+
+  const [globalContractTemplates, setGlobalContractTemplates] = useState<DigitalContractTemplate[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('kasirakun_global_contract_templates_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as DigitalContractTemplate[];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // fallback to defaults
+    }
+    return DEFAULT_GLOBAL_CONTRACT_TEMPLATES;
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'kasirakun_global_contract_templates_v1',
+        JSON.stringify(globalContractTemplates)
+      );
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [globalContractTemplates]);
 
   // Browser history sync
   useEffect(() => {
@@ -810,10 +875,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [activeTenantId]);
 
-  // Persist workspace changes to backend partitioned database API (strictly scoped by Bearer token)
+  // Persist workspace changes to backend partitioned database API (with IndexedDB offline fallback)
   const syncWorkspaceToServer = useCallback(
     async (token: string | undefined, ws: TenantWorkspaceData) => {
-      if (!token) return;
+      const offline = typeof navigator !== 'undefined' && !navigator.onLine;
+      if (offline || !token) {
+        if (offline) {
+          await savePendingWorkspaceSnapshot(ws.tenant.id, ws);
+        }
+        setSyncStatus('local');
+        return false;
+      }
       setSyncStatus('saving');
       try {
         const res = await fetch(`/api/db/workspace/${encodeURIComponent(ws.tenant.id)}`, {
@@ -825,16 +897,88 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({ workspace: ws }),
         });
         if (res.ok) {
+          await deletePendingWorkspaceSnapshot(ws.tenant.id);
+          removeOfflineTransactionsForTenant(ws.tenant.id);
           setSyncStatus('synced');
-        } else {
-          setSyncStatus('local');
+          return true;
         }
-      } catch {
+        await savePendingWorkspaceSnapshot(ws.tenant.id, ws, {
+          lastSyncError: `Server menolak sinkronisasi (HTTP ${res.status})`,
+        });
         setSyncStatus('local');
+        return false;
+      } catch {
+        await savePendingWorkspaceSnapshot(ws.tenant.id, ws, {
+          lastSyncError: 'Koneksi terputus saat menyimpan ke server',
+        });
+        setSyncStatus('local');
+        return false;
       }
     },
     []
   );
+
+  // Replay all pending IndexedDB offline snapshots to server and only delete after verified 200 OK
+  const replayPendingOfflineSnapshots = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    if (!session.token || session.role === 'GUEST') return;
+    const pending = await listPendingWorkspaceSnapshots();
+    if (pending.length === 0) return;
+
+    publishOfflineSyncStatus({
+      state: 'SYNCING',
+      pendingCount: pending.length,
+      syncedCount: 0,
+      lastError: null,
+    });
+
+    let syncedCount = 0;
+    let lastError: string | null = null;
+
+    for (const snap of pending) {
+      const ok = await syncWorkspaceToServer(session.token, snap.workspace);
+      if (ok) {
+        syncedCount += 1;
+      } else {
+        lastError = `Sebagian data lokal (${snap.workspace.tenant.name}) belum tersinkron. Klik coba lagi.`;
+      }
+    }
+
+    const remaining = await listPendingWorkspaceSnapshots();
+    if (remaining.length === 0 && syncedCount > 0) {
+      publishOfflineSyncStatus({
+        state: 'SYNCED',
+        pendingCount: 0,
+        syncedCount,
+        lastError: null,
+      });
+      window.setTimeout(() => {
+        publishOfflineSyncStatus({ state: 'IDLE', syncedCount: 0, pendingCount: 0, lastError: null });
+      }, 6000);
+    } else if (remaining.length > 0) {
+      publishOfflineSyncStatus({
+        state: 'ERROR',
+        pendingCount: remaining.length,
+        syncedCount,
+        lastError: lastError || 'Gagal menyinkronkan data offline ke server.',
+      });
+    } else {
+      publishOfflineSyncStatus({ state: 'IDLE', pendingCount: 0, syncedCount: 0, lastError: null });
+    }
+  }, [session.role, session.token, syncWorkspaceToServer]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleOnlineOrTrigger = () => {
+      void replayPendingOfflineSnapshots();
+    };
+    window.addEventListener('online', handleOnlineOrTrigger);
+    window.addEventListener('kasirakun-trigger-offline-sync', handleOnlineOrTrigger);
+    return () => {
+      window.removeEventListener('online', handleOnlineOrTrigger);
+      window.removeEventListener('kasirakun-trigger-offline-sync', handleOnlineOrTrigger);
+    };
+  }, [replayPendingOfflineSnapshots]);
 
   const syncCustomerToServer = useCallback(
     async (token: string | undefined, cust: ManagedCustomerAccount) => {
@@ -921,16 +1065,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setCustomers(data.customers);
         }
         if (Array.isArray(data.workspaces) && data.workspaces.length > 0) {
-          setWorkspaces(data.workspaces);
-          setActiveTenantId((prevId) =>
-            data.workspaces!.some((w) => w.tenant.id === prevId)
-              ? prevId
-              : data.workspaces![0].tenant.id
+          const pendingSnapshots = await listPendingWorkspaceSnapshots();
+          const mergedWorkspaces = mergeServerWorkspacesWithPendingSnapshots(
+            data.workspaces,
+            pendingSnapshots
           );
-          setSyncStatus('synced');
+          if (cancelled) return;
+          setWorkspaces(mergedWorkspaces);
+          setActiveTenantId((prevId) =>
+            mergedWorkspaces.some((w) => w.tenant.id === prevId)
+              ? prevId
+              : mergedWorkspaces[0].tenant.id
+          );
+          if (pendingSnapshots.length > 0 && navigator.onLine) {
+            void replayPendingOfflineSnapshots();
+          } else {
+            setSyncStatus('synced');
+          }
         }
       } catch {
-        // keep cached session workspace
+        // Offline reload: hydrate any locally saved IndexedDB workspace snapshots so sales survive browser refresh
+        const pendingSnapshots = await listPendingWorkspaceSnapshots();
+        if (!cancelled && pendingSnapshots.length > 0) {
+          setWorkspaces((prev) => mergeServerWorkspacesWithPendingSnapshots(prev, pendingSnapshots));
+          setSyncStatus('local');
+        }
       }
     })();
     return () => {
@@ -2075,7 +2234,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const next = prev.map((w) => (w.tenant.id === tenantId ? updater(w) : w));
         const target = next.find((w) => w.tenant.id === tenantId);
         if (target) {
-          if (session.token) {
+          if (session.token || (typeof navigator !== 'undefined' && !navigator.onLine)) {
             void syncWorkspaceToServer(session.token, target);
           }
           if (user) {
@@ -2158,6 +2317,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         activityLogs: [saleLog, ...(prev.activityLogs ?? [])].slice(0, 300),
       }));
 
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        enqueueOfflineTransaction({
+          source: 'POS_CASHIER',
+          tenantId: ws.tenant.id,
+          orderNumber: result.order.orderNumber,
+          summary: `${result.order.customerName} (${result.order.items.length} item)`,
+          grandTotal: result.order.grandTotal,
+        });
+      }
+
       if (user) {
         void upsertOrderToFirestore(ws.tenant.id, result.order);
         const oldMap = new Map(ws.products.map((p) => [p.id, p.stockQty]));
@@ -2204,6 +2373,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         orders: [result.order, ...prev.orders],
       }));
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        enqueueOfflineTransaction({
+          source: 'QR_SELF_ORDER',
+          tenantId: ws.tenant.id,
+          orderNumber: result.order.orderNumber,
+          summary: `Meja ${params.tableNumber} · ${params.customerName}`,
+          grandTotal: result.order.grandTotal,
+        });
+      }
 
       if (user) {
         void upsertOrderToFirestore(ws.tenant.id, result.order);
@@ -5313,17 +5492,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const syncLatestRegionalTaxes: AppContextValue['syncLatestRegionalTaxes'] = useCallback(() => {
     const nowIso = new Date().toISOString();
-    const result = mergeLatestRegionalTaxRegistry(regionalTaxRegistry);
-    setRegionalTaxRegistry(result.merged);
-    const byCode = new Map(result.merged.map((r) => [r.regionCode, r]));
-    let syncedTenants = 0;
+    const existingCodes = new Set(regionalTaxRegistry.map((r) => r.regionCode));
+    const merged = mergeLatestRegionalTaxRegistry(regionalTaxRegistry);
+    let addedCount = 0;
+    let updatedCount = 0;
+    for (const r of merged) {
+      if (existingCodes.has(r.regionCode)) {
+        updatedCount += 1;
+      } else {
+        addedCount += 1;
+      }
+    }
+    setRegionalTaxRegistry(merged);
+    const byCode = new Map(merged.map((r) => [r.regionCode, r]));
+    const syncedTenants = workspaces.filter((ws) => {
+      const reg = ws.tenant.settings.regionalTax;
+      return Boolean(reg && byCode.has(reg.regionCode));
+    }).length;
     setWorkspaces((prev) =>
       prev.map((ws) => {
         const reg = ws.tenant.settings.regionalTax;
         if (!reg) return ws;
         const matched = byCode.get(reg.regionCode);
         if (!matched) return ws;
-        syncedTenants += 1;
         return {
           ...ws,
           tenant: {
@@ -5342,11 +5533,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
     );
     return {
-      addedCount: result.addedCount,
-      updatedCount: result.updatedCount,
+      addedCount,
+      updatedCount,
       syncedTenants,
     };
-  }, [regionalTaxRegistry]);
+  }, [regionalTaxRegistry, workspaces]);
 
   const updateTenantRegionalAndWa: AppContextValue['updateTenantRegionalAndWa'] = useCallback(
     (patch) => {
@@ -5417,7 +5608,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               branchId: activeBranchId !== 'ALL' ? activeBranchId : prev.branches?.[0]?.id ?? null,
               entryNumber: `VOP-${today.replace(/-/g, '')}-${String(nextJournals.length + 1).padStart(4, '0')}`,
               entryDate: today,
-              sourceModule: 'POS_SALE',
+              sourceModule: 'POS',
               sourceId: null,
               description: revenuePosting.description,
               accounts: prev.accounts,
@@ -5434,6 +5625,205 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     },
     [activeBranchId, activeWorkspace, updateWorkspaceById]
+  );
+
+  const processSalesReturn: AppContextValue['processSalesReturn'] = useCallback(
+    (input) => {
+      const ws = activeWorkspace;
+      const order = ws.orders.find((o) => o.id === input.orderId);
+      if (!order) {
+        return { ok: false, error: 'Transaksi penjualan tidak ditemukan.' };
+      }
+
+      const existingForOrder = (ws.salesReturns ?? []).filter((r) => r.orderId === order.id);
+      const actorName = session.fullName || 'Pemilik Usaha';
+      const branchId = activeBranchId !== 'ALL' ? activeBranchId : order.branchId ?? ws.branches?.[0]?.id ?? null;
+
+      const exec = buildSalesReturnExecution({
+        tenantId: ws.tenant.id,
+        branchId,
+        order,
+        existingReturnsForOrder: existingForOrder,
+        lines: input.lines,
+        reason: input.reason,
+        notes: input.notes,
+        refundAccountCode: input.refundAccountCode,
+        accounts: ws.accounts,
+        processedByName: actorName,
+      });
+
+      if (!exec.ok || !exec.returnRecord || !exec.journalEntry) {
+        return { ok: false, error: exec.error || 'Gagal memproses retur penjualan.' };
+      }
+
+      const deltaMap = new Map(
+        (exec.stockDeltas ?? []).map((d) => [d.productId, new Decimal(d.qtyAdded)])
+      );
+      const nowIso = exec.returnRecord.createdAt;
+      const returnRecord = exec.returnRecord;
+      const journalEntry = exec.journalEntry;
+      const movements = exec.inventoryMovements ?? [];
+
+      updateWorkspaceById(ws.tenant.id, (prev) => {
+        const nextProducts = prev.products.map((p) => {
+          const added = deltaMap.get(p.id);
+          if (!added) return p;
+          return {
+            ...p,
+            stockQty: new Decimal(p.stockQty || '0').plus(added).toFixed(4),
+          };
+        });
+
+        const nextBranchStocks = (prev.branchStocks ?? []).map((bs) => {
+          if (branchId && bs.branchId !== branchId) return bs;
+          const added = deltaMap.get(bs.productId);
+          if (!added) return bs;
+          return {
+            ...bs,
+            stockQty: new Decimal(bs.stockQty || '0').plus(added).toFixed(4),
+            updatedAt: nowIso,
+          };
+        });
+
+        const activityEntry: ActivityLogEntry = {
+          id: `act-ret-${Date.now()}`,
+          tenantId: prev.tenant.id,
+          branchId,
+          actorName,
+          actorEmail: session.email || 'owner@kasirakun.id',
+          actorRole: session.role === 'STAFF' ? 'STAFF' : session.role === 'MASTER_ADMIN' ? 'MASTER_ADMIN' : 'OWNER',
+          actionType: 'SALES_RETURN',
+          summary: `Retur ${returnRecord.returnNumber} atas Nota ${returnRecord.orderNumber} (Refund Rp${Math.round(Number(returnRecord.totalRefundAmount)).toLocaleString('id-ID')})`,
+          createdAt: nowIso,
+        };
+
+        const auditEntry: AuditLog = {
+          id: `aud-ret-${Date.now()}`,
+          tenantId: prev.tenant.id,
+          branchId,
+          actorName,
+          actorEmail: session.email || 'owner@kasirakun.id',
+          actionType: 'REFUND',
+          referenceId: returnRecord.returnNumber,
+          amount: returnRecord.totalRefundAmount,
+          reason: `Retur Penjualan ${returnRecord.orderNumber}: ${returnRecord.reason}`,
+          createdAt: nowIso,
+        };
+
+        return {
+          ...prev,
+          products: nextProducts,
+          branchStocks: nextBranchStocks,
+          inventoryMovements: [...movements, ...prev.inventoryMovements],
+          journalEntries: [journalEntry, ...prev.journalEntries],
+          salesReturns: [returnRecord, ...(prev.salesReturns ?? [])],
+          activityLogs: [activityEntry, ...(prev.activityLogs ?? [])],
+          auditLogs: [auditEntry, ...(prev.auditLogs ?? [])],
+        };
+      });
+
+      return { ok: true, record: returnRecord };
+    },
+    [activeBranchId, activeWorkspace, session.email, session.fullName, session.role, updateWorkspaceById]
+  );
+
+  const updateGlobalContractTemplate: AppContextValue['updateGlobalContractTemplate'] = useCallback(
+    (template) => {
+      const stamped: DigitalContractTemplate = {
+        ...template,
+        scope: 'GLOBAL_MASTER',
+        updatedBy: session.fullName || 'Master Admin',
+        updatedAt: new Date().toISOString(),
+      };
+      setGlobalContractTemplates((prev) => {
+        const exists = prev.some((t) => t.id === stamped.id);
+        return exists ? prev.map((t) => (t.id === stamped.id ? stamped : t)) : [stamped, ...prev];
+      });
+    },
+    [session.fullName]
+  );
+
+  const deleteGlobalContractTemplate: AppContextValue['deleteGlobalContractTemplate'] = useCallback(
+    (templateId) => {
+      setGlobalContractTemplates((prev) => prev.filter((t) => t.id !== templateId));
+    },
+    []
+  );
+
+  const saveTenantContractTemplate: AppContextValue['saveTenantContractTemplate'] = useCallback(
+    (template) => {
+      const stamped: DigitalContractTemplate = {
+        ...template,
+        scope: 'TENANT_CUSTOM',
+        updatedBy: session.fullName || 'Pemilik Usaha',
+        updatedAt: new Date().toISOString(),
+      };
+      updateWorkspaceById(activeWorkspace.tenant.id, (prev) => {
+        const list = prev.contractTemplates ?? [];
+        const exists = list.some((t) => t.id === stamped.id);
+        return {
+          ...prev,
+          contractTemplates: exists
+            ? list.map((t) => (t.id === stamped.id ? stamped : t))
+            : [stamped, ...list],
+        };
+      });
+    },
+    [activeWorkspace.tenant.id, session.fullName, updateWorkspaceById]
+  );
+
+  const deleteTenantContractTemplate: AppContextValue['deleteTenantContractTemplate'] = useCallback(
+    (templateId) => {
+      updateWorkspaceById(activeWorkspace.tenant.id, (prev) => ({
+        ...prev,
+        contractTemplates: (prev.contractTemplates ?? []).filter((t) => t.id !== templateId),
+      }));
+    },
+    [activeWorkspace.tenant.id, updateWorkspaceById]
+  );
+
+  const createDigitalContract: AppContextValue['createDigitalContract'] = useCallback(
+    (contractInput) => {
+      const nowIso = new Date().toISOString();
+      const record: DigitalContractRecord = {
+        ...contractInput,
+        id: `dcon-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        tenantId: activeWorkspace.tenant.id,
+        createdAt: nowIso,
+      };
+      const actorName = session.fullName || 'Pemilik Usaha';
+      updateWorkspaceById(activeWorkspace.tenant.id, (prev) => ({
+        ...prev,
+        digitalContracts: [record, ...(prev.digitalContracts ?? [])],
+        activityLogs: [
+          {
+            id: `act-con-${Date.now()}`,
+            tenantId: prev.tenant.id,
+            actorName,
+            actorEmail: session.email || 'owner@kasirakun.id',
+            actorRole: session.role === 'STAFF' ? 'STAFF' : session.role === 'MASTER_ADMIN' ? 'MASTER_ADMIN' : 'OWNER',
+            actionType: 'CONTRACT_GENERATED',
+            summary: `Membuat Kontrak Digital ${record.contractNumber} untuk ${record.customerName}`,
+            createdAt: nowIso,
+          },
+          ...(prev.activityLogs ?? []),
+        ],
+      }));
+      return record;
+    },
+    [activeWorkspace.tenant.id, session.email, session.fullName, session.role, updateWorkspaceById]
+  );
+
+  const updateDigitalContractStatus: AppContextValue['updateDigitalContractStatus'] = useCallback(
+    (contractId, status) => {
+      updateWorkspaceById(activeWorkspace.tenant.id, (prev) => ({
+        ...prev,
+        digitalContracts: (prev.digitalContracts ?? []).map((c) =>
+          c.id === contractId ? { ...c, status } : c
+        ),
+      }));
+    },
+    [activeWorkspace.tenant.id, updateWorkspaceById]
   );
 
   const value: AppContextValue = {
@@ -5577,6 +5967,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     syncLatestRegionalTaxes,
     updateTenantRegionalAndWa,
     updateVerticalOps,
+    processSalesReturn,
+    globalContractTemplates,
+    updateGlobalContractTemplate,
+    deleteGlobalContractTemplate,
+    saveTenantContractTemplate,
+    deleteTenantContractTemplate,
+    createDigitalContract,
+    updateDigitalContractStatus,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

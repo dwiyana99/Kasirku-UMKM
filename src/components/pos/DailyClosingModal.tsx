@@ -23,10 +23,17 @@ interface DailyClosingModalProps {
  */
 export function DailyClosingModal({ open, onClose, onNotify }: DailyClosingModalProps) {
   const { activeWorkspace } = useApp();
+  const defaultWaPhone = activeWorkspace.tenant.settings?.businessWhatsappNumber || '';
   const [openingCash, setOpeningCash] = useState<string>('200000');
   const [actualCash, setActualCash] = useState<string>('');
-  const [ownerWaPhone, setOwnerWaPhone] = useState<string>('');
+  const [ownerWaPhone, setOwnerWaPhone] = useState<string>(defaultWaPhone);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (open && !ownerWaPhone && defaultWaPhone) {
+      setOwnerWaPhone(defaultWaPhone);
+    }
+  }, [open, defaultWaPhone, ownerWaPhone]);
 
   const baseClosing = useMemo(
     () =>

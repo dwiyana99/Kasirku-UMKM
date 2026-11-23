@@ -1,11 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Barcode,
   Calculator,
   CheckCircle2,
+  Download,
+  FileSpreadsheet,
   Percent,
   Plus,
+  Upload,
 } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
 import { AddEditItemModal } from '../components/catalog/AddEditItemModal';
@@ -14,6 +17,7 @@ import { RecipeBomManager } from '../components/catalog/RecipeBomManager';
 import { RawMaterialStockManager } from '../components/catalog/RawMaterialStockManager';
 import { SellingPriceSimulator } from '../components/catalog/SellingPriceSimulator';
 import { TaxonomyManager } from '../components/catalog/TaxonomyManager';
+import { ShoppingNotePanel } from '../components/inventory/ShoppingNotePanel';
 import { ModalShell } from '../components/ui/ModalShell';
 import { useApp } from '../context/AppContext';
 import { canUsePricingSimulator } from '../lib/catalog/pricing-simulator';
@@ -24,6 +28,11 @@ import {
 } from '../lib/analytics/owner-insights-engine';
 import { downloadShelfLabelsPdf } from '../lib/pdf/shelf-label-pdf';
 import { formatRupiah } from '../lib/pos/checkout-service';
+import {
+  buildCatalogCsvTemplate,
+  exportCatalogToCsv,
+  parseCatalogCsv,
+} from '../lib/catalog/csv-catalog';
 import { hasStaffPermission } from '../lib/rbac/staff-rbac';
 import type { Product, RecipeTemplate } from '../types/domain';
 
@@ -39,7 +48,8 @@ export function CatalogInventoryPage({
 }: {
   activeSection?: CatalogSectionId;
 }) {
-  const { activeWorkspace, session, navigate, updateProduct } = useApp();
+  const { activeWorkspace, session, navigate, addProduct, addCategory, updateProduct } = useApp();
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const verticalCaps = useMemo(
     () => getVerticalCapabilities(activeWorkspace.tenant.vertical),
@@ -149,6 +159,102 @@ export function CatalogInventoryPage({
         ? `Harga jual ${updatedCount} produk berhasil diperbarui secara massal.`
         : 'Tidak ada perubahan harga yang perlu disimpan.'
     );
+  };
+
+  const triggerDownloadCsvFile = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadCsvTemplate = () => {
+    const csv = buildCatalogCsvTemplate();
+    triggerDownloadCsvFile(csv, 'template-katalog-kasirakun.csv');
+    flashNotice('Template CSV berhasil diunduh. Isi di Excel/Google Sheets lalu unggah lewat Import CSV.');
+  };
+
+  const handleExportCatalogCsv = () => {
+    const csv = exportCatalogToCsv(activeWorkspace.products, activeWorkspace.categories);
+    const safeSlug = activeWorkspace.tenant.slug || 'katalog';
+    triggerDownloadCsvFile(csv, `katalog-${safeSlug}.csv`);
+    flashNotice(`Daftar ${activeWorkspace.products.length} item berhasil diekspor ke file CSV.`);
+  };
+
+  const handleImportCatalogCsv = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const defaultItemType: Product['itemType'] =
+        activeWorkspace.tenant.vertical === 'FREELANCE'
+          ? 'SERVICE_FREELANCE'
+          : verticalCaps.supportsRawMaterialsAndBom
+          ? 'MENU_ITEM'
+          : 'RETAIL_GOODS';
+
+      const parsed = parseCatalogCsv(text);
+      if (parsed.items.length === 0) {
+        flashError(
+          parsed.errors[0] ||
+            'Tidak ada baris produk valid di file CSV. Pastikan kolom Nama Barang dan Harga Jual terisi.'
+        );
+        return;
+      }
+
+      const categoryMap = new Map<string, string>();
+      for (const cat of activeWorkspace.categories) {
+        categoryMap.set(cat.name.trim().toLowerCase(), cat.id);
+      }
+
+      let importedCount = 0;
+      for (const row of parsed.items) {
+        let categoryId: string | null = activeWorkspace.categories[0]?.id ?? null;
+        if (row.categoryName) {
+          const key = row.categoryName.trim().toLowerCase();
+          const existingCatId = categoryMap.get(key);
+          if (existingCatId) {
+            categoryId = existingCatId;
+          } else {
+            const created = addCategory(row.categoryName.trim());
+            categoryMap.set(key, created.id);
+            categoryId = created.id;
+          }
+        }
+        addProduct({
+          categoryId,
+          sku: row.sku,
+          barcodeQr: row.barcodeQr,
+          name: row.name,
+          description: 'Diimpor dari file CSV katalog.',
+          itemType: defaultItemType,
+          unit: row.unit,
+          sellingPrice: row.sellingPrice,
+          costPriceAvg: row.costPriceAvg,
+          stockQty: row.stockQty,
+          minStockAlert: row.minStockAlert,
+          isLuxuryGoods: false,
+          isTaxExempt: row.isTaxExempt,
+          isAvailable: true,
+          customAttributes: {},
+        });
+        importedCount += 1;
+      }
+
+      const skippedInfo =
+        parsed.errors.length > 0
+          ? ` (${parsed.errors.length} baris dilewati: ${parsed.errors[0]})`
+          : '';
+      flashNotice(`${importedCount} item berhasil diimpor dari "${file.name}"${skippedInfo}.`);
+    } catch {
+      flashError('Gagal membaca file CSV. Pastikan format file adalah .csv yang valid.');
+    }
   };
 
   const headerMeta = useMemo(() => {
@@ -293,12 +399,66 @@ export function CatalogInventoryPage({
 
         {/* Dedicated View 1: Master Produk / Menu / Layanan */}
         {activeSection === 'PRODUCTS' && (
-          <ProductManager
-            onOpenAddModal={openAddNewItemModal}
-            onEditProduct={openEditItemModal}
-            onNotify={flashNotice}
-            canManageCatalog={canManageCatalog}
-          />
+          <div className="space-y-4">
+            {canManageCatalog && (
+              <div
+                data-testid="catalog-csv-toolbar"
+                className="bg-white border border-stone-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-stone-900">
+                    Import &amp; Export Massal (Excel / CSV)
+                  </p>
+                  <p className="text-[11px] text-stone-500">
+                    Punya puluhan atau ratusan barang? Unduh template, isi di Excel, lalu unggah sekaligus.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={csvInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => void handleImportCatalogCsv(e)}
+                    className="sr-only"
+                    aria-label="Pilih file CSV katalog"
+                  />
+                  <button
+                    type="button"
+                    data-testid="catalog-csv-template-btn"
+                    onClick={handleDownloadCsvTemplate}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-stone-600" strokeWidth={1.75} />
+                    <span>Template CSV</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="catalog-csv-export-btn"
+                    onClick={handleExportCatalogCsv}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Download className="w-3.5 h-3.5 text-stone-600" strokeWidth={1.75} />
+                    <span>Export CSV</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="catalog-csv-import-btn"
+                    onClick={() => csvInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-emerald-700" strokeWidth={1.75} />
+                    <span>Import CSV</span>
+                  </button>
+                </div>
+              </div>
+            )}
+            <ProductManager
+              onOpenAddModal={openAddNewItemModal}
+              onEditProduct={openEditItemModal}
+              onNotify={flashNotice}
+              canManageCatalog={canManageCatalog}
+            />
+          </div>
         )}
 
         {/* Dedicated View 2: Kategori, Merek & Satuan */}
@@ -318,13 +478,16 @@ export function CatalogInventoryPage({
           />
         )}
 
-        {/* Dedicated View 4: Kulakan Cepat / Belanja Tunai */}
+        {/* Dedicated View 4: Kulakan Cepat / Belanja Tunai + Daftar Catatan Belanja Siap Cetak */}
         {activeSection === 'RESTOCK_FAST' && (
-          <RawMaterialStockManager
-            mode={verticalCaps.supportsRawMaterialsAndBom ? 'FB_RAW_MATERIALS' : 'RETAIL_PROCUREMENT'}
-            onNotify={flashNotice}
-            onError={flashError}
-          />
+          <div className="space-y-6">
+            <ShoppingNotePanel onNotify={flashNotice} />
+            <RawMaterialStockManager
+              mode={verticalCaps.supportsRawMaterialsAndBom ? 'FB_RAW_MATERIALS' : 'RETAIL_PROCUREMENT'}
+              onNotify={flashNotice}
+              onError={flashError}
+            />
+          </div>
         )}
 
         {/* Dedicated View 5: Resep BOM & HPP */}

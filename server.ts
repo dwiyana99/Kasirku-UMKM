@@ -10,6 +10,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
 import { z } from 'zod';
@@ -22,24 +23,24 @@ import {
   signSessionToken,
   verifySessionToken,
   type SignedSessionPayload,
-} from './src/lib/db/tenant-db';
+} from './src/lib/db/tenant-db.ts';
 import {
   createInitialCustomers,
   createInitialWorkspaces,
   DEFAULT_SYSTEM_DEMO_CONFIG,
   INITIAL_DEMO_APPOINTMENTS,
-} from './src/data/seedData';
+} from './src/data/seedData.ts';
 import {
   calculateHybridPricing,
   deriveLegacyModulesFromHybrid,
   enforceWorkspacePlanEntitlements,
   tenantHasAddOn,
-} from './src/lib/saas/hybrid-pricing';
+} from './src/lib/saas/hybrid-pricing.ts';
 import {
   createAutoPaymentChallenge,
   verifyAutoPaymentCallback,
   type AutoPaymentSession,
-} from './src/lib/pos/payment-verifier';
+} from './src/lib/pos/payment-verifier.ts';
 import {
   buildPostgresMigrationSql,
   buildProductionEnvSnippet,
@@ -47,9 +48,11 @@ import {
   runMigrationPreflightAudit,
   validatePostgresConnectionUri,
   validateStorageTargetConfig,
-} from './src/lib/infra/pg-migration-builder';
-import { mountPaymentAndWaRoutes } from './src/server/payment-routes';
-import { mountMasterEnvSecretsRoutes } from './src/server/env-secrets-routes';
+} from './src/lib/infra/pg-migration-builder.ts';
+import { mountPaymentAndWaRoutes } from './src/server/payment-routes.ts';
+import { mountMasterEnvSecretsRoutes } from './src/server/env-secrets-routes.ts';
+import { mountLandingPageRoutes } from './src/server/landing-routes.ts';
+import { createSubdomainRewriteMiddleware } from './src/middleware.ts';
 import type {
   AddOnModuleCode,
   AiInsightCacheRecord,
@@ -62,9 +65,9 @@ import type {
   SubscriptionPlanCode,
   SystemDemoConfig,
   TenantWorkspaceData,
-} from './src/types/domain';
+} from './src/types/domain.ts';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const QRIS_WEBHOOK_SECRET = process.env.QRIS_WEBHOOK_SECRET || 'kasirakun-qris-hmac-dev-secret-2026';
 
 const ALL_VERTICAL_ENUM = [
@@ -102,6 +105,7 @@ const ALL_ADDONS_ENUM = [
   'ADDON_EXTRA_BRANCH',
   'ADDON_EXTRA_STAFF',
   'ADDON_WA_FONNTE',
+  'ADDON_LANDING_PAGE',
   'ADDON_AI_ASSISTANT',
 ] as const;
 
@@ -2117,12 +2121,31 @@ async function startServer() {
     saveJsonFile,
   });
 
+  // Mount Add-On Landing Page Usaha (+Rp25k/bln) APIs & Subdomain-Ready Middleware
+  mountLandingPageRoutes(app, {
+    tenantDb,
+    extractSessionFromRequest,
+    DATA_ROOT,
+    loadJsonFile,
+    saveJsonFile,
+  });
+  app.use(createSubdomainRewriteMiddleware());
+
+  const httpServer = http.createServer(app);
+
   // Vite dev middleware or static dist serving
   const isProd = process.env.NODE_ENV === 'production';
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        // Attach Vite's WebSocket upgrade handler directly to the port-3000 HTTP server
+        // instead of spawning an unreachable standalone port 24678 server behind Cloud Run / HTTPS proxies.
+        hmr: disableHmr ? false : { server: httpServer },
+        ws: { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -2139,7 +2162,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`KasirAkun UMKM server listening on http://0.0.0.0:${PORT}`);
   });
 }

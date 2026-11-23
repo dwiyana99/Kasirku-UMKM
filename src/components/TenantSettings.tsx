@@ -202,19 +202,13 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
     tenant,
   ]);
 
-  const regionalPreview = useMemo(
-    () =>
-      resolveEffectiveRegionalTax({
-        vertical: tenant.vertical,
-        regionalSettings: buildDefaultTenantRegionalTax({
-          regionCode,
-          applyRegionalTax,
-          registry: regionalTaxRegistry,
-        }),
-        registry: regionalTaxRegistry,
-      }),
-    [applyRegionalTax, regionCode, regionalTaxRegistry, tenant.vertical]
-  );
+  const regionalPreview = useMemo(() => {
+    const draftRegional = {
+      ...buildDefaultTenantRegionalTax(tenant.vertical, regionCode, regionalTaxRegistry),
+      applyRegionalTax: regionCode !== 'ID-NONE' && applyRegionalTax,
+    };
+    return resolveEffectiveRegionalTax(tenant.vertical, draftRegional, regionalTaxRegistry);
+  }, [applyRegionalTax, regionCode, regionalTaxRegistry, tenant.vertical]);
 
   const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMsg(null);
@@ -300,11 +294,10 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
 
     updateTenantRegionalAndWa({
       businessWhatsappNumber: businessWa.trim(),
-      regionalTax: buildDefaultTenantRegionalTax({
-        regionCode,
+      regionalTax: {
+        ...buildDefaultTenantRegionalTax(tenant.vertical, regionCode, regionalTaxRegistry),
         applyRegionalTax: regionCode !== 'ID-NONE' && applyRegionalTax,
-        registry: regionalTaxRegistry,
-      }),
+      },
     });
 
     updateTenantProfile({
@@ -792,7 +785,7 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
                 </span>
               </label>
               <p className="mt-1.5 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
-                {regionalPreview.explanation}
+                <strong>{regionalPreview.taxLabel}:</strong> {regionalPreview.exemptionNote}
               </p>
             </div>
 

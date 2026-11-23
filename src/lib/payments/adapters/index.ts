@@ -2,12 +2,12 @@
  * Payment Gateway Adapter Factory
  */
 
-import type { PaymentGatewayProvider } from '../../../types/domain';
-import type { PaymentGatewayAdapter } from './types';
-import { MidtransAdapter } from './midtrans';
-import { DuitkuAdapter } from './duitku';
-import { TripayAdapter } from './tripay';
-import { SimulatorAdapter } from './simulator';
+import type { PaymentGatewayProvider } from '../../../types/domain.ts';
+import type { PaymentGatewayAdapter } from './types.ts';
+import { MidtransAdapter } from './midtrans.ts';
+import { DuitkuAdapter } from './duitku.ts';
+import { TripayAdapter } from './tripay.ts';
+import { SimulatorAdapter } from './simulator.ts';
 
 const midtransAdapter = new MidtransAdapter();
 const duitkuAdapter = new DuitkuAdapter();
@@ -29,8 +29,8 @@ export function getPaymentAdapter(provider: PaymentGatewayProvider): PaymentGate
   }
 }
 
-export * from './types';
-export { verifyMidtransSignature, buildMidtransChargePayload } from './midtrans';
-export { verifyDuitkuSignature, computeDuitkuInquirySignature, mapChannelToDuitkuMethod } from './duitku';
-export { verifyTripaySignature, computeTripayCreateSignature, mapChannelToTripayMethod } from './tripay';
-export { generateDynamicEmvQris, signSimulatorWebhook } from './simulator';
+export * from './types.ts';
+export { verifyMidtransSignature, buildMidtransChargePayload } from './midtrans.ts';
+export { verifyDuitkuSignature, computeDuitkuInquirySignature, mapChannelToDuitkuMethod } from './duitku.ts';
+export { verifyTripaySignature, computeTripayCreateSignature, mapChannelToTripayMethod } from './tripay.ts';
+export { generateDynamicEmvQris, signSimulatorWebhook } from './simulator.ts';

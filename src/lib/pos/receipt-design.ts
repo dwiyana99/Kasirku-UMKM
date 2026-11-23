@@ -3,7 +3,7 @@
  * Pure helper utilities shared by ReceiptDesigner, ThermalReceiptModal, and ESC/POS builder.
  */
 
-import type { ReceiptDesignConfig, Tenant } from '../../types/domain';
+import type { ReceiptDesignConfig, Tenant } from '../../types/domain.ts';
 
 export function getDefaultReceiptDesign(tenant?: Pick<Tenant, 'slug' | 'vertical'>): ReceiptDesignConfig {
   const slug = tenant?.slug || 'umkm';

@@ -186,6 +186,8 @@ export function canAccessRouteWithStaffPermissions(
       return true;
     case '/pos':
     case '/transactions':
+    case '/returns':
+    case '/contracts':
     case '/promo-crm':
     case '/crm':
       return hasStaffPermission(session, 'POS_CASHIER');
@@ -207,7 +209,8 @@ export function canAccessRouteWithStaffPermissions(
       return hasStaffPermission(session, 'CATALOG_MANAGE');
     case '/catalog/raw-materials':
     case '/purchasing/restock':
-      return hasStaffPermission(session, 'INVENTORY_RESTOCK');
+    case '/inventory/restock-monitor':
+      return hasStaffPermission(session, 'INVENTORY_RESTOCK') || hasStaffPermission(session, 'CATALOG_MANAGE');
     case '/branches':
     case '/branches/matrix':
     case '/branches/transfers':
@@ -229,6 +232,8 @@ export function canAccessRouteWithStaffPermissions(
     case '/activity-log':
     case '/settings/custom-fields':
     case '/settings/payments':
+    case '/settings/landing-page':
+    case '/settings/billing':
     case '/settings/plans':
     case '/billing':
     case '/master':

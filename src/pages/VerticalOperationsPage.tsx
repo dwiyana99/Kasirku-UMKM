@@ -64,7 +64,7 @@ export function VerticalOperationsPage() {
               {meta.dedicatedMenuLabel || `Operasional ${meta.shortLabel}`}
             </h1>
           </div>
-          <p className="mt-1 max-w-[65ch] text-sm text-stone-600">{meta.laypersonTagline}</p>
+          <p className="mt-1 max-w-[65ch] text-sm text-stone-600">{meta.headline}</p>
         </div>
         <button
           type="button"
@@ -76,27 +76,26 @@ export function VerticalOperationsPage() {
       </div>
 
       {/* Direct WhatsApp (wa.me) Quick Setup Banner — Free starting Paket LITE without Fonnte */}
-      {meta.supportsDirectWa && (
-        <form
-          onSubmit={handleSaveWa}
-          className="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 lg:flex-row lg:items-center lg:justify-between"
-        >
-          <div className="flex items-start gap-2.5">
-            <MessageCircle
-              className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"
-              strokeWidth={1.75}
-            />
-            <div className="text-xs leading-relaxed text-emerald-950">
-              <div className="font-bold">
-                Kirim Pesan WhatsApp Langsung (wa.me) · Gratis Mulai Paket LITE Tanpa Add-On Fonnte
-              </div>
-              <p className="mt-0.5 text-emerald-800">
-                {waStatus.isReady
-                  ? `Nomor WA usaha aktif (${tenant.settings.businessWhatsappNumber}). Anda bisa langsung klik tombol Kirim WA di setiap transaksi.`
-                  : 'Masukkan nomor WhatsApp usaha Anda sendiri di sebelah kanan agar tombol Kirim WA (wa.me) langsung aktif.'}
-              </p>
+      <form
+        onSubmit={handleSaveWa}
+        className="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 lg:flex-row lg:items-center lg:justify-between"
+      >
+        <div className="flex items-start gap-2.5">
+          <MessageCircle
+            className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"
+            strokeWidth={1.75}
+          />
+          <div className="text-xs leading-relaxed text-emerald-950">
+            <div className="font-bold">
+              Kirim Pesan WhatsApp Langsung (wa.me) · Gratis Mulai Paket LITE Tanpa Add-On Fonnte
             </div>
+            <p className="mt-0.5 text-emerald-800">
+              {waStatus.ready
+                ? `Nomor WA usaha aktif (${tenant.settings.businessWhatsappNumber}). Anda bisa langsung klik tombol Kirim WA di setiap transaksi.`
+                : 'Masukkan nomor WhatsApp usaha Anda sendiri di sebelah kanan agar tombol Kirim WA (wa.me) langsung aktif.'}
+            </p>
           </div>
+        </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
               type="text"
@@ -120,7 +119,6 @@ export function VerticalOperationsPage() {
             )}
           </div>
         </form>
-      )}
 
       {/* Active Vertical Dedicated Module */}
       {renderVerticalBody()}

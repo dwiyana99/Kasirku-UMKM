@@ -16,9 +16,24 @@ datasource db {
 enum BusinessVertical {
   WARUNG_SEMBAKO
   TOKO_RETAIL
+  TOKO_FASHION
+  TOKO_BANGUNAN
+  MANUFAKTUR_KECIL
+  BARBERSHOP
+  SALON_KECANTIKAN
+  SPA_WELLNESS
   BARBERSHOP_SALON
   KEDAI_MAKAN
   RESTORAN
+  BAKERY_CATERING
+  LAUNDRY
+  CUCI_KENDARAAN
+  RENTAL_KENDARAAN
+  SEWA_LAPANGAN
+  PET_SHOP
+  BIMBEL_KURSUS_GYM
+  HOMESTAY_VILLA
+  SEWA_GARASI
   FREELANCE
   KOST_KONTRAKAN
   PETERNAKAN_PERTANIAN
@@ -210,6 +225,7 @@ model Tenant {
   receiptFooter          String?                 @default("Terima kasih atas kunjungan Anda!") @map("receipt_footer")
   planCode               String                  @default("BASIC") @map("plan_code") @db.VarChar(30)
   settings               Json                    @default("{}") @db.JsonB
+  verticalOpsJson        Json                    @default("{}") @map("vertical_ops_json") @db.JsonB
   createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz()
 
   memberships            TenantMembership[]
@@ -227,6 +243,7 @@ model Tenant {
   inventoryMovements     InventoryMovement[]
   restaurantTables       RestaurantTable[]
   orders                 Order[]
+  salesReturns           SalesReturn[]
   payments               Payment[]
   operationalExpenses    OperationalExpense[]
   fixedAssets            FixedAsset[]
@@ -247,6 +264,10 @@ model Tenant {
   paymentTransactions    PaymentTransaction[]
   paymentAssistRequests  PaymentSetupAssistanceRequest[]
   settlementBatches      SettlementBatch[]
+  landingPage            TenantLandingPage?
+  landingPageAssistanceRequests LandingPageAssistanceRequest[]
+  contractTemplates      ContractTemplate[]
+  digitalContracts       DigitalContract[]
 
   @@map("tenants")
 }
@@ -445,8 +466,9 @@ model BoardingRoom {
   roomType     String             @map("room_type") @db.VarChar(60)
   monthlyPrice Decimal            @map("monthly_price") @db.Decimal(19, 4)
   annualPrice  Decimal            @default(0) @map("annual_price") @db.Decimal(19, 4)
-  status       BoardingRoomStatus @default(AVAILABLE)
-  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  status        BoardingRoomStatus @default(AVAILABLE)
+  showOnLanding Boolean            @default(true) @map("show_on_landing")
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz()
 
   tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tenants      BoardingTenant[]
@@ -785,6 +807,7 @@ model Product {
   isLuxuryGoods      Boolean             @default(false) @map("is_luxury_goods")
   isTaxExempt        Boolean             @default(false) @map("is_tax_exempt")
   isAvailable        Boolean             @default(true) @map("is_available")
+  showOnLanding      Boolean             @default(true) @map("show_on_landing")
   customAttributes   Json                @default("{}") @map("custom_attributes") @db.JsonB
   createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz()
 
@@ -1142,4 +1165,206 @@ model WaMessageTemplate {
 
   @@map("wa_message_templates")
 }
+
+// =========================================================================
+// ADD-ON LANDING PAGE USAHA PER UMKM (+Rp25.000/BLN) & BANTUAN MASTER ADMIN
+// =========================================================================
+
+enum LandingThemePreset {
+  WARM_EMERALD
+  TERRACOTTA_CRAFT
+  SLATE_NAVY
+  ORGANIC_SAGE
+
+  @@map("landing_theme_preset")
+}
+
+enum LandingAssistanceStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  NEEDS_INFO
+
+  @@map("landing_assistance_status")
+}
+
+model TenantLandingPage {
+  id                       String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                 String             @unique @map("tenant_id") @db.Uuid
+  slug                     String             @unique @db.VarChar(64)
+  customDomain             String?            @unique @map("custom_domain") @db.VarChar(150)
+  isPublished              Boolean            @default(false) @map("is_published")
+  publishedAt              DateTime?          @map("published_at") @db.Timestamptz()
+  themePreset              LandingThemePreset @default(WARM_EMERALD) @map("theme_preset")
+  logoUrl                  String?            @map("logo_url") @db.Text
+  heroTitle                String             @map("hero_title") @db.VarChar(180)
+  heroSubtitle             String?            @map("hero_subtitle") @db.Text
+  heroImageUrl             String?            @map("hero_image_url") @db.Text
+  ctaPrimaryLabel          String?            @map("cta_primary_label") @db.VarChar(80)
+  whatsappGreetingTemplate String?            @map("whatsapp_greeting_template") @db.Text
+  aboutText                String?            @map("about_text") @db.Text
+  whatsappNumber           String?            @map("whatsapp_number") @db.VarChar(30)
+  address                  String?            @db.Text
+  googleMapsUrl            String?            @map("google_maps_url") @db.Text
+  openingHoursJson         Json               @default("[]") @map("opening_hours_json") @db.JsonB
+  socialLinksJson          Json               @default("{}") @map("social_links_json") @db.JsonB
+  highlightsJson           Json               @default("[]") @map("highlights_json") @db.JsonB
+  sectionsVisibilityJson   Json               @default("{\"hero\":true,\"catalog\":true,\"highlights\":true,\"about\":true,\"location\":true,\"contact\":true}") @map("sections_visibility_json") @db.JsonB
+  seoTitle                 String?            @map("seo_title") @db.VarChar(180)
+  seoDescription           String?            @map("seo_description") @db.Text
+  seoKeywords              String?            @map("seo_keywords") @db.VarChar(300)
+  ogImageUrl               String?            @map("og_image_url") @db.Text
+  updatedByAdminId         String?            @map("updated_by_admin_id") @db.VarChar(120)
+  lastCustomizedAt         DateTime?          @map("last_customized_at") @db.Timestamptz()
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant                   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([isPublished, slug], map: "idx_tenant_landing_pages_published_slug")
+  @@index([customDomain], map: "idx_tenant_landing_pages_custom_domain")
+  @@map("tenant_landing_pages")
+}
+
+model LandingPageAssistanceRequest {
+  id                        String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                  String                  @map("tenant_id") @db.Uuid
+  requestedByUserId         String                  @map("requested_by_user_id") @db.VarChar(120)
+  contactWhatsapp           String                  @map("contact_whatsapp") @db.VarChar(30)
+  logoAssetUrl              String?                 @map("logo_asset_url") @db.Text
+  heroBannerUrl             String?                 @map("hero_banner_url") @db.Text
+  galleryAssetUrls          Json                    @default("[]") @map("gallery_asset_urls") @db.JsonB
+  preferredTheme            LandingThemePreset?     @map("preferred_theme")
+  featuredItemsNotes        String?                 @map("featured_items_notes") @db.Text
+  customBrief               String                  @map("custom_brief") @db.Text
+  requirementsChecklistJson Json                    @default("{}") @map("requirements_checklist_json") @db.JsonB
+  agreedToTerms             Boolean                 @default(false) @map("agreed_to_terms")
+  freeRevisionQuotaUsed     Int                     @default(0) @map("free_revision_quota_used")
+  status                    LandingAssistanceStatus @default(PENDING)
+  adminNotes                String?                 @map("admin_notes") @db.Text
+  handledByAdminId          String?                 @map("handled_by_admin_id") @db.VarChar(120)
+  completedAt               DateTime?               @map("completed_at") @db.Timestamptz()
+  createdAt                 DateTime                @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                 DateTime                @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant                    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status], map: "idx_landing_assist_tenant_status")
+  @@index([status, createdAt(sort: Desc)], map: "idx_landing_assist_status_date")
+  @@map("landing_page_assistance_requests")
+}
+
+// ============================================================================
+// 11. SALES RETURNS, DIGITAL CONTRACTS & REGIONAL TAX RULES (ADDITIVE)
+// ============================================================================
+
+model SalesReturn {
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId               String            @map("tenant_id") @db.Uuid
+  branchId               String?           @map("branch_id") @db.Uuid
+  returnNumber           String            @map("return_number") @db.VarChar(60)
+  orderId                String            @map("order_id") @db.Uuid
+  orderNumber            String            @map("order_number") @db.VarChar(60)
+  customerName           String            @map("customer_name") @db.VarChar(180)
+  reason                 String            @db.VarChar(50)
+  reasonNotes            String?           @map("reason_notes") @db.Text
+  refundMethod           String            @map("refund_method") @db.VarChar(30)
+  restockToInventory     Boolean           @default(true) @map("restock_to_inventory")
+  subtotalRefund         Decimal           @default(0) @map("subtotal_refund") @db.Decimal(19, 4)
+  taxRefund              Decimal           @default(0) @map("tax_refund") @db.Decimal(19, 4)
+  totalRefund            Decimal           @default(0) @map("total_refund") @db.Decimal(19, 4)
+  totalCogsReversed      Decimal           @default(0) @map("total_cogs_reversed") @db.Decimal(19, 4)
+  processedByName        String            @map("processed_by_name") @db.VarChar(150)
+  journalEntryIdsJson    Json              @default("[]") @map("journal_entry_ids_json") @db.JsonB
+  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant                 Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items                  SalesReturnItem[]
+
+  @@unique([tenantId, returnNumber], map: "uq_sales_returns_tenant_number")
+  @@index([tenantId, createdAt(sort: Desc)], map: "idx_sales_returns_tenant_date")
+  @@map("sales_returns")
+}
+
+model SalesReturnItem {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  salesReturnId  String      @map("sales_return_id") @db.Uuid
+  productId      String      @map("product_id") @db.Uuid
+  productName    String      @map("product_name") @db.VarChar(200)
+  qtyReturned    Decimal     @map("qty_returned") @db.Decimal(19, 4)
+  unitPrice      Decimal     @map("unit_price") @db.Decimal(19, 4)
+  unitCogs       Decimal     @default(0) @map("unit_cogs") @db.Decimal(19, 4)
+  lineTotal      Decimal     @map("line_total") @db.Decimal(19, 4)
+
+  salesReturn    SalesReturn @relation(fields: [salesReturnId], references: [id], onDelete: Cascade)
+
+  @@index([salesReturnId], map: "idx_sales_return_items_return")
+  @@map("sales_return_items")
+}
+
+model ContractTemplate {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String            @map("tenant_id") @db.Uuid
+  name                String            @db.VarChar(180)
+  category            String            @db.VarChar(40)
+  applicableVerticals Json              @default("[]") @map("applicable_verticals") @db.JsonB
+  bodyTemplate        String            @map("body_template") @db.Text
+  isDefault           Boolean           @default(false) @map("is_default")
+  createdByRole       String            @default("OWNER") @map("created_by_role") @db.VarChar(30)
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contracts           DigitalContract[]
+
+  @@index([tenantId, category], map: "idx_contract_templates_tenant_category")
+  @@map("contract_templates")
+}
+
+model DigitalContract {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String            @map("tenant_id") @db.Uuid
+  templateId       String?           @map("template_id") @db.Uuid
+  contractNumber   String            @map("contract_number") @db.VarChar(60)
+  title            String            @db.VarChar(200)
+  category         String            @db.VarChar(40)
+  customerName     String            @map("customer_name") @db.VarChar(180)
+  customerPhone    String            @map("customer_phone") @db.VarChar(30)
+  customerIdNumber String?           @map("customer_id_number") @db.VarChar(40)
+  subjectSummary   String            @map("subject_summary") @db.Text
+  startDate        DateTime          @map("start_date") @db.Date
+  endDate          DateTime?         @map("end_date") @db.Date
+  totalValue       Decimal           @default(0) @map("total_value") @db.Decimal(19, 4)
+  depositAmount    Decimal           @default(0) @map("deposit_amount") @db.Decimal(19, 4)
+  renderedBody     String            @map("rendered_body") @db.Text
+  status           String            @default("DRAFT") @map("status") @db.VarChar(30)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template         ContractTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, contractNumber], map: "uq_digital_contracts_tenant_number")
+  @@index([tenantId, createdAt(sort: Desc)], map: "idx_digital_contracts_tenant_date")
+  @@map("digital_contracts")
+}
+
+model RegionalTaxRule {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  province            String   @db.VarChar(100)
+  regencyOrCity       String   @map("regency_or_city") @db.VarChar(120)
+  pbjtFoodRatePct     Decimal  @default(10) @map("pbjt_food_rate_pct") @db.Decimal(6, 3)
+  pbjtHotelRatePct    Decimal  @default(10) @map("pbjt_hotel_rate_pct") @db.Decimal(6, 3)
+  pbjtSpaRatePct      Decimal  @default(40) @map("pbjt_spa_rate_pct") @db.Decimal(6, 3)
+  pbjtParkingRatePct  Decimal  @default(10) @map("pbjt_parking_rate_pct") @db.Decimal(6, 3)
+  perdaReference      String?  @map("perda_reference") @db.VarChar(200)
+  effectiveDate       DateTime @default(now()) @map("effective_date") @db.Date
+  isActive            Boolean  @default(true) @map("is_active")
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@unique([province, regencyOrCity], map: "uq_regional_tax_rules_region")
+  @@map("regional_tax_rules")
+}
+
+
 

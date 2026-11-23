@@ -16,11 +16,11 @@ import type {
   ProductRecipe,
   RegionalTaxRule,
   Tenant,
-} from '../../types/domain';
-import { calculateOrderTax } from '../tax/indonesia-tax-engine';
-import { createSaleJournalEntries } from '../accounting/journal-engine';
-import { getEffectiveReceiptDesign, getEscPosDividerChar } from './receipt-design';
-import { calculateChannelMdr } from './payment-verifier';
+} from '../../types/domain.ts';
+import { calculateOrderTax } from '../tax/indonesia-tax-engine.ts';
+import { createSaleJournalEntries } from '../accounting/journal-engine.ts';
+import { getEffectiveReceiptDesign, getEscPosDividerChar } from './receipt-design.ts';
+import { calculateChannelMdr } from './payment-verifier.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

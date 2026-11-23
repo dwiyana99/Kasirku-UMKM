@@ -267,7 +267,7 @@ export function AccountingPage() {
                 <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
                   <div>
                     <h2 className="text-base font-bold text-slate-900">
-                      Laporan Posisi Keuangan (Neraca — SAK EMKM)
+                      Laporan Posisi Keuangan (Neraca · SAK EMKM)
                     </h2>
                     <p className="text-xs text-slate-500">
                       Persamaan akuntansi: Aset = Liabilitas + Ekuitas
@@ -370,7 +370,7 @@ export function AccountingPage() {
                 <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
                   <div>
                     <h2 className="text-base font-bold text-slate-900">
-                      Laporan Laba Rugi (Basis Akrual — SAK EMKM)
+                      Laporan Laba Rugi (Basis Akrual · SAK EMKM)
                     </h2>
                     <p className="text-xs text-slate-500">
                       Catatan atas Laporan Keuangan: Persediaan perpetual &amp; depresiasi garis lurus
@@ -498,7 +498,7 @@ export function AccountingPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
                     <h2 className="text-base font-bold text-slate-900">
-                      Laporan Arus Kas (PSAK — Aktivitas Operasi, Investasi, Pendanaan)
+                      Laporan Arus Kas (PSAK · Aktivitas Operasi, Investasi, Pendanaan)
                     </h2>
                     <div className="divide-y divide-slate-100 text-sm">
                       <div className="py-3 flex justify-between">

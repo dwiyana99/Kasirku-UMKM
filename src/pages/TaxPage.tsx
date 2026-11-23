@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { Download, CheckCircle2, AlertTriangle, Calculator, Eye, FileText, Landmark } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
 import { ModuleGate } from '../components/ModuleGate';
+import { TaxProjectionDashboard } from '../components/tax/TaxProjectionDashboard';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { ReceiptPreviewModal } from '../components/ui/ModalShell';
 import { useApp } from '../context/AppContext';
@@ -22,11 +23,11 @@ export function TaxPage() {
   const { tenant } = activeWorkspace;
   const regionalTaxResolved = useMemo(
     () =>
-      resolveEffectiveRegionalTax({
-        vertical: tenant.vertical,
-        regionalSettings: tenant.settings.regionalTax,
-        registry: regionalTaxRegistry,
-      }),
+      resolveEffectiveRegionalTax(
+        tenant.vertical,
+        tenant.settings.regionalTax,
+        regionalTaxRegistry
+      ),
     [regionalTaxRegistry, tenant.settings.regionalTax, tenant.vertical]
   );
 
@@ -245,6 +246,9 @@ export function TaxPage() {
     >
       <ModuleGate requiredModule="TAX_CORETAX" featureTitle="Kepatuhan Pajak DJP & Coretax">
       <div className="space-y-6">
+        {/* Visual Monthly Tax Projection & Cash Flow Dashboard */}
+        <TaxProjectionDashboard />
+
         {/* Regional Tax (PBJT / UU HKPD) Card */}
         <section
           data-testid="regional-tax-summary-card"
@@ -257,14 +261,14 @@ export function TaxPage() {
               </div>
               <div>
                 <h2 className="text-sm font-bold text-stone-900">
-                  Pajak Daerah Setempat (PBJT / UU HKPD) · {regionalTaxResolved.cityName}
+                  Pajak Daerah Setempat (PBJT / UU HKPD) · {regionalTaxResolved.regionName}
                 </h2>
                 <p className="mt-0.5 text-xs leading-relaxed text-stone-600">
-                  {regionalTaxResolved.explanation}
+                  {regionalTaxResolved.exemptionNote}
                 </p>
-                {regionalTaxResolved.regulationRef && (
+                {regionalTaxResolved.perdaReference && (
                   <p className="mt-1 text-[11px] text-stone-500">
-                    Dasar aturan: {regionalTaxResolved.regulationRef}
+                    Dasar aturan: {regionalTaxResolved.perdaReference}
                   </p>
                 )}
               </div>
@@ -274,7 +278,7 @@ export function TaxPage() {
                 <div className="text-[11px] text-stone-500">Tarif PBJT Aktif</div>
                 <div className="font-mono text-sm font-bold tabular-nums text-emerald-700">
                   {regionalTaxResolved.applies
-                    ? `${(Number(regionalTaxResolved.rate) * 100).toFixed(1).replace(/\.0$/, '')}%`
+                    ? regionalTaxResolved.ratePercentLabel
                     : '0% (Bebas / Diabaikan)'}
                 </div>
               </div>

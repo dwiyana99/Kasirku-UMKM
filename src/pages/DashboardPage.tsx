@@ -48,6 +48,7 @@ export function DashboardPage() {
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [closingModalOpen, setClosingModalOpen] = useState(false);
   const [pdfDownloadNotice, setPdfDownloadNotice] = useState<string | null>(null);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
   const branches = activeWorkspace.branches ?? [];
   const activeBranch = branches.find((b) => b.id === activeBranchId) ?? null;
@@ -294,6 +295,138 @@ export function DashboardPage() {
               Tutup
             </button>
           </div>
+        )}
+
+        {/* Panduan 3 Langkah Pertama (tampil otomatis hanya saat usaha baru belum ada transaksi) */}
+        {filteredOrders.length === 0 && !onboardingDismissed && (
+          <section
+            data-testid="dashboard-onboarding-checklist"
+            className="bg-white border border-stone-200 rounded-xl p-5 space-y-4"
+          >
+            {(() => {
+              const step1Done = activeWorkspace.products.length >= 3;
+              const step2Done = filteredOrders.length > 0;
+              const step3Done = Boolean(
+                activeWorkspace.tenant.settings?.businessWhatsappNumber?.trim()
+              );
+              const doneCount = [step1Done, step2Done, step3Done].filter(Boolean).length;
+              const posRoute = activeVerticalMeta.dedicatedRoute || '/pos';
+              return (
+                <>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-emerald-700">
+                        Mulai Cepat · {doneCount} dari 3 langkah selesai
+                      </p>
+                      <h2 className="text-base font-bold text-stone-900 mt-0.5">
+                        3 Langkah Siap Pakai untuk {activeWorkspace.tenant.name}
+                      </h2>
+                      <p className="text-xs text-stone-500 mt-0.5">
+                        Ikuti urutan singkat ini agar kasir dan laporan langsung berjalan rapi.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setOnboardingDismissed(true)}
+                      className="text-xs font-medium text-stone-500 hover:text-stone-800"
+                    >
+                      Sembunyikan
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => navigate('/catalog/products')}
+                      className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
+                        step1Done
+                          ? 'border-emerald-200 bg-emerald-50/40'
+                          : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
+                      }`}
+                    >
+                      <span
+                        className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
+                          step1Done
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-stone-200 text-stone-700'
+                        }`}
+                      >
+                        1
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-stone-900">
+                          Isi Daftar Barang / Layanan
+                        </p>
+                        <p className="text-[11px] text-stone-500 mt-0.5">
+                          {step1Done
+                            ? `${activeWorkspace.products.length} item sudah tersimpan`
+                            : 'Tambahkan minimal 3 item atau import file CSV'}
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => navigate(posRoute)}
+                      className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
+                        step2Done
+                          ? 'border-emerald-200 bg-emerald-50/40'
+                          : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
+                      }`}
+                    >
+                      <span
+                        className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
+                          step2Done
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-stone-200 text-stone-700'
+                        }`}
+                      >
+                        2
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-stone-900">
+                          Coba 1 Transaksi Pertama
+                        </p>
+                        <p className="text-[11px] text-stone-500 mt-0.5">
+                          Buka Kasir dan catat penjualan tunai pertama Anda
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => navigate('/settings/custom-fields')}
+                      className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
+                        step3Done
+                          ? 'border-emerald-200 bg-emerald-50/40'
+                          : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
+                      }`}
+                    >
+                      <span
+                        className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
+                          step3Done
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-stone-200 text-stone-700'
+                        }`}
+                      >
+                        3
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-stone-900">
+                          Isi Nomor WhatsApp Usaha
+                        </p>
+                        <p className="text-[11px] text-stone-500 mt-0.5">
+                          {step3Done
+                            ? 'Nomor WA aktif untuk rekap tutup kasir & struk'
+                            : 'Agar rekap tutup kasir & struk WA langsung terkirim'}
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </section>
         )}
 
         {/* Peringatan Pemeriksaan Kasir (0-Token, tampil hanya jika ada selisih/anomali) */}

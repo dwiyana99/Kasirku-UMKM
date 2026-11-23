@@ -7,7 +7,7 @@ import type {
   PaymentCategory,
   PaymentCheckoutMode,
   PaymentGatewayProvider,
-} from '../../../types/domain';
+} from '../../../types/domain.ts';
 
 export interface DecryptedGatewayCredentials {
   environment: GatewayEnvironment;

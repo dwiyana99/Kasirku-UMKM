@@ -13,14 +13,14 @@ import type {
   ManagedCustomerAccount,
   Product,
   TenantWorkspaceData,
-} from '../types/domain';
-import { DEFAULT_CHART_OF_ACCOUNTS, DEFAULT_FEATURE_MODULES } from '../../prisma/seed';
+} from '../types/domain.ts';
+import { DEFAULT_CHART_OF_ACCOUNTS, DEFAULT_FEATURE_MODULES } from '../../prisma/seed.ts';
 import {
   buildJournalEntry,
   createExpenseJournalEntry,
-} from '../lib/accounting/journal-engine';
-import { processOrderCheckout } from '../lib/pos/checkout-service';
-import { buildHierarchicalTaxonomyFromPresets } from '../lib/catalog/taxonomy-presets';
+} from '../lib/accounting/journal-engine.ts';
+import { processOrderCheckout } from '../lib/pos/checkout-service.ts';
+import { buildHierarchicalTaxonomyFromPresets } from '../lib/catalog/taxonomy-presets.ts';
 import {
   createDemoAgroWorkspace,
   createDemoBarbershopWorkspace,
@@ -29,11 +29,11 @@ import {
   DEFAULT_SYSTEM_DEMO_CONFIG,
   enrichBaseWorkspaces,
   INITIAL_DEMO_APPOINTMENTS,
-} from './demoSeedsExtended';
+} from './demoSeedsExtended.ts';
 import {
   createNewVerticalDemoCustomers,
   createNewVerticalDemoWorkspaces,
-} from './demoSeedsVerticals';
+} from './demoSeedsVerticals.ts';
 
 export { DEFAULT_SYSTEM_DEMO_CONFIG, INITIAL_DEMO_APPOINTMENTS };
 
@@ -52,7 +52,10 @@ export const MENU_IMAGE_PRESETS = [
   { label: 'Nasi Goreng', url: MENU_IMAGES.nasiGoreng },
 ] as const;
 
-export const FEATURE_MODULES: FeatureModule[] = DEFAULT_FEATURE_MODULES.map((m) => ({
+export const FEATURE_MODULES: FeatureModule[] = DEFAULT_FEATURE_MODULES.filter(
+  (m): m is (typeof DEFAULT_FEATURE_MODULES)[number] & { code: FeatureModule['code'] } =>
+    m.code !== 'ADDON_LANDING_PAGE'
+).map((m) => ({
   code: m.code,
   name: m.name,
   description: m.description,

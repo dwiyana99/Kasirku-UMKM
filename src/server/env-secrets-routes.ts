@@ -9,8 +9,8 @@
 import path from 'node:path';
 import type express from 'express';
 import { z } from 'zod';
-import { decryptSecret, encryptSecret, maskSecretKey } from '../lib/payments/crypto';
-import type { SignedSessionPayload } from '../lib/db/tenant-db';
+import { decryptSecret, encryptSecret, maskSecretKey } from '../lib/payments/crypto.ts';
+import type { SignedSessionPayload } from '../lib/db/tenant-db.ts';
 
 export type EnvSecretCategory =
   | 'DATABASE_STORAGE'
@@ -64,18 +64,102 @@ export interface MasterEnvSecretSummary {
 
 export const STANDARD_ENV_CATALOG: EnvSecretCatalogItem[] = [
   {
+    key: 'DB_PROVIDER',
+    label: 'Mode Provider Database Aktif',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Database Engine',
+    isSecret: false,
+    placeholder: 'CURRENT_LOCAL_FIRESTORE | SUPABASE_POSTGRES | NEON_POSTGRES',
+    description: 'Menentukan engine database yang digunakan server. Default berjalan otomatis dengan penyimpanan lokal terenkripsi tanpa perlu konfigurasi awal.',
+    portalUrl: 'https://supabase.com/dashboard',
+    guideSteps: [
+      'Biarkan kosong atau isi CURRENT_LOCAL_FIRESTORE saat tahap awal agar sistem berjalan instan tanpa setup server eksternal.',
+      'Ubah menjadi SUPABASE_POSTGRES atau NEON_POSTGRES saat Anda siap berpindah ke PostgreSQL produksi dan sudah mengisi DATABASE_URL serta DIRECT_URL.',
+    ],
+  },
+  {
     key: 'DATABASE_URL',
     label: 'PostgreSQL Connection String (Supabase / Neon / Cloud SQL)',
     category: 'DATABASE_STORAGE',
     serviceName: 'PostgreSQL Database',
     isSecret: true,
     placeholder: 'postgresql://postgres.xxx:password@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true',
-    description: 'Koneksi database PostgreSQL produksi untuk menyimpan seluruh transaksi, stok, dan jurnal double-entry secara permanen.',
+    description: 'Koneksi database PostgreSQL produksi (pooled connection) untuk menyimpan seluruh transaksi, stok, dan jurnal double-entry secara permanen.',
     portalUrl: 'https://supabase.com/dashboard',
     guideSteps: [
       'Daftar / masuk ke Supabase (supabase.com) atau Neon (neon.tech), lalu klik New Project dan pilih region Singapore (ap-southeast-1).',
       'Buka menu Project Settings > Database > Connection String > pilih mode Transaction Pooler (port 6543) atau Session Pooler.',
       'Salin URI lengkap, ganti bagian [YOUR-PASSWORD] dengan kata sandi database Anda, lalu tempel di kolom ini dan klik Simpan & Sinkron.',
+    ],
+  },
+  {
+    key: 'DIRECT_URL',
+    label: 'PostgreSQL Direct URL (Untuk Migrasi Skema Prisma)',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'PostgreSQL Database',
+    isSecret: true,
+    placeholder: 'postgresql://postgres.xxx:password@db.xxx.supabase.co:5432/postgres?sslmode=require',
+    description: 'Koneksi langsung non-pooler (port 5432) yang dipakai Prisma Migrate saat memperbarui tabel database PostgreSQL.',
+    portalUrl: 'https://supabase.com/dashboard',
+    guideSteps: [
+      'Di Supabase Project Settings > Database > Connection String, pilih tab Direct connection (port 5432).',
+      'Salin URI lengkap, ganti [YOUR-PASSWORD] dengan password database Anda, lalu simpan di sini.',
+    ],
+  },
+  {
+    key: 'STORAGE_PROVIDER',
+    label: 'Mode Provider Penyimpanan File & Gambar',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Object Storage',
+    isSecret: false,
+    placeholder: 'CURRENT_LOCAL_FIRESTORE | SUPABASE_STORAGE | CLOUDFLARE_R2',
+    description: 'Memilih lokasi penyimpanan foto produk, logo landing page UMKM, bukti bayar, dan dokumen kontrak PDF.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Secara default sistem menggunakan penyimpanan bawaan tanpa konfigurasi tambahan.',
+      'Ubah ke SUPABASE_STORAGE (isi SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY + SUPABASE_STORAGE_BUCKET) atau CLOUDFLARE_R2 (isi kredensial R2) saat skala bisnis meningkat.',
+    ],
+  },
+  {
+    key: 'SUPABASE_URL',
+    label: 'Supabase Project URL',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Supabase Storage',
+    isSecret: false,
+    placeholder: 'https://abcdefghijklmno.supabase.co',
+    description: 'URL utama proyek Supabase untuk akses API dan penyimpanan file media di Supabase Storage.',
+    portalUrl: 'https://supabase.com/dashboard',
+    guideSteps: [
+      'Buka proyek Anda di supabase.com/dashboard, lalu masuk ke menu Project Settings > API.',
+      'Salin nilai Project URL (format https://xxxx.supabase.co) dan tempel ke kolom ini.',
+    ],
+  },
+  {
+    key: 'SUPABASE_SERVICE_ROLE_KEY',
+    label: 'Supabase Service Role Key (Server Only)',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Supabase Storage',
+    isSecret: true,
+    placeholder: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    description: 'Kunci akses penuh sisi server untuk mengunggah aset media dan arsip dokumen ke Supabase Storage secara aman.',
+    portalUrl: 'https://supabase.com/dashboard',
+    guideSteps: [
+      'Masuk ke Project Settings > API pada dashboard Supabase Anda.',
+      'Klik Reveal pada bagian service_role secret, salin tokennya, lalu simpan di sini (terenkripsi AES-256-GCM dan tidak pernah dikirim ke browser).',
+    ],
+  },
+  {
+    key: 'SUPABASE_STORAGE_BUCKET',
+    label: 'Nama Bucket Supabase Storage',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Supabase Storage',
+    isSecret: false,
+    placeholder: 'kasirakun-assets',
+    description: 'Nama bucket di Supabase Storage untuk menyimpan logo UMKM, foto katalog, dan lampiran transaksi.',
+    portalUrl: 'https://supabase.com/dashboard',
+    guideSteps: [
+      'Di dashboard Supabase, buka menu Storage > New bucket.',
+      'Buat bucket bernama kasirakun-assets (atau nama pilihan Anda), lalu ketikkan nama bucket tersebut di kolom ini.',
     ],
   },
   {
@@ -134,6 +218,20 @@ export const STANDARD_ENV_CATALOG: EnvSecretCatalogItem[] = [
     guideSteps: [
       'Di Cloudflare R2, klik Create bucket dan beri nama unik huruf kecil (contoh: kasirakun-umkm-media).',
       'Pilih lokasi Asia-Pacific (APAC) agar akses gambar cepat dari Indonesia, lalu masukkan nama bucket ke kolom ini.',
+    ],
+  },
+  {
+    key: 'R2_PUBLIC_BASE_URL',
+    label: 'Cloudflare R2 Public CDN URL',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Cloudflare R2 Storage',
+    isSecret: false,
+    placeholder: 'https://cdn.kasirakun.id',
+    description: 'Domain publik CDN (Custom Domain R2 atau r2.dev) yang dipakai untuk menampilkan gambar publik di katalog dan landing page.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Buka pengaturan bucket R2 Anda > Settings > Public access > Connect Domain (misalnya cdn.kasirakun.id).',
+      'Salin URL HTTPS lengkap tanpa garis miring di akhir, lalu simpan di kolom ini.',
     ],
   },
   {
@@ -209,6 +307,48 @@ export const STANDARD_ENV_CATALOG: EnvSecretCatalogItem[] = [
       'Buka Google AI Studio (aistudio.google.com/apikey) menggunakan akun Google pengelola.',
       'Klik tombol Create API key lalu pilih atau buat proyek Google Cloud baru.',
       'Salin kunci yang diawali AIzaSy..., tempel di kolom ini, lalu klik Simpan & Sinkron Otomatis.',
+    ],
+  },
+  {
+    key: 'LANDING_URL_MODE',
+    label: 'Mode URL Landing Page UMKM (SUBPATH / SUBDOMAIN)',
+    category: 'SECURITY_CUSTOM',
+    serviceName: 'Domain & Subdomain Routing',
+    isSecret: false,
+    placeholder: 'SUBPATH atau SUBDOMAIN',
+    description: 'Mengatur format link publik UMKM: SUBPATH (/toko/slug) atau SUBDOMAIN (slug.domainanda.id) saat wildcard DNS sudah aktif.',
+    portalUrl: '',
+    guideSteps: [
+      'Secara default sistem menggunakan mode SUBPATH (/toko/[slug]) agar langsung berjalan di semua URL hosting.',
+      'Saat domain utama + wildcard DNS (*.kasirakun.id) sudah aktif, simpan ROOT_DOMAIN lalu ubah nilai ini menjadi SUBDOMAIN.',
+    ],
+  },
+  {
+    key: 'ROOT_DOMAIN',
+    label: 'Domain Utama Platform (Untuk Subdomain UMKM)',
+    category: 'SECURITY_CUSTOM',
+    serviceName: 'Domain & Subdomain Routing',
+    isSecret: false,
+    placeholder: 'kasirakun.id',
+    description: 'Domain induk tanpa https:// atau www yang dipakai middleware untuk me-rewrite [slug].ROOT_DOMAIN ke halaman /toko/[slug].',
+    portalUrl: '',
+    guideSteps: [
+      'Arahkan wildcard DNS (*.domainanda.id) pada Cloudflare atau registrar domain ke server produksi Anda.',
+      'Masukkan nama domain utama saja (contoh: kasirakun.id), lalu aktifkan LANDING_URL_MODE = SUBDOMAIN.',
+    ],
+  },
+  {
+    key: 'APP_URL',
+    label: 'URL Publik Utama Aplikasi',
+    category: 'SECURITY_CUSTOM',
+    serviceName: 'Domain & Subdomain Routing',
+    isSecret: false,
+    placeholder: 'https://kasirakun.id',
+    description: 'Alamat URL publik aplikasi untuk tautan callback webhook, nota digital, dan QR Code publik.',
+    portalUrl: '',
+    guideSteps: [
+      'Masukkan URL HTTPS publik aplikasi Anda setelah deploy (contoh: https://kasirakun.id).',
+      'Jika dikosongkan, aplikasi otomatis mendeteksi origin domain aktif dari permintaan browser.',
     ],
   },
   {

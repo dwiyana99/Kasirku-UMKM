@@ -14,7 +14,7 @@ import type {
   DecryptedGatewayCredentials,
   PaymentGatewayAdapter,
   WebhookVerificationResult,
-} from './types';
+} from './types.ts';
 
 function getMidtransBaseUrl(env: 'SANDBOX' | 'PRODUCTION'): string {
   return env === 'PRODUCTION'

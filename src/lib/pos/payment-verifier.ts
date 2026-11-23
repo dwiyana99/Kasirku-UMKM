@@ -8,7 +8,7 @@
  */
 
 import Decimal from 'decimal.js';
-import type { PaymentMethod } from '../../types/domain';
+import type { PaymentMethod } from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

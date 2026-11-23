@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Decimal from 'decimal.js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  Camera,
   Plus,
   Minus,
   Trash2,
@@ -24,6 +23,7 @@ import {
   Monitor,
   ExternalLink,
   RotateCcw,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
@@ -32,6 +32,7 @@ import { ThermalReceiptModal } from '../components/ThermalReceiptModal';
 import { FonnteSendModal } from '../components/whatsapp/FonnteSendModal';
 import { ModalShell } from '../components/ui/ModalShell';
 import { useApp } from '../context/AppContext';
+import { useOnlineStatus } from '../hooks/usePWAInstall';
 import { calculateOrderTax } from '../lib/tax/indonesia-tax-engine';
 import { formatRupiah } from '../lib/pos/checkout-service';
 import {
@@ -102,10 +103,12 @@ export function PosPage() {
   const openBills = activeWorkspace.orders.filter(
     (o) => o.isOpenBill && o.paymentStatus === 'UNPAID'
   );
+  const isOnline = useOnlineStatus();
   const canUseRestoAdvanced = hasAddOn('ADDON_RESTO_QR_KDS');
   const canUseNonCash = hasAddOn('ADDON_NON_CASH_PAYMENT');
   const canUseThermalPrint = hasAddOn('ADDON_THERMAL_RECEIPT');
   const hasPromoCrmPro = hasAddOn('ADDON_PROMO_CRM');
+  const isSingleOwnerLite = tenant.subscriptionPlan === 'LITE';
   const displayBranchId =
     activeBranchId && activeBranchId !== 'ALL'
       ? activeBranchId
@@ -126,6 +129,7 @@ export function PosPage() {
     tenant.vertical === 'KEDAI_MAKAN' ||
     tenant.vertical === 'BAKERY_CATERING';
   const isSearchFirst = isSearchFirstPosVertical(tenant.vertical);
+  const showShiftToolbar = !isSingleOwnerLite || Boolean(openShift) || (isFnb && canUseRestoAdvanced);
 
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -172,12 +176,12 @@ export function PosPage() {
   const [voidTargetOrder, setVoidTargetOrder] = useState<Order | null>(null);
   const [voidReason, setVoidReason] = useState('');
 
-  // Enforce LITE / modular add-on capabilities dynamically when user switches plan
+  // Enforce LITE / offline cash-only capability dynamically
   useEffect(() => {
-    if (!canUseNonCash && paymentMethod !== 'CASH') {
+    if ((!canUseNonCash || !isOnline) && paymentMethod !== 'CASH') {
       setPaymentMethod('CASH');
     }
-  }, [canUseNonCash, paymentMethod]);
+  }, [canUseNonCash, isOnline, paymentMethod]);
 
   useEffect(() => {
     if (!canUseThermalPrint && autoPrintReceipt) {
@@ -215,6 +219,24 @@ export function PosPage() {
       }),
     [tenant.vertical, sellableProducts, searchQuery, selectedCategoryId]
   );
+
+  // Quick-Tap Top 8 bestsellers for Search-First POS (Warung/Retail without USB scanner)
+  const quickTapProducts = useMemo(() => {
+    const freq = new Map<string, number>();
+    for (const ord of activeWorkspace.orders) {
+      if (ord.paymentStatus === 'VOID') continue;
+      for (const line of ord.items) {
+        freq.set(line.productId, (freq.get(line.productId) ?? 0) + Number(line.qty || 1));
+      }
+    }
+    return [...sellableProducts]
+      .sort((a, b) => {
+        const diff = (freq.get(b.id) ?? 0) - (freq.get(a.id) ?? 0);
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 8);
+  }, [activeWorkspace.orders, sellableProducts]);
 
   const cartEntries = useMemo(
     () => cart.map((c) => ({ productId: c.product.id, qty: c.qty })),
@@ -725,82 +747,85 @@ export function PosPage() {
       title="Kasir POS"
       subtitle={
         isWarung
-          ? 'Mode Warung Sembako · Scanner Barcode, Opsi Tanpa Cetak Struk & Multi-Payment Otomatis'
+          ? 'Mode Warung Sembako · Ketuk cepat barang terlaris, scan barcode, atau cari nama barang'
           : isRetail
-          ? 'Mode Toko Retail · Barcode SKU, Harga Grosir Reseller & Multi-Payment Otomatis'
+          ? 'Mode Toko Retail · Barcode SKU, harga grosir reseller & pilih cepat barang'
           : isBarbershop
-          ? 'Mode Barbershop & Salon · Pilih Layanan, Kapster/Komisi & Produk Retail'
+          ? 'Mode Barbershop & Salon · Pilih layanan, kapster/komisi & produk'
           : isFnb
-          ? 'Mode F&B Visual · Resep BOM otomatis & cetak struk dapur'
+          ? 'Mode F&B Visual · Resep otomatis & cetak struk dapur'
           : 'Mode Invoice Jasa Profesional'
-      }
-      primaryAction={
-        isSearchFirst ? (
-          <button
-            type="button"
-            onClick={() => setScannerOpen(true)}
-            className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-          >
-            <Camera className="w-3.5 h-3.5" />
-            <span>Scan Barcode</span>
-          </button>
-        ) : undefined
       }
     >
       <div className="space-y-4">
-        {/* Cashier Shift Status Bar + Open Bills Trigger */}
-        <div
-          data-testid="pos-shift-toolbar"
-          className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs"
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800">
-              <Clock className="w-3.5 h-3.5 text-emerald-700" />
-              {openShift ? (
-                <span>
-                  Shift Aktif ({openShift.cashierName}) · Kas Ekspektasi:{' '}
-                  <span className="font-mono tabular-nums text-emerald-700">
-                    {formatRupiah(openShift.expectedCash)}
-                  </span>
-                </span>
-              ) : (
-                <span className="text-amber-700">Belum ada Shift Kasir dibuka</span>
-              )}
+        {/* Offline Mode Notice in POS */}
+        {!isOnline && (
+          <div
+            data-testid="pos-offline-cash-notice"
+            className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-2.5 text-xs text-amber-950"
+          >
+            <WifiOff className="w-4 h-4 text-amber-700 shrink-0" strokeWidth={1.75} />
+            <span>
+              <strong>Internet sedang terputus.</strong> Transaksi Tunai tetap berjalan normal dan otomatis tersinkron saat sinyal kembali.
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {isFnb && canUseRestoAdvanced && (
+        )}
+
+        {/* Cashier Shift Status Bar + Open Bills Trigger (Hidden on single-owner LITE unless shift is active) */}
+        {showShiftToolbar && (
+          <div
+            data-testid="pos-shift-toolbar"
+            className="bg-white border border-stone-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-stone-800">
+                <Clock className="w-3.5 h-3.5 text-emerald-700" strokeWidth={1.75} />
+                {openShift ? (
+                  <span>
+                    Shift Aktif ({openShift.cashierName}) · Kas Ekspektasi:{' '}
+                    <span className="font-mono tabular-nums text-emerald-700">
+                      {formatRupiah(openShift.expectedCash)}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-stone-600">Shift kasir belum dibuka (opsional untuk rekap per shift)</span>
+                )}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {isFnb && canUseRestoAdvanced && (
+                <button
+                  type="button"
+                  data-testid="pos-open-bills-btn"
+                  onClick={() => setOpenBillsModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-stone-800 bg-stone-100 hover:bg-stone-200 rounded-lg whitespace-nowrap"
+                >
+                  <PauseCircle className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  <span>Open Bill &amp; Split ({openBills.length})</span>
+                </button>
+              )}
               <button
                 type="button"
-                data-testid="pos-open-bills-btn"
-                onClick={() => setOpenBillsModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg whitespace-nowrap"
+                data-testid="pos-shift-action-btn"
+                onClick={() => {
+                  if (openShift) {
+                    setClosingCashInput(
+                      new Decimal(openShift.expectedCash).toDecimalPlaces(0).toString()
+                    );
+                  }
+                  setShiftModalOpen(true);
+                }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
+                  openShift
+                    ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200'
+                    : 'text-stone-800 bg-stone-100 hover:bg-stone-200 border border-stone-200'
+                }`}
               >
-                <PauseCircle className="w-3.5 h-3.5" />
-                <span>Open Bill &amp; Split ({openBills.length})</span>
+                {openShift ? 'Tutup Shift & Rekonsiliasi Kas' : 'Buka Shift Kasir'}
               </button>
-            )}
-            <button
-              type="button"
-              data-testid="pos-shift-action-btn"
-              onClick={() => {
-                if (openShift) {
-                  setClosingCashInput(
-                    new Decimal(openShift.expectedCash).toDecimalPlaces(0).toString()
-                  );
-                }
-                setShiftModalOpen(true);
-              }}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
-                openShift
-                  ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200'
-                  : 'text-white bg-slate-900 hover:bg-slate-800'
-              }`}
-            >
-              {openShift ? 'Tutup Shift & Rekonsiliasi Kas' : 'Buka Shift Kasir'}
-            </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Auto-Print Trigger Banner for Paid QR Self-Orders */}
         {tenantAutoPrints.map((ap) => (
@@ -815,8 +840,7 @@ export function PosPage() {
                   Pesanan QR Meja {ap.order.tableNumber} Lunas via QRIS ({ap.order.orderNumber})
                 </p>
                 <p className="text-xs text-emerald-800">
-                  Jurnal double-entry &amp; tiket Kitchen Display telah diposting otomatis. Siap
-                  cetak struk kasir.
+                  Catatan penjualan &amp; tiket dapur sudah tercatat otomatis. Siap cetak struk kasir.
                 </p>
               </div>
             </div>
@@ -856,7 +880,7 @@ export function PosPage() {
                   {formatRupiah(lastCompletedOrder.grandTotal)})
                 </p>
                 <p className="text-xs text-emerald-800">
-                  Jurnal double-entry &amp; stok telah diperbarui via{' '}
+                  Catatan penjualan &amp; stok telah diperbarui via{' '}
                   <strong>
                     {getPaymentChannelMeta(lastCompletedOrder.payment?.paymentMethod ?? 'CASH').label}
                   </strong>
@@ -993,32 +1017,88 @@ export function PosPage() {
               <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                 {!searchQuery.trim() ? (
                   <div
-                    data-testid="pos-search-first-empty"
-                    className="py-16 px-6 text-center space-y-3"
+                    data-testid="pos-quick-tap-catalog"
+                    className="p-4 sm:p-5 space-y-4"
                   >
-                    <div className="w-12 h-12 mx-auto rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
-                      <ScanBarcode className="w-6 h-6" />
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-stone-100">
+                      <div>
+                        <p className="text-sm font-semibold text-stone-900">
+                          Barang Cepat / Paling Sering Dibeli
+                        </p>
+                        <p className="text-xs text-stone-500">
+                          Ketuk langsung untuk masuk keranjang, atau ketik nama / pindai barcode di atas untuk cari seluruh katalog ({sellableProducts.length} barang).
+                        </p>
+                      </div>
                     </div>
-                    <div className="space-y-1 max-w-md mx-auto">
-                      <p className="text-sm font-semibold text-slate-900">
-                        Siap Scan Barcode atau Ketik Nama Barang
-                      </p>
-                      <p className="text-xs text-slate-500 leading-relaxed">
-                        Daftar produk sengaja dikosongkan agar kasir lebih cepat dan fokus. Pindai
-                        barcode barang atau ketik nama produk/SKU pada kolom pencarian di atas untuk
-                        memilih jumlah beli dan melihat sisa stok secara real-time.
-                      </p>
-                    </div>
-                    <div className="pt-1">
-                      <button
-                        type="button"
-                        onClick={() => setScannerOpen(true)}
-                        className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg"
-                      >
-                        <Camera className="w-3.5 h-3.5" />
-                        <span>Buka Kamera Scan Barcode</span>
-                      </button>
-                    </div>
+
+                    {quickTapProducts.length === 0 ? (
+                      <div className="py-10 text-center space-y-2">
+                        <p className="text-sm font-semibold text-stone-800">
+                          Belum ada barang siap jual di katalog
+                        </p>
+                        <p className="text-xs text-stone-500">
+                          Tambahkan barang pertama Anda di menu Katalog Barang agar bisa langsung dijual di kasir.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => navigate('/catalog/products')}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg"
+                        >
+                          Tambah Barang Pertama
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+                        {quickTapProducts.map((prod) => {
+                          const live = computeLivePosStock({
+                            product: prod,
+                            allProducts: products,
+                            productRecipes,
+                            cart: cartEntries,
+                            draftQty: 1,
+                          });
+                          const outOfStock = live.tracksStock && live.exceedsStock;
+                          const inCartQty = cart.find((c) => c.product.id === prod.id)?.qty ?? 0;
+                          return (
+                            <button
+                              key={prod.id}
+                              type="button"
+                              disabled={outOfStock}
+                              data-testid={`pos-quick-tap-${prod.id}`}
+                              onClick={() => addToCart(prod, 1)}
+                              className={`relative p-3 rounded-xl border text-left transition-colors flex flex-col justify-between gap-2 min-h-[104px] ${
+                                outOfStock
+                                  ? 'border-stone-200 bg-stone-50 opacity-60 cursor-not-allowed'
+                                  : inCartQty > 0
+                                  ? 'border-emerald-500 bg-emerald-50/40 hover:bg-emerald-50'
+                                  : 'border-stone-200 bg-white hover:border-emerald-400 hover:bg-stone-50/60'
+                              }`}
+                            >
+                              {inCartQty > 0 && (
+                                <span className="absolute top-2 right-2 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[10px] font-mono font-bold tabular-nums inline-flex items-center justify-center">
+                                  {inCartQty}
+                                </span>
+                              )}
+                              <div className="pr-5">
+                                <p className="text-xs font-semibold text-stone-900 line-clamp-2 leading-snug">
+                                  {prod.name}
+                                </p>
+                                <p className="text-[11px] text-stone-500 font-mono tabular-nums mt-1">
+                                  {live.tracksStock
+                                    ? outOfStock
+                                      ? 'Stok habis'
+                                      : `Stok ${live.availableAfterCart.toFixed(0)} ${live.unitLabel}`
+                                    : prod.unit}
+                                </p>
+                              </div>
+                              <p className="text-xs font-bold font-mono tabular-nums text-emerald-700">
+                                {formatRupiah(prod.sellingPrice)}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 ) : filteredProducts.length === 0 ? (
                   <div className="py-12 px-6 text-center space-y-1.5">
@@ -1524,21 +1604,21 @@ export function PosPage() {
 
             {/* Promo, Discount & Payment Method */}
             <div className="pt-3 border-t border-slate-200 space-y-3">
-              {activePromos.length > 0 && (
+              {hasPromoCrmPro && activePromos.length > 0 && (
                 <div>
-                  <label htmlFor="pos-promo-select" className="block text-xs text-slate-600 mb-1">
+                  <label htmlFor="pos-promo-select" className="block text-xs text-stone-600 mb-1">
                     Pilih Promo Aktif
                   </label>
                   <select
                     id="pos-promo-select"
                     value={selectedPromoId}
                     onChange={(e) => setSelectedPromoId(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white"
+                    className="w-full px-2.5 py-1.5 text-xs border border-stone-200 rounded-md bg-white"
                   >
                     <option value="">Tanpa Promo</option>
                     {activePromos.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.code} — {p.name}
+                        {p.code} · {p.name}
                       </option>
                     ))}
                   </select>
@@ -1607,12 +1687,14 @@ export function PosPage() {
               {/* Payment Selector (Enforces Cash-Only on Paket LITE unless ADDON_NON_CASH_PAYMENT active) */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold text-slate-700">
+                  <span className="text-[11px] font-semibold text-stone-700">
                     {canUseNonCash
-                      ? 'Metode Pembayaran (QRIS Dinamis · E-Wallet · VA)'
-                      : 'Metode Pembayaran (Paket LITE — Khusus Tunai)'}
+                      ? !isOnline
+                        ? 'Metode Pembayaran (Offline · Khusus Tunai)'
+                        : 'Metode Pembayaran (QRIS Dinamis · E-Wallet · VA)'
+                      : 'Metode Pembayaran (Paket LITE · Khusus Tunai)'}
                   </span>
-                  {canUseNonCash && (
+                  {canUseNonCash && isOnline && (
                     <a
                       href={`/customer-display/${encodeURIComponent(displayBranchId)}`}
                       target="_blank"
@@ -1630,16 +1712,25 @@ export function PosPage() {
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       {PAYMENT_CHANNELS.map((ch) => {
                         const active = paymentMethod === ch.id;
+                        const disabledByOffline = !isOnline && ch.id !== 'CASH';
                         return (
                           <button
                             key={ch.id}
                             type="button"
+                            disabled={disabledByOffline}
                             data-testid={`pos-pay-${ch.id}`}
                             onClick={() => setPaymentMethod(ch.id)}
+                            title={
+                              disabledByOffline
+                                ? 'Butuh koneksi internet untuk pembayaran non-tunai'
+                                : undefined
+                            }
                             className={`py-1.5 px-1 text-[11px] font-semibold rounded-lg border transition-colors whitespace-nowrap ${
-                              active
-                                ? 'bg-slate-900 text-white border-slate-900'
-                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                              disabledByOffline
+                                ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed'
+                                : active
+                                ? 'bg-stone-900 text-white border-stone-900'
+                                : 'bg-stone-50 text-stone-700 border-stone-200 hover:border-stone-300'
                             }`}
                           >
                             {ch.shortLabel}
@@ -1647,8 +1738,10 @@ export function PosPage() {
                         );
                       })}
                     </div>
-                    <p className="text-[11px] text-slate-500">
-                      {getPaymentChannelMeta(paymentMethod).providerHint}
+                    <p className="text-[11px] text-stone-500">
+                      {!isOnline
+                        ? 'QRIS/Transfer sementara dinonaktifkan saat offline. Gunakan Tunai agar transaksi tetap berjalan.'
+                        : getPaymentChannelMeta(paymentMethod).providerHint}
                     </p>
                   </>
                 ) : (
@@ -1966,7 +2059,7 @@ export function PosPage() {
         }}
         headerId="pos-auto-payment-title"
         title={`Verifikasi Otomatis · ${getPaymentChannelMeta(paymentMethod).label}`}
-        subtitle="Sistem memverifikasi pembayaran non-tunai secara otomatis melalui tanda tangan kriptografi webhook — 0 Token AI."
+        subtitle="Sistem memverifikasi pembayaran non-tunai secara otomatis melalui penyedia pembayaran resmi."
       >
         <div data-testid="pos-auto-payment-modal" className="p-6 space-y-5">
           {paymentSessionLoading ? (

@@ -12,23 +12,23 @@ import {
   assertTenantAccess,
   type PartitionedTenantDatabase,
   type SignedSessionPayload,
-} from '../lib/db/tenant-db';
-import { encryptSecret, decryptSecret, maskSecretKey } from '../lib/payments/crypto';
+} from '../lib/db/tenant-db.ts';
+import { encryptSecret, decryptSecret, maskSecretKey } from '../lib/payments/crypto.ts';
 import {
   DEFAULT_ENABLED_CHANNELS,
   DEFAULT_PAYMENT_CONFIG_RATES,
   buildGatewayPaymentJournalLines,
   buildSettlementBatchJournalLines,
   computePaymentBreakdown,
-} from '../lib/payments/fee-calculator';
+} from '../lib/payments/fee-calculator.ts';
 import {
   DEFAULT_WA_MESSAGE_TEMPLATES,
-} from '../lib/payments/wa-templates';
+} from '../lib/payments/wa-templates.ts';
 import {
   getPaymentAdapter,
   signSimulatorWebhook,
   type DecryptedGatewayCredentials,
-} from '../lib/payments/adapters';
+} from '../lib/payments/adapters/index.ts';
 import type {
   Account,
   CustomerDisplaySnapshot,
@@ -39,7 +39,7 @@ import type {
   SettlementBatch,
   TenantPaymentConfig,
   WaMessageTemplate,
-} from '../types/domain';
+} from '../types/domain.ts';
 
 export interface PaymentRoutesDeps {
   tenantDb: PartitionedTenantDatabase;

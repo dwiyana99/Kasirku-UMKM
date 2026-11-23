@@ -15,7 +15,7 @@ import type {
   DecryptedGatewayCredentials,
   PaymentGatewayAdapter,
   WebhookVerificationResult,
-} from './types';
+} from './types.ts';
 
 const SIMULATOR_HMAC_SECRET = 'kasirakun-simulator-webhook-signing-key-v1';
 

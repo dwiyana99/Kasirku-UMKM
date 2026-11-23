@@ -3,7 +3,7 @@
  * Shared by Master Admin Console, Payment Assistance Queue, and Demo Approvals.
  */
 
-import type { PaymentGatewayProvider, WaMessageTemplate } from '../../types/domain';
+import type { PaymentGatewayProvider, WaMessageTemplate } from '../../types/domain.ts';
 
 export interface WaTemplateVariableInfo {
   token: string;

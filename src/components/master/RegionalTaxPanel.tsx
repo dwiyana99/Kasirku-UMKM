@@ -68,7 +68,7 @@ export function RegionalTaxPanel() {
         r.cityName.toLowerCase().includes(q) ||
         r.province.toLowerCase().includes(q) ||
         r.regionCode.toLowerCase().includes(q) ||
-        r.regulationRef.toLowerCase().includes(q)
+        r.perdaReference.toLowerCase().includes(q)
       );
     });
   }, [provinceFilter, regionalTaxRegistry, search]);
@@ -98,11 +98,11 @@ export function RegionalTaxPanel() {
       province: rule.province,
       cityName: rule.cityName,
       pbjtFoodBeverageRate: toPercentStr(rule.pbjtFoodBeverageRate),
-      pbjtHotelVillaRate: toPercentStr(rule.pbjtHotelVillaRate),
-      pbjtSpaEntertainmentRate: toPercentStr(rule.pbjtSpaEntertainmentRate),
+      pbjtHotelVillaRate: toPercentStr(rule.pbjtHospitalityRate),
+      pbjtSpaEntertainmentRate: toPercentStr(rule.pbjtEntertainmentSpaRate),
       pbjtParkingRate: toPercentStr(rule.pbjtParkingRate),
       umkmExemptMonthlyThreshold: String(Math.round(Number(rule.umkmExemptMonthlyThreshold || '0'))),
-      regulationRef: rule.regulationRef,
+      regulationRef: rule.perdaReference,
       notes: rule.notes ?? '',
     });
   };
@@ -134,12 +134,13 @@ export function RegionalTaxPanel() {
       province: editingRule.province.trim(),
       cityName: editingRule.cityName.trim(),
       pbjtFoodBeverageRate: fromPercentStr(editingRule.pbjtFoodBeverageRate),
-      pbjtHotelVillaRate: fromPercentStr(editingRule.pbjtHotelVillaRate),
-      pbjtSpaEntertainmentRate: fromPercentStr(editingRule.pbjtSpaEntertainmentRate),
+      pbjtHospitalityRate: fromPercentStr(editingRule.pbjtHotelVillaRate),
+      pbjtEntertainmentSpaRate: fromPercentStr(editingRule.pbjtSpaEntertainmentRate),
       pbjtParkingRate: fromPercentStr(editingRule.pbjtParkingRate),
+      pbjtSportsRate: '0.0000',
       umkmExemptMonthlyThreshold: `${Math.max(0, Number(editingRule.umkmExemptMonthlyThreshold || '0'))}.0000`,
-      regulationRef: editingRule.regulationRef.trim() || 'UU HKPD No. 1/2022',
-      notes: editingRule.notes.trim() || undefined,
+      perdaReference: editingRule.regulationRef.trim() || 'UU HKPD No. 1/2022',
+      notes: editingRule.notes.trim() || '',
       isActive: true,
       updatedAt: new Date().toISOString(),
     };
@@ -260,16 +261,16 @@ export function RegionalTaxPanel() {
                         {' · '}
                         {rule.province}
                       </div>
-                      <div className="mt-0.5 text-[11px] text-stone-400">{rule.regulationRef}</div>
+                      <div className="mt-0.5 text-[11px] text-stone-400">{rule.perdaReference}</div>
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums text-stone-800">
                       {toPercentStr(rule.pbjtFoodBeverageRate)}%
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums text-stone-800">
-                      {toPercentStr(rule.pbjtHotelVillaRate)}%
+                      {toPercentStr(rule.pbjtHospitalityRate)}%
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums text-amber-700">
-                      {toPercentStr(rule.pbjtSpaEntertainmentRate)}%
+                      {toPercentStr(rule.pbjtEntertainmentSpaRate)}%
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums text-stone-800">
                       {toPercentStr(rule.pbjtParkingRate)}%

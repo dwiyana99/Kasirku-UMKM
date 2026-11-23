@@ -1,19 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
-  CheckCircle2,
   ClipboardCheck,
   MessageCircle,
   Plus,
   Truck,
   Users,
-  X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { formatRupiah } from '../../lib/pos/checkout-service';
 import {
   calculateManufacturingHpp,
-  calculateStaffCommission,
   calculateTutorHonorSummary,
 } from '../../lib/verticals/vertical-operations-engine';
 import {
@@ -34,6 +31,27 @@ import type {
   VehicleWashOrder,
 } from '../../types/domain';
 
+function aggregateStaffCommissions(
+  items: Array<{ staffName: string; commissionAmount: string }>
+): Array<{ staffName: string; jobCount: number; totalCommission: string }> {
+  const map = new Map<string, { staffName: string; jobCount: number; total: Decimal }>();
+  for (const item of items) {
+    const cur = map.get(item.staffName) ?? {
+      staffName: item.staffName,
+      jobCount: 0,
+      total: new Decimal(0),
+    };
+    cur.jobCount += 1;
+    cur.total = cur.total.plus(new Decimal(item.commissionAmount || '0'));
+    map.set(item.staffName, cur);
+  }
+  return Array.from(map.values()).map((r) => ({
+    staffName: r.staffName,
+    jobCount: r.jobCount,
+    totalCommission: r.total.toFixed(4),
+  }));
+}
+
 export function LaundryOpsModule() {
   const { activeWorkspace, updateVerticalOps } = useApp();
   const tenant = activeWorkspace.tenant;
@@ -47,7 +65,7 @@ export function LaundryOpsModule() {
   const [weightKg, setWeightKg] = useState('4');
   const [pricePerUnit, setPricePerUnit] = useState('8000');
   const [parfum, setParfum] = useState('Sakura Fresh');
-  const [rackCode, setRackCode] = useState('RAK-A3');
+  const [rackLocation, setRackLocation] = useState('RAK-A3');
 
   const STATUS_FLOW: LaundryOrder['status'][] = [
     'DITERIMA',
@@ -60,7 +78,7 @@ export function LaundryOpsModule() {
   const handleAddOrder = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim()) return;
-    const qty = Math.max(1, Number(weightKg) || 1);
+    const qty = Math.max(0.5, Number(weightKg) || 1);
     const total = new Decimal(qty).times(new Decimal(pricePerUnit || '8000')).toFixed(4);
     const newOrder: LaundryOrder = {
       id: `lnd-${Date.now()}`,
@@ -68,13 +86,17 @@ export function LaundryOpsModule() {
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim() || '0812-0000-0000',
       serviceType,
-      weightKg: serviceType === 'KILOAN' ? qty.toFixed(1) : undefined,
-      itemCount: serviceType !== 'KILOAN' ? qty : undefined,
-      parfumName: parfum.trim() || 'Reguler',
-      rackCode: rackCode.trim() || 'RAK-A1',
+      itemSummary:
+        serviceType === 'KILOAN'
+          ? `Cuci Komplit Kiloan (${qty.toFixed(1)} Kg)`
+          : `${serviceType === 'EXPRESS' ? 'Cuci Express' : 'Cuci Satuan'} (${Math.round(qty)} pcs)`,
+      weightKg: serviceType === 'KILOAN' ? qty.toFixed(2) : '0.00',
+      pieceCount: serviceType === 'KILOAN' ? Math.max(1, Math.round(qty * 4)) : Math.max(1, Math.round(qty)),
+      parfum: parfum.trim() || 'Reguler',
+      rackLocation: rackLocation.trim() || 'RAK-A1',
       totalAmount: total,
-      dpAmount: '0.0000',
-      isPaid: false,
+      paidAmount: '0.0000',
+      paymentStatus: 'UNPAID',
       estimatedReadyAt: 'Besok 17:00',
       status: 'DITERIMA',
       createdAt: new Date().toISOString(),
@@ -91,19 +113,25 @@ export function LaundryOpsModule() {
   const advanceStatus = (order: LaundryOrder) => {
     const idx = STATUS_FLOW.indexOf(order.status);
     const nextStatus = STATUS_FLOW[Math.min(STATUS_FLOW.length - 1, idx + 1)];
-    const markPaidNow = nextStatus === 'SELESAI' && !order.isPaid;
+    const markPaidNow = nextStatus === 'SELESAI' && order.paymentStatus !== 'PAID';
+    const remaining = new Decimal(order.totalAmount || '0').minus(new Decimal(order.paidAmount || '0'));
     updateVerticalOps(
       (prev) => ({
         ...prev,
         laundryOrders: (prev.laundryOrders ?? []).map((o) =>
           o.id === order.id
-            ? { ...o, status: nextStatus, isPaid: markPaidNow ? true : o.isPaid }
+            ? {
+                ...o,
+                status: nextStatus,
+                paymentStatus: markPaidNow ? 'PAID' : o.paymentStatus,
+                paidAmount: markPaidNow ? o.totalAmount : o.paidAmount,
+              }
             : o
         ),
       }),
-      markPaidNow
+      markPaidNow && remaining.gt(0)
         ? {
-            grossAmount: order.totalAmount,
+            grossAmount: remaining.toFixed(4),
             description: `Pelunasan Laundry ${order.ticketNumber} (${order.customerName})`,
           }
         : undefined
@@ -115,7 +143,7 @@ export function LaundryOpsModule() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-stone-900">
-            Antrean Cucian Laundry Kiloan & Satuan
+            Antrean Cucian Laundry Kiloan &amp; Satuan
           </h2>
           <p className="text-xs text-stone-600">
             Update tahapan cucian (Diterima, Dicuci, Setrika, Siap Ambil) lalu klik Kirim WA langsung lewat wa.me gratis tanpa Add-On Fonnte.
@@ -134,15 +162,16 @@ export function LaundryOpsModule() {
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
         <div className="divide-y divide-stone-100">
           {orders.map((order) => {
+            const isPaid = order.paymentStatus === 'PAID';
             const waUrl = buildDirectWaLink(
               order.customerPhone,
               buildLaundryReadyWaMessage({
                 businessName: tenant.name,
                 customerName: order.customerName,
                 ticketNumber: order.ticketNumber,
-                rackCode: order.rackCode,
+                rackCode: order.rackLocation,
                 totalAmount: order.totalAmount,
-                isPaid: order.isPaid,
+                isPaid,
               })
             );
             return (
@@ -165,20 +194,21 @@ export function LaundryOpsModule() {
                           : 'bg-amber-50 text-amber-800'
                       }`}
                     >
-                      {order.status.replace('_', ' ')}
+                      {order.status.replace(/_/g, ' ')}
                     </span>
                     <span className="text-xs text-stone-500">
-                      Rak: <strong className="font-mono text-stone-800">{order.rackCode}</strong>
+                      Rak: <strong className="font-mono text-stone-800">{order.rackLocation}</strong>
                     </span>
                   </div>
                   <div className="mt-1 text-sm font-semibold text-stone-900">
                     {order.customerName} ({order.customerPhone})
                   </div>
                   <div className="text-xs text-stone-600">
-                    {order.weightKg ? `${order.weightKg} Kg` : `${order.itemCount ?? 1} pcs`} · Parfum:{' '}
-                    {order.parfumName ?? 'Reguler'} · Status Bayar:{' '}
-                    <strong className={order.isPaid ? 'text-emerald-700' : 'text-amber-700'}>
-                      {order.isPaid ? 'Lunas' : 'Bayar saat ambil'}
+                    {order.itemSummary} ·{' '}
+                    {Number(order.weightKg) > 0 ? `${order.weightKg} Kg` : `${order.pieceCount} pcs`} · Parfum:{' '}
+                    {order.parfum || 'Reguler'} · Status Bayar:{' '}
+                    <strong className={isPaid ? 'text-emerald-700' : 'text-amber-700'}>
+                      {isPaid ? 'Lunas' : order.paymentStatus === 'DP' ? 'DP Masuk' : 'Bayar saat ambil'}
                     </strong>
                   </div>
                 </div>
@@ -195,11 +225,12 @@ export function LaundryOpsModule() {
                       Lanjut Tahap Berikutnya
                     </button>
                   )}
-                  {waStatus.isReady && waUrl ? (
+                  {waStatus.ready && waUrl ? (
                     <a
                       href={waUrl}
                       target="_blank"
                       rel="noopener noreferrer"
+                      data-testid={`laundry-wa-link-${order.id}`}
                       className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
                     >
                       <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -282,8 +313,8 @@ export function LaundryOpsModule() {
                 <label className="mb-1 block text-xs font-semibold text-stone-700">Kode Rak</label>
                 <input
                   type="text"
-                  value={rackCode}
-                  onChange={(e) => setRackCode(e.target.value)}
+                  value={rackLocation}
+                  onChange={(e) => setRackLocation(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
                 />
               </div>
@@ -324,9 +355,9 @@ export function BimbelKursusGymModule() {
   const tenant = activeWorkspace.tenant;
   const ops = activeWorkspace.verticalOps ?? {};
   const members = ops.academyMembers ?? [];
-  const billings = ops.academyBillings ?? [];
+  const invoices = ops.academyInvoices ?? [];
   const attendances = ops.academyAttendances ?? [];
-  const honorSessions = ops.tutorHonorSessions ?? [];
+  const tutorSessions = ops.tutorSessions ?? [];
   const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
 
   const [tab, setTab] = useState<'BILLING' | 'ATTENDANCE' | 'HONOR'>('BILLING');
@@ -334,13 +365,13 @@ export function BimbelKursusGymModule() {
   const [classLabel, setClassLabel] = useState('Kelas Intensif SMA');
   const [ratePerSession, setRatePerSession] = useState('125000');
 
-  const honorSummary = useMemo(() => calculateTutorHonorSummary(honorSessions), [honorSessions]);
+  const honorSummary = useMemo(() => calculateTutorHonorSummary(tutorSessions), [tutorSessions]);
 
   const handlePayBilling = (billId: string, memberName: string, amount: string) => {
     updateVerticalOps(
       (prev) => ({
         ...prev,
-        academyBillings: (prev.academyBillings ?? []).map((b) =>
+        academyInvoices: (prev.academyInvoices ?? []).map((b) =>
           b.id === billId ? { ...b, status: 'PAID', paidAt: new Date().toISOString() } : b
         ),
       }),
@@ -351,7 +382,11 @@ export function BimbelKursusGymModule() {
     );
   };
 
-  const handleMarkAttendance = (memberId: string, memberName: string, status: 'HADIR' | 'IZIN' | 'ALPHA') => {
+  const handleMarkAttendance = (
+    memberId: string,
+    memberName: string,
+    status: 'HADIR' | 'IZIN' | 'ALPHA'
+  ) => {
     const today = new Date().toISOString().slice(0, 10);
     updateVerticalOps((prev) => ({
       ...prev,
@@ -360,9 +395,10 @@ export function BimbelKursusGymModule() {
           id: `att-${Date.now()}`,
           memberId,
           memberName,
+          programName: members.find((m) => m.id === memberId)?.programName ?? 'Kelas Utama',
           sessionDate: today,
-          className: members.find((m) => m.id === memberId)?.programName ?? 'Kelas Utama',
           status,
+          tutorName: tutorName.trim() || 'Instruktur Utama',
         },
         ...(prev.academyAttendances ?? []),
       ],
@@ -372,17 +408,20 @@ export function BimbelKursusGymModule() {
   const handleAddTutorSession = (e: React.FormEvent) => {
     e.preventDefault();
     if (!tutorName.trim()) return;
+    const rate = new Decimal(ratePerSession || '100000');
     const newSession: TutorHonorSession = {
       id: `ths-${Date.now()}`,
       tutorName: tutorName.trim(),
-      className: classLabel.trim() || 'Kelas Reguler',
+      subjectOrClass: classLabel.trim() || 'Kelas Reguler',
       sessionDate: new Date().toISOString().slice(0, 10),
-      ratePerSession: new Decimal(ratePerSession || '100000').toFixed(4),
+      sessionCount: 1,
+      ratePerSession: rate.toFixed(4),
+      totalHonor: rate.toFixed(4),
       status: 'UNPAID',
     };
     updateVerticalOps((prev) => ({
       ...prev,
-      tutorHonorSessions: [newSession, ...(prev.tutorHonorSessions ?? [])],
+      tutorSessions: [newSession, ...(prev.tutorSessions ?? [])],
     }));
   };
 
@@ -390,9 +429,9 @@ export function BimbelKursusGymModule() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
         {[
-          { id: 'BILLING' as const, label: `Tagihan SPP / Member (${billings.length})` },
+          { id: 'BILLING' as const, label: `Tagihan SPP / Member (${invoices.length})` },
           { id: 'ATTENDANCE' as const, label: `Absensi Kehadiran (${members.length} Peserta)` },
-          { id: 'HONOR' as const, label: `Honor Tutor / Instruktur (${honorSummary.length})` },
+          { id: 'HONOR' as const, label: `Honor Tutor / Instruktur (${honorSummary.byTutor.length})` },
         ].map((t) => (
           <button
             key={t.id}
@@ -412,20 +451,17 @@ export function BimbelKursusGymModule() {
       {tab === 'BILLING' && (
         <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
           <div className="divide-y divide-stone-100">
-            {billings.map((b) => {
-              const member = members.find((m) => m.id === b.memberId);
-              const waUrl = member
-                ? buildDirectWaLink(
-                    member.phoneWa,
-                    buildDueReminderWaMessage({
-                      businessName: tenant.name,
-                      customerName: b.memberName,
-                      itemLabel: `${member.programName} (${b.periodMonth})`,
-                      dueDate: b.dueDate,
-                      amountDue: b.amount,
-                    })
-                  )
-                : null;
+            {invoices.map((b) => {
+              const waUrl = buildDirectWaLink(
+                b.phone,
+                buildDueReminderWaMessage({
+                  businessName: tenant.name,
+                  customerName: b.memberName,
+                  itemLabel: `${b.programName} (${b.periodLabel})`,
+                  dueDate: b.dueDate,
+                  amountDue: b.amount,
+                })
+              );
               return (
                 <div
                   key={b.id}
@@ -451,7 +487,7 @@ export function BimbelKursusGymModule() {
                       </span>
                     </div>
                     <div className="mt-0.5 text-xs text-stone-600">
-                      Periode {b.periodMonth} · Jatuh tempo: {b.dueDate}
+                      {b.programName} · Periode {b.periodLabel} · Jatuh tempo: {b.dueDate}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -467,7 +503,7 @@ export function BimbelKursusGymModule() {
                         Tandai Lunas
                       </button>
                     )}
-                    {waStatus.isReady && waUrl && b.status !== 'PAID' && (
+                    {waStatus.ready && waUrl && b.status !== 'PAID' && (
                       <a
                         href={waUrl}
                         target="_blank"
@@ -500,7 +536,9 @@ export function BimbelKursusGymModule() {
                 >
                   <div>
                     <div className="text-sm font-bold text-stone-900">{m.fullName}</div>
-                    <div className="text-xs text-stone-500">{m.programName}</div>
+                    <div className="text-xs text-stone-500">
+                      {m.programName} · {m.memberCode}
+                    </div>
                   </div>
                   <div className="flex gap-1.5">
                     {(['HADIR', 'IZIN', 'ALPHA'] as const).map((st) => (
@@ -531,7 +569,7 @@ export function BimbelKursusGymModule() {
                 {attendances.slice(0, 8).map((a) => (
                   <div key={a.id} className="flex justify-between text-stone-700">
                     <span>
-                      {a.sessionDate} · <strong>{a.memberName}</strong> ({a.className})
+                      {a.sessionDate} · <strong>{a.memberName}</strong> ({a.programName})
                     </span>
                     <span className="font-semibold text-emerald-700">{a.status}</span>
                   </div>
@@ -578,32 +616,35 @@ export function BimbelKursusGymModule() {
           </form>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            {honorSummary.map((h) => (
-              <div key={h.tutorName} className="rounded-xl border border-stone-200 bg-white p-4">
-                <div className="flex items-center gap-2 text-sm font-bold text-stone-900">
-                  <Users className="h-4 w-4 text-emerald-700" strokeWidth={1.75} />
-                  {h.tutorName}
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <div className="text-stone-500">Total Sesi</div>
-                    <div className="font-mono font-bold tabular-nums">{h.sessionCount}</div>
+            {honorSummary.byTutor.map((h) => {
+              const totalHonor = new Decimal(h.unpaidHonor).plus(new Decimal(h.paidHonor)).toFixed(4);
+              return (
+                <div key={h.tutorName} className="rounded-xl border border-stone-200 bg-white p-4">
+                  <div className="flex items-center gap-2 text-sm font-bold text-stone-900">
+                    <Users className="h-4 w-4 text-emerald-700" strokeWidth={1.75} />
+                    {h.tutorName}
                   </div>
-                  <div>
-                    <div className="text-stone-500">Total Honor</div>
-                    <div className="font-mono font-bold tabular-nums text-stone-900">
-                      {formatRupiah(h.totalHonor)}
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <div className="text-stone-500">Total Sesi</div>
+                      <div className="font-mono font-bold tabular-nums">{h.sessionCount}</div>
+                    </div>
+                    <div>
+                      <div className="text-stone-500">Total Honor</div>
+                      <div className="font-mono font-bold tabular-nums text-stone-900">
+                        {formatRupiah(totalHonor)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-stone-500">Belum Dibayar</div>
+                      <div className="font-mono font-bold tabular-nums text-amber-700">
+                        {formatRupiah(h.unpaidHonor)}
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-stone-500">Belum Dibayar</div>
-                    <div className="font-mono font-bold tabular-nums text-amber-700">
-                      {formatRupiah(h.unpaidHonor)}
-                    </div>
-                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -615,7 +656,8 @@ export function ManufakturKecilModule() {
   const { activeWorkspace, updateVerticalOps } = useApp();
   const orders = activeWorkspace.verticalOps?.manufacturingOrders ?? [];
   const [showAdd, setShowAdd] = useState(false);
-  const [outputName, setOutputName] = useState('');
+  const [productName, setProductName] = useState('');
+  const [customerOrBatch, setCustomerOrBatch] = useState('Batch Produksi Reguler');
   const [qty, setQty] = useState('20');
   const [materialCost, setMaterialCost] = useState('1200000');
   const [laborCost, setLaborCost] = useState('600000');
@@ -624,36 +666,39 @@ export function ManufakturKecilModule() {
   const liveHpp = useMemo(
     () =>
       calculateManufacturingHpp({
-        materials: [{ name: 'Bahan Baku', qty: '1', unit: 'paket', unitCost: materialCost || '0' }],
+        targetQty: Math.max(1, Number(qty) || 1),
+        rawMaterials: [{ name: 'Bahan Baku', qty: 1, unit: 'paket', unitCost: materialCost || '0' }],
         laborCost: laborCost || '0',
         overheadCost: overheadCost || '0',
-        outputQty: Math.max(1, Number(qty) || 1),
       }),
     [laborCost, materialCost, overheadCost, qty]
   );
 
   const handleAddSpk = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!outputName.trim()) return;
+    if (!productName.trim()) return;
     const newSpk: ManufacturingWorkOrder = {
       id: `spk-${Date.now()}`,
-      spkNumber: `SPK-${String(orders.length + 1).padStart(3, '0')}`,
-      outputProductName: outputName.trim(),
-      outputQty: Number(qty) || 1,
-      outputUnit: 'pcs',
-      materials: [
+      code: `SPK-${String(orders.length + 1).padStart(3, '0')}`,
+      productName: productName.trim(),
+      customerOrBatch: customerOrBatch.trim() || 'Stok Toko',
+      targetQty: Math.max(1, Number(qty) || 1),
+      unit: 'pcs',
+      rawMaterialsUsed: [
         {
           name: 'Total Bahan Baku (Kain / Kayu / Aksesoris)',
-          qty: '1',
+          qty: 1,
           unit: 'batch',
           unitCost: new Decimal(materialCost || '0').toFixed(4),
         },
       ],
       laborCost: new Decimal(laborCost || '0').toFixed(4),
       overheadCost: new Decimal(overheadCost || '0').toFixed(4),
-      totalProductionCost: liveHpp.totalProductionCost,
-      unitHpp: liveHpp.unitHpp,
+      totalHpp: liveHpp.totalHpp,
+      hppPerUnit: liveHpp.hppPerUnit,
+      sellingPricePerUnit: liveHpp.recommendedSellingPrice35Pct,
       status: 'CUTTING_PROCESS',
+      dueDate: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10),
       createdAt: new Date().toISOString(),
     };
     updateVerticalOps((prev) => ({
@@ -661,7 +706,7 @@ export function ManufakturKecilModule() {
       manufacturingOrders: [newSpk, ...(prev.manufacturingOrders ?? [])],
     }));
     setShowAdd(false);
-    setOutputName('');
+    setProductName('');
   };
 
   const advanceSpk = (spk: ManufacturingWorkOrder) => {
@@ -685,7 +730,7 @@ export function ManufakturKecilModule() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-stone-900">
-            SPK Produksi Konveksi, Butik Jahit & Mebel
+            SPK Produksi Konveksi, Butik Jahit &amp; Mebel
           </h2>
           <p className="text-xs text-stone-600">
             Olah bahan mentah (kain, kayu, benang) menjadi barang jadi lengkap dengan perhitungan HPP otomatis per unit.
@@ -707,7 +752,7 @@ export function ManufakturKecilModule() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs font-bold text-stone-900">{spk.spkNumber}</span>
+                  <span className="font-mono text-xs font-bold text-stone-900">{spk.code}</span>
                   <span
                     className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
                       spk.status === 'COMPLETED'
@@ -715,20 +760,22 @@ export function ManufakturKecilModule() {
                         : 'bg-amber-50 text-amber-800'
                     }`}
                   >
-                    {spk.status.replace('_', ' ')}
+                    {spk.status.replace(/_/g, ' ')}
                   </span>
+                  <span className="text-xs text-stone-500">Target: {spk.dueDate}</span>
                 </div>
                 <div className="mt-1 text-sm font-bold text-stone-900">
-                  {spk.outputProductName} ({spk.outputQty} {spk.outputUnit})
+                  {spk.productName} ({spk.targetQty} {spk.unit})
                 </div>
+                <div className="mt-0.5 text-xs text-stone-500">{spk.customerOrBatch}</div>
                 <div className="mt-1 text-xs text-stone-600">
                   Total Biaya Produksi:{' '}
                   <strong className="font-mono tabular-nums">
-                    {formatRupiah(spk.totalProductionCost)}
+                    {formatRupiah(spk.totalHpp)}
                   </strong>{' '}
-                  · HPP Otomatis / {spk.outputUnit}:{' '}
+                  · HPP Otomatis / {spk.unit}:{' '}
                   <strong className="font-mono tabular-nums text-emerald-700">
-                    {formatRupiah(spk.unitHpp)}
+                    {formatRupiah(spk.hppPerUnit)}
                   </strong>
                 </div>
               </div>
@@ -759,9 +806,18 @@ export function ManufakturKecilModule() {
                 <input
                   type="text"
                   required
-                  value={outputName}
-                  onChange={(e) => setOutputName(e.target.value)}
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
                   placeholder="Contoh: Kemeja Linen Custom / Meja Jati"
+                  className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-stone-700">Pemesan / Batch</label>
+                <input
+                  type="text"
+                  value={customerOrBatch}
+                  onChange={(e) => setCustomerOrBatch(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 />
               </div>
@@ -810,12 +866,12 @@ export function ManufakturKecilModule() {
                 <div className="flex justify-between">
                   <span className="text-emerald-800">Total Modal Produksi</span>
                   <strong className="font-mono tabular-nums text-emerald-900">
-                    {formatRupiah(liveHpp.totalProductionCost)}
+                    {formatRupiah(liveHpp.totalHpp)}
                   </strong>
                 </div>
                 <div className="mt-1 flex justify-between font-bold text-emerald-900">
                   <span>Estimasi HPP per Unit</span>
-                  <span className="font-mono tabular-nums">{formatRupiah(liveHpp.unitHpp)}</span>
+                  <span className="font-mono tabular-nums">{formatRupiah(liveHpp.hppPerUnit)}</span>
                 </div>
               </div>
             </div>
@@ -851,22 +907,24 @@ export function GeneralVerticalOpsModule() {
   // CUCI_KENDARAAN
   if (vertical === 'CUCI_KENDARAAN') {
     const orders = ops.vehicleWashOrders ?? [];
-    const commissionSummary = calculateStaffCommission(
-      orders.map((o) => ({ staffName: o.washerName, commissionAmount: o.washerCommission }))
+    const commissionSummary = aggregateStaffCommissions(
+      orders.map((o) => ({ staffName: o.washerName, commissionAmount: o.washerCommissionAmount }))
     );
 
     const advanceWash = (o: VehicleWashOrder) => {
-      const flow: VehicleWashOrder['status'][] = ['ANTRI', 'DICUCI', 'FINISHING', 'SIAP_AMBIL', 'SELESAI'];
+      const flow: VehicleWashOrder['status'][] = ['ANTRI', 'DICUCI', 'FINISHING', 'SELESAI'];
       const next = flow[Math.min(flow.length - 1, flow.indexOf(o.status) + 1)];
       updateVerticalOps(
         (prev) => ({
           ...prev,
           vehicleWashOrders: (prev.vehicleWashOrders ?? []).map((x) =>
-            x.id === o.id ? { ...x, status: next } : x
+            x.id === o.id
+              ? { ...x, status: next, paymentStatus: next === 'SELESAI' ? 'PAID' : x.paymentStatus }
+              : x
           ),
         }),
         next === 'SELESAI'
-          ? { grossAmount: o.price, description: `Cuci ${o.plateNumber} (${o.servicePackage})` }
+          ? { grossAmount: o.price, description: `Cuci ${o.plateNumber} (${o.serviceName})` }
           : undefined
       );
     };
@@ -892,7 +950,7 @@ export function GeneralVerticalOpsModule() {
                 businessName: tenant.name,
                 customerName: o.customerName,
                 bookingRef: o.plateNumber,
-                summaryLine: `Kendaraan ${o.plateNumber} (${o.servicePackage}) sudah bersih dan siap diambil.`,
+                summaryLine: `Kendaraan ${o.plateNumber} (${o.serviceName}) sudah bersih dan siap diambil.`,
                 totalAmount: o.price,
               })
             );
@@ -902,14 +960,14 @@ export function GeneralVerticalOpsModule() {
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-bold text-stone-900">{o.plateNumber}</span>
                     <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-700">
-                      {o.vehicleType}
+                      {o.vehicleType.replace(/_/g, ' ')}
                     </span>
                     <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                      {o.status.replace('_', ' ')}
+                      {o.status}
                     </span>
                   </div>
                   <div className="mt-1 text-xs text-stone-600">
-                    {o.customerName} · {o.servicePackage} · Petugas: <strong>{o.washerName}</strong>
+                    {o.customerName} · {o.serviceName} · Petugas: <strong>{o.washerName}</strong>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -923,7 +981,7 @@ export function GeneralVerticalOpsModule() {
                       Lanjut Status
                     </button>
                   )}
-                  {waStatus.isReady && waUrl && (
+                  {waStatus.ready && waUrl && (
                     <a
                       href={waUrl}
                       target="_blank"
@@ -947,9 +1005,9 @@ export function GeneralVerticalOpsModule() {
   if (vertical === 'BAKERY_CATERING') {
     const orders = ops.bakeryPreOrders ?? [];
     const advanceBakery = (o: BakeryPreOrder) => {
-      const flow: BakeryPreOrder['status'][] = ['BOOKED', 'PROSES_DAPUR', 'SIAP_KIRIM', 'SELESAI'];
+      const flow: BakeryPreOrder['status'][] = ['PO_MASUK', 'PRODUKSI', 'SIAP_KIRIM', 'SELESAI'];
       const next = flow[Math.min(flow.length - 1, flow.indexOf(o.status) + 1)];
-      const remaining = o.remainingBalance;
+      const remaining = o.remainingAmount;
       updateVerticalOps(
         (prev) => ({
           ...prev,
@@ -958,7 +1016,7 @@ export function GeneralVerticalOpsModule() {
               ? {
                   ...x,
                   status: next,
-                  remainingBalance: next === 'SELESAI' ? '0.0000' : x.remainingBalance,
+                  remainingAmount: next === 'SELESAI' ? '0.0000' : x.remainingAmount,
                 }
               : x
           ),
@@ -978,7 +1036,7 @@ export function GeneralVerticalOpsModule() {
               businessName: tenant.name,
               customerName: o.customerName,
               bookingRef: o.poCode,
-              summaryLine: `${o.itemsSummary} · Jadwal kirim ${o.deliveryDate} jam ${o.deliveryTime}.`,
+              summaryLine: `${o.itemDescription} (${o.qty} ${o.unit}) · Jadwal kirim ${o.deliveryDate} jam ${o.deliveryTime}.`,
               totalAmount: o.totalAmount,
             })
           );
@@ -988,20 +1046,20 @@ export function GeneralVerticalOpsModule() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-xs font-bold text-stone-900">{o.poCode}</span>
                   <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-700">
-                    {o.category}
+                    {o.orderCategory.replace(/_/g, ' ')}
                   </span>
                   <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                    {o.status.replace('_', ' ')}
+                    {o.status.replace(/_/g, ' ')}
                   </span>
                 </div>
                 <div className="mt-1 text-sm font-bold text-stone-900">
-                  {o.customerName} · {o.itemsSummary}
+                  {o.customerName} · {o.itemDescription} ({o.qty} {o.unit})
                 </div>
                 <div className="text-xs text-stone-600">
                   Kirim: <strong className="font-mono">{o.deliveryDate} {o.deliveryTime}</strong> · DP:{' '}
                   <span className="font-mono tabular-nums">{formatRupiah(o.dpAmount)}</span> · Sisa:{' '}
                   <strong className="font-mono tabular-nums text-amber-700">
-                    {formatRupiah(o.remainingBalance)}
+                    {formatRupiah(o.remainingAmount)}
                   </strong>
                 </div>
                 {o.greetingCardNote && (
@@ -1020,7 +1078,7 @@ export function GeneralVerticalOpsModule() {
                     Lanjut Tahap
                   </button>
                 )}
-                {waStatus.isReady && waUrl && (
+                {waStatus.ready && waUrl && (
                   <a
                     href={waUrl}
                     target="_blank"
@@ -1041,19 +1099,21 @@ export function GeneralVerticalOpsModule() {
 
   // PET_SHOP
   if (vertical === 'PET_SHOP') {
-    const petOrders = ops.petServiceOrders ?? [];
+    const petOrders = ops.petAppointments ?? [];
     const advancePet = (o: PetServiceOrder) => {
-      const flow: PetServiceOrder['status'][] = ['CHECK_IN', 'PROSES', 'SIAP_JEMPUT', 'SELESAI'];
+      const flow: PetServiceOrder['status'][] = ['TERDAFTAR', 'PROSES', 'SIAP_JEMPUT', 'SELESAI'];
       const next = flow[Math.min(flow.length - 1, flow.indexOf(o.status) + 1)];
       updateVerticalOps(
         (prev) => ({
           ...prev,
-          petServiceOrders: (prev.petServiceOrders ?? []).map((x) =>
-            x.id === o.id ? { ...x, status: next } : x
+          petAppointments: (prev.petAppointments ?? []).map((x) =>
+            x.id === o.id
+              ? { ...x, status: next, paymentStatus: next === 'SELESAI' ? 'PAID' : x.paymentStatus }
+              : x
           ),
         }),
         next === 'SELESAI'
-          ? { grossAmount: o.totalAmount, description: `Layanan ${o.serviceType} Anabul ${o.petName}` }
+          ? { grossAmount: o.totalAmount, description: `Layanan ${o.serviceKind} Anabul ${o.petName}` }
           : undefined
       );
     };
@@ -1066,7 +1126,7 @@ export function GeneralVerticalOpsModule() {
             buildGenericBookingWaMessage({
               businessName: tenant.name,
               customerName: p.ownerName,
-              bookingRef: `${p.petName} (${p.serviceType})`,
+              bookingRef: `${p.petName} (${p.serviceKind.replace(/_/g, ' ')})`,
               summaryLine: `Anabul ${p.petName} sudah rapi / siap dijemput.`,
               totalAmount: p.totalAmount,
             })
@@ -1076,20 +1136,24 @@ export function GeneralVerticalOpsModule() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-bold text-stone-900">
-                    {p.petName} ({p.petSpecies})
+                    {p.petName} ({p.petSpecies} · {p.breed})
                   </span>
                   <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-700">
-                    {p.serviceType === 'PET_HOTEL' ? `Pet Hotel · ${p.cageCode}` : 'Grooming'}
+                    {p.serviceKind === 'PENITIPAN_HOTEL'
+                      ? `Pet Hotel · ${p.cageNumber || 'Kandang'}`
+                      : 'Grooming'}
                   </span>
                   <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                    {p.status.replace('_', ' ')}
+                    {p.status.replace(/_/g, ' ')}
                   </span>
                 </div>
                 <div className="mt-1 text-xs text-stone-600">
                   Pemilik: <strong>{p.ownerName}</strong> ({p.ownerPhone}) · Paket: {p.packageName}
                 </div>
-                {p.vaccineAndDietNotes && (
-                  <div className="mt-0.5 text-xs text-stone-500">Catatan: {p.vaccineAndDietNotes}</div>
+                {(p.vaccineNote || p.feedingNote) && (
+                  <div className="mt-0.5 text-xs text-stone-500">
+                    {[p.vaccineNote, p.feedingNote].filter(Boolean).join(' · ')}
+                  </div>
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1103,7 +1167,7 @@ export function GeneralVerticalOpsModule() {
                     Update Status
                   </button>
                 )}
-                {waStatus.isReady && waUrl && (
+                {waStatus.ready && waUrl && (
                   <a
                     href={waUrl}
                     target="_blank"
@@ -1124,13 +1188,13 @@ export function GeneralVerticalOpsModule() {
 
   // TOKO_BANGUNAN
   if (vertical === 'TOKO_BANGUNAN') {
-    const deliveries = ops.buildingDeliveryOrders ?? [];
+    const deliveries = ops.buildingDeliveries ?? [];
     const advanceDelivery = (d: BuildingDeliveryOrder) => {
-      const flow: BuildingDeliveryOrder['status'][] = ['MUAT_BARANG', 'DIKIRIM', 'DITERIMA'];
+      const flow: BuildingDeliveryOrder['status'][] = ['MUAT_BARANG', 'DIKIRIM', 'DITERIMA_PROYEK'];
       const next = flow[Math.min(flow.length - 1, flow.indexOf(d.status) + 1)];
       updateVerticalOps((prev) => ({
         ...prev,
-        buildingDeliveryOrders: (prev.buildingDeliveryOrders ?? []).map((x) =>
+        buildingDeliveries: (prev.buildingDeliveries ?? []).map((x) =>
           x.id === d.id ? { ...x, status: next } : x
         ),
       }));
@@ -1143,23 +1207,23 @@ export function GeneralVerticalOpsModule() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <Truck className="h-4 w-4 text-emerald-700" strokeWidth={1.75} />
-                <span className="font-mono text-xs font-bold text-stone-900">{d.suratJalanNumber}</span>
+                <span className="font-mono text-xs font-bold text-stone-900">{d.doNumber}</span>
                 <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-700">
-                  {d.paymentMode === 'TEMPO_PROYEK' ? 'Tempo Proyek' : 'Tunai'}
+                  {d.paymentTerm === 'TEMPO_PROYEK' ? 'Tempo Proyek' : 'Tunai'}
                 </span>
                 <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                  {d.status.replace('_', ' ')}
+                  {d.status.replace(/_/g, ' ')}
                 </span>
               </div>
-              <div className="mt-1 text-sm font-bold text-stone-900">{d.contractorName}</div>
+              <div className="mt-1 text-sm font-bold text-stone-900">{d.customerOrContractor}</div>
               <div className="text-xs text-stone-600">
-                Lokasi: {d.projectAddress} · Sopir: {d.driverName} ({d.vehiclePlate})
+                Lokasi: {d.projectAddress} · Sopir: {d.driverName} ({d.truckPlate})
               </div>
               <div className="mt-0.5 text-xs text-stone-500">Material: {d.itemsSummary}</div>
             </div>
             <div className="flex items-center gap-3">
-              <span className="font-mono text-sm font-bold tabular-nums">{formatRupiah(d.totalAmount)}</span>
-              {d.status !== 'DITERIMA' && (
+              <span className="font-mono text-sm font-bold tabular-nums">{formatRupiah(d.totalValue)}</span>
+              {d.status !== 'DITERIMA_PROYEK' && (
                 <button
                   type="button"
                   onClick={() => advanceDelivery(d)}
@@ -1176,22 +1240,24 @@ export function GeneralVerticalOpsModule() {
   }
 
   // BARBERSHOP / SALON_KECANTIKAN / SPA_WELLNESS / BARBERSHOP_SALON
-  const appointments = ops.beautySpaAppointments ?? [];
-  const staffSummary = calculateStaffCommission(
-    appointments.map((a) => ({ staffName: a.staffName, commissionAmount: a.staffCommission }))
+  const appointments = ops.beautyAppointments ?? [];
+  const staffSummary = aggregateStaffCommissions(
+    appointments.map((a) => ({ staffName: a.staffName, commissionAmount: a.staffCommissionAmount }))
   );
 
   const advanceAppointment = (a: BeautySpaAppointment) => {
-    const flow: BeautySpaAppointment['status'][] = ['BOOKED', 'IN_PROGRESS', 'COMPLETED'];
+    const flow: BeautySpaAppointment['status'][] = ['TERJADWAL', 'BERLANGSUNG', 'SELESAI'];
     const next = flow[Math.min(flow.length - 1, flow.indexOf(a.status) + 1)];
     updateVerticalOps(
       (prev) => ({
         ...prev,
-        beautySpaAppointments: (prev.beautySpaAppointments ?? []).map((x) =>
-          x.id === a.id ? { ...x, status: next } : x
+        beautyAppointments: (prev.beautyAppointments ?? []).map((x) =>
+          x.id === a.id
+            ? { ...x, status: next, paymentStatus: next === 'SELESAI' ? 'PAID' : x.paymentStatus }
+            : x
         ),
       }),
-      next === 'COMPLETED'
+      next === 'SELESAI'
         ? { grossAmount: a.price, description: `Layanan ${a.treatmentName} (${a.customerName})` }
         : undefined
     );
@@ -1230,7 +1296,7 @@ export function GeneralVerticalOpsModule() {
             <div key={a.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs font-bold text-stone-900">{a.scheduledTime}</span>
+                  <span className="font-mono text-xs font-bold text-stone-900">{a.scheduleTime}</span>
                   <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-700">
                     {a.durationMinutes} menit
                   </span>
@@ -1246,18 +1312,18 @@ export function GeneralVerticalOpsModule() {
                 </div>
                 <div className="text-xs text-stone-600">
                   Petugas: <strong>{a.staffName}</strong> · Komisi:{' '}
-                  <span className="font-mono tabular-nums">{formatRupiah(a.staffCommission)}</span>
+                  <span className="font-mono tabular-nums">{formatRupiah(a.staffCommissionAmount)}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm font-bold tabular-nums">{formatRupiah(a.price)}</span>
-                {a.status !== 'COMPLETED' && (
+                {a.status !== 'SELESAI' && (
                   <button
                     type="button"
                     onClick={() => advanceAppointment(a)}
                     className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                   >
-                    {a.status === 'BOOKED' ? 'Mulai Layanan' : 'Selesai & Catat Kas'}
+                    {a.status === 'TERJADWAL' ? 'Mulai Layanan' : 'Selesai & Catat Kas'}
                   </button>
                 )}
               </div>

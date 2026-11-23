@@ -133,7 +133,7 @@ export const CustomerDisplayPage: React.FC<CustomerDisplayPageProps> = ({ branch
             <h1 className="text-xl sm:text-2xl font-bold text-white leading-tight">
               {snapshot?.tenantName || 'KasirAkun UMKM'}{' '}
               <span className="text-slate-400 font-normal text-base">
-                — {snapshot?.branchName || 'Kasir Utama'}
+                · {snapshot?.branchName || 'Kasir Utama'}
               </span>
             </h1>
           </div>
@@ -371,7 +371,7 @@ export const CustomerDisplayPage: React.FC<CustomerDisplayPageProps> = ({ branch
       {/* Footer */}
       <footer className="border-t border-slate-800 pt-3 flex flex-wrap items-center justify-between text-xs text-slate-500 gap-2">
         <span>Branch Display ID: {branchId}</span>
-        <span>Pembayaran terverifikasi otomatis & aman — KasirAkun UMKM</span>
+        <span>Pembayaran terverifikasi otomatis &amp; aman · KasirAkun UMKM</span>
       </footer>
     </div>
   );

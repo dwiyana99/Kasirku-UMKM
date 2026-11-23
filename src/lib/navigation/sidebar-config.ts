@@ -21,6 +21,8 @@ import { getVerticalCapabilities } from '../catalog/recipe-bom-utils';
 import { getCrmVerticalCopy } from '../crm/customer-history-engine';
 import { canAccessRouteWithStaffPermissions } from '../rbac/staff-rbac';
 import { getVerticalMeta } from '../verticals/vertical-registry';
+import { verticalSupportsSalesReturns } from '../pos/sales-return-engine';
+import { verticalSupportsDigitalContracts } from '../contracts/digital-contract-engine';
 
 export type SidebarIconKey =
   | 'dashboard'
@@ -44,7 +46,10 @@ export type SidebarIconKey =
   | 'activity'
   | 'settings'
   | 'master'
-  | 'operations';
+  | 'operations'
+  | 'returns'
+  | 'contracts'
+  | 'globe';
 
 export interface SidebarSubItem {
   path: string;
@@ -205,6 +210,22 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
     );
   }
 
+  // Vertical-gated Transaksi additions: Retur Penjualan (goods verticals) & Kontrak Digital (rental/service/property verticals)
+  if (verticalSupportsSalesReturns(vertical)) {
+    transaksiItems.push({
+      path: '/returns',
+      label: 'Retur Penjualan',
+      iconKey: 'returns',
+    });
+  }
+  if (verticalSupportsDigitalContracts(vertical, plan)) {
+    transaksiItems.push({
+      path: '/contracts',
+      label: 'Kontrak Digital',
+      iconKey: 'contracts',
+    });
+  }
+
   // 3. PRODUK & GUDANG — Strictly vertical-adaptive; PO, Opname & Branch Transfers neatly inside 'Gudang & Pembelian'
   let stokGudangTitle = 'Produk & Gudang';
   const stokGudangItems: SidebarNavItem[] = [];
@@ -321,26 +342,27 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
       : 'Katalog Barang';
 
     const restockLabel = isManufaktur
-      ? 'Belanja Bahan Baku'
+      ? 'Belanja Bahan & Catatan'
       : verticalCaps.supportsRawMaterialsAndBom
-      ? 'Belanja Bahan (Tunai)'
+      ? 'Belanja Bahan & Catatan'
       : vertical === 'BARBERSHOP' ||
         vertical === 'SALON_KECANTIKAN' ||
         vertical === 'SPA_WELLNESS' ||
         vertical === 'BARBERSHOP_SALON'
-      ? 'Belanja Produk & Bahan'
+      ? 'Belanja Produk & Catatan'
       : vertical === 'LAUNDRY'
-      ? 'Belanja Deterjen & Parfum'
+      ? 'Belanja Deterjen & Catatan'
       : vertical === 'CUCI_KENDARAAN'
-      ? 'Belanja Sampo & Bahan'
+      ? 'Belanja Sampo & Catatan'
       : vertical === 'TOKO_BANGUNAN'
-      ? 'Belanja Material (Tunai)'
+      ? 'Belanja Material & Catatan'
       : vertical === 'PETERNAKAN_PERTANIAN'
-      ? 'Belanja Pakan & Pupuk'
-      : 'Kulakan Cepat (Tunai)';
+      ? 'Belanja Pakan & Catatan'
+      : 'Kulakan & Catatan Belanja';
 
-    // Always place Purchasing / PO / Stock Opname / Multi-Branch inside the unified 'Gudang & Pembelian' dropdown
+    // Always place Monitor Stok, Kulakan & Catatan Belanja, PO, Stock Opname, and Multi-Branch inside 'Gudang & Pembelian'
     const gudangPembelianSubItems: SidebarSubItem[] = [
+      { path: '/inventory/restock-monitor', label: 'Monitor Stok & Restok' },
       { path: '/purchasing/restock', label: restockLabel },
       ...(hasPurchaseOrder
         ? [{ path: '/purchasing/po', label: 'Purchase Order (PO)' }]
@@ -394,8 +416,11 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
     ...(plan !== 'LITE'
       ? [{ path: '/staff', label: 'Pegawai & Hak Akses', iconKey: 'staff' as const }]
       : []),
+    { path: '/settings/landing-page', label: 'Landing Page Usaha', iconKey: 'globe' },
     { path: '/billing', label: 'Paket & Add-On', iconKey: 'billing' },
-    { path: '/activity-log', label: 'Log Aktivitas', iconKey: 'activity' },
+    ...(plan !== 'LITE' || isMaster
+      ? [{ path: '/activity-log', label: 'Log Aktivitas', iconKey: 'activity' as const }]
+      : []),
     { path: '/settings/custom-fields', label: 'Pengaturan Usaha', iconKey: 'settings' },
     ...(isMaster
       ? [{ path: '/master-admin', label: 'Master Admin Console', iconKey: 'master' as const }]

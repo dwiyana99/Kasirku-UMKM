@@ -1286,11 +1286,11 @@ export function AddEditItemModal({
         ) : (
           /* NON-WARUNG SEMBAKO (Kedai/Restoran/Jasa): Retain Product/Menu Photo Upload */
           <div data-testid="modal-product-photo-section" className="space-y-2">
-            <span className="block text-xs font-semibold text-slate-700">
-              Foto Produk / Menu (Unggah File → Base64)
+            <span className="block text-xs font-semibold text-stone-700">
+              Foto Produk / Menu (Opsional)
             </span>
             <div className="flex items-start gap-3">
-              <div className="w-20 h-20 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
+              <div className="w-20 h-20 rounded-xl border border-stone-200 bg-stone-50 overflow-hidden flex items-center justify-center shrink-0">
                 {isValidProductImageSource(imageUrl) ? (
                   <img
                     src={imageUrl}
@@ -1299,7 +1299,7 @@ export function AddEditItemModal({
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <ImagePlus className="w-6 h-6 text-slate-300" />
+                  <ImagePlus className="w-6 h-6 text-stone-300" />
                 )}
               </div>
               <div className="flex-1 space-y-2 min-w-0">
@@ -1316,10 +1316,10 @@ export function AddEditItemModal({
                     type="button"
                     disabled={uploadingImage}
                     onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-stone-800 bg-stone-100 hover:bg-stone-200 rounded-lg transition-colors"
                   >
                     <Upload className="w-3.5 h-3.5" />
-                    <span>{uploadingImage ? 'Mengonversi Base64...' : 'Unggah Foto dari Perangkat'}</span>
+                    <span>{uploadingImage ? 'Memproses foto...' : 'Unggah Foto dari Perangkat'}</span>
                   </button>
                   {imageUrl && (
                     <button
@@ -1335,15 +1335,15 @@ export function AddEditItemModal({
                 <input
                   id="cat-img-url"
                   type="text"
-                  aria-label="Atau tempel URL foto produk (opsional)"
+                  aria-label="Atau tempel tautan foto produk (opsional)"
                   value={imageUrl.startsWith('data:image/') ? '' : imageUrl}
                   onChange={(e) => setImageUrl(e.target.value)}
                   placeholder={
                     imageUrl.startsWith('data:image/')
-                      ? 'Foto berhasil disimpan sebagai Base64 ✓'
-                      : 'Atau tempel URL foto (opsional)...'
+                      ? 'Foto produk berhasil dipasang'
+                      : 'Atau tempel tautan foto (opsional)...'
                   }
-                  className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg"
+                  className="w-full px-2.5 py-1.5 text-xs border border-stone-200 rounded-lg"
                 />
               </div>
             </div>

@@ -2,14 +2,9 @@ import React, { useMemo, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   AlertTriangle,
-  Building2,
-  Calendar,
-  Car,
-  CheckCircle2,
   Download,
   FileText,
   Fuel,
-  KeyRound,
   MessageCircle,
   Plus,
   Printer,
@@ -40,6 +35,12 @@ import type {
   RentalContract,
 } from '../../types/domain';
 
+function formatHourRange(startHour: number, durationHours: number): string {
+  const s = `${String(startHour).padStart(2, '0')}:00`;
+  const e = `${String((startHour + durationHours) % 24).padStart(2, '0')}:00`;
+  return `${s} - ${e}`;
+}
+
 export function RentalKendaraanModule() {
   const { activeWorkspace, updateVerticalOps } = useApp();
   const tenant = activeWorkspace.tenant;
@@ -54,28 +55,26 @@ export function RentalKendaraanModule() {
   const [formError, setFormError] = useState<string | null>(null);
 
   // New contract form state
-  const availableVehicles = vehicles.filter((v) => v.status === 'AVAILABLE');
+  const availableVehicles = vehicles.filter((v) => v.status === 'TERSEDIA');
   const [vehicleId, setVehicleId] = useState(availableVehicles[0]?.id ?? vehicles[0]?.id ?? '');
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerNik, setCustomerNik] = useState('');
-  const [customerSim, setCustomerSim] = useState('');
+  const [renterName, setRenterName] = useState('');
+  const [renterPhone, setRenterPhone] = useState('');
+  const [renterNik, setRenterNik] = useState('');
+  const [renterAddress, setRenterAddress] = useState('');
   const [startDateTime, setStartDateTime] = useState('2026-11-22T09:00');
   const [plannedReturnDateTime, setPlannedReturnDateTime] = useState('2026-11-23T09:00');
   const [daysCount, setDaysCount] = useState('1');
   const [depositAmount, setDepositAmount] = useState('300000');
-  const [fuelLevelStart, setFuelLevelStart] = useState<RentalContract['fuelLevelStart']>('FULL');
-  const [odometerStartKm, setOdometerStartKm] = useState('25000');
+  const [fuelStartPct, setFuelStartPct] = useState('100');
+  const [kmStart, setKmStart] = useState('25000');
   const [ktpFileName, setKtpFileName] = useState('');
   const [simFileName, setSimFileName] = useState('');
   const [handoverFileName, setHandoverFileName] = useState('');
 
   // Return calculator state
   const [actualReturnTime, setActualReturnTime] = useState('2026-11-23T12:00');
-  const [overtimeHours, setOvertimeHours] = useState('2');
-  const [fuelEnd, setFuelEnd] = useState<RentalContract['fuelLevelStart']>('HALF');
-  const [odometerEnd, setOdometerEnd] = useState('25320');
-  const [damageFee, setDamageFee] = useState('0');
+  const [fuelEndPct, setFuelEndPct] = useState('70');
+  const [kmEnd, setKmEnd] = useState('25320');
 
   const handleFilePick = (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -95,62 +94,60 @@ export function RentalKendaraanModule() {
       setFormError('Armada tidak ditemukan.');
       return;
     }
-    if (!customerName.trim() || !customerPhone.trim() || !customerNik.trim()) {
+    if (!renterName.trim() || !renterPhone.trim() || !renterNik.trim()) {
       setFormError('Nama penyewa, nomor WhatsApp, dan NIK KTP wajib diisi.');
       return;
     }
-    const baseRate = new Decimal(chosenVehicle.dailyRate)
+    const baseAmount = new Decimal(chosenVehicle.dailyRate)
       .times(Math.max(1, Number(daysCount) || 1))
       .toFixed(4);
     const contractNum = `RNT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(
       contracts.length + 1
     ).padStart(3, '0')}`;
-    const kycUploads = [
-      ...(ktpFileName ? [{ docType: 'KTP' as const, fileName: ktpFileName, uploadedAt: new Date().toISOString() }] : []),
-      ...(simFileName ? [{ docType: 'SIM' as const, fileName: simFileName, uploadedAt: new Date().toISOString() }] : []),
-      ...(handoverFileName
-        ? [{ docType: 'FOTO_SERAH_TERIMA' as const, fileName: handoverFileName, uploadedAt: new Date().toISOString() }]
-        : []),
-    ];
 
     const newContract: RentalContract = {
       id: `rnt-${Date.now()}`,
       contractNumber: contractNum,
       vehicleId: chosenVehicle.id,
-      vehicleLabel: `${chosenVehicle.name} (${chosenVehicle.plateNumber})`,
-      customerName: customerName.trim(),
-      customerPhone: customerPhone.trim(),
-      customerNik: customerNik.trim(),
-      customerSimNumber: customerSim.trim() || undefined,
+      vehicleName: chosenVehicle.name,
+      plateNumber: chosenVehicle.plateNumber,
+      renterName: renterName.trim(),
+      renterNik: renterNik.trim(),
+      renterPhone: renterPhone.trim(),
+      renterAddress: renterAddress.trim() || 'Sesuai KTP penyewa',
       startDateTime: startDateTime.replace('T', ' '),
       plannedReturnDateTime: plannedReturnDateTime.replace('T', ' '),
-      baseRentalFee: baseRate,
-      depositAmount: new Decimal(depositAmount || '0').toFixed(4),
-      fuelLevelStart,
-      odometerStartKm: Number(odometerStartKm) || 0,
+      actualReturnDateTime: null,
+      kmStart: Number(kmStart) || chosenVehicle.lastOdometerKm,
+      kmEnd: null,
+      fuelStartPct: Math.max(0, Math.min(100, Number(fuelStartPct) || 100)),
+      fuelEndPct: null,
+      fuelPenaltyAmount: '0.0000',
       overtimeHours: 0,
-      overtimeFee: '0.0000',
-      fuelPenaltyFee: '0.0000',
-      damageFee: '0.0000',
-      totalAmount: baseRate,
+      overtimeChargeAmount: '0.0000',
+      baseRentalAmount: baseAmount,
+      depositAmount: new Decimal(depositAmount || '0').toFixed(4),
+      totalFinalAmount: baseAmount,
+      kycIdPhotoUrl: ktpFileName || undefined,
+      kycSimPhotoUrl: simFileName || undefined,
+      handoverPhotoUrl: handoverFileName || undefined,
       status: 'ACTIVE',
-      kycUploads,
       createdAt: new Date().toISOString(),
     };
 
     updateVerticalOps((prev) => ({
       ...prev,
       rentalVehicles: (prev.rentalVehicles ?? []).map((v) =>
-        v.id === chosenVehicle.id ? { ...v, status: 'RENTED' } : v
+        v.id === chosenVehicle.id ? { ...v, status: 'DISEWA' } : v
       ),
       rentalContracts: [newContract, ...(prev.rentalContracts ?? [])],
     }));
 
     setShowNewForm(false);
-    setCustomerName('');
-    setCustomerPhone('');
-    setCustomerNik('');
-    setCustomerSim('');
+    setRenterName('');
+    setRenterPhone('');
+    setRenterNik('');
+    setRenterAddress('');
     setKtpFileName('');
     setSimFileName('');
     setHandoverFileName('');
@@ -160,17 +157,18 @@ export function RentalKendaraanModule() {
   const returnCalc = useMemo(() => {
     if (!returnTarget) return null;
     const veh = vehicles.find((v) => v.id === returnTarget.vehicleId);
+    const fuelPer10Pct = veh?.vehicleCategory === 'MOTOR' ? '10000' : '25000';
     return calculateRentalSettlement({
-      baseRentalFee: returnTarget.baseRentalFee,
-      overtimeHours: Number(overtimeHours) || 0,
+      baseRentalAmount: returnTarget.baseRentalAmount,
       overtimeHourlyRate: veh?.overtimeHourlyRate ?? '50000',
-      fuelStart: returnTarget.fuelLevelStart,
-      fuelEnd,
-      fuelPenaltyPerStep: '75000',
-      damageFee: damageFee || '0',
+      plannedReturnDateTime: returnTarget.plannedReturnDateTime.replace(' ', 'T'),
+      actualReturnDateTime: actualReturnTime,
+      fuelStartPct: returnTarget.fuelStartPct,
+      fuelEndPct: Math.max(0, Math.min(100, Number(fuelEndPct) || 0)),
+      fuelPenaltyPer10Pct: fuelPer10Pct,
       depositAmount: returnTarget.depositAmount,
     });
-  }, [damageFee, fuelEnd, overtimeHours, returnTarget, vehicles]);
+  }, [actualReturnTime, fuelEndPct, returnTarget, vehicles]);
 
   const handleCompleteReturn = () => {
     if (!returnTarget || !returnCalc) return;
@@ -179,7 +177,7 @@ export function RentalKendaraanModule() {
         ...prev,
         rentalVehicles: (prev.rentalVehicles ?? []).map((v) =>
           v.id === returnTarget.vehicleId
-            ? { ...v, status: 'AVAILABLE', lastOdometerKm: Number(odometerEnd) || v.lastOdometerKm }
+            ? { ...v, status: 'TERSEDIA', lastOdometerKm: Number(kmEnd) || v.lastOdometerKm }
             : v
         ),
         rentalContracts: (prev.rentalContracts ?? []).map((c) =>
@@ -187,21 +185,20 @@ export function RentalKendaraanModule() {
             ? {
                 ...c,
                 actualReturnDateTime: actualReturnTime.replace('T', ' '),
-                fuelLevelEnd: fuelEnd,
-                odometerEndKm: Number(odometerEnd) || c.odometerStartKm,
-                overtimeHours: Number(overtimeHours) || 0,
-                overtimeFee: returnCalc.overtimeFee,
-                fuelPenaltyFee: returnCalc.fuelPenaltyFee,
-                damageFee: new Decimal(damageFee || '0').toFixed(4),
-                totalAmount: returnCalc.totalAmount,
+                fuelEndPct: Math.max(0, Math.min(100, Number(fuelEndPct) || 0)),
+                kmEnd: Number(kmEnd) || c.kmStart,
+                overtimeHours: returnCalc.overtimeHours,
+                overtimeChargeAmount: returnCalc.overtimeChargeAmount,
+                fuelPenaltyAmount: returnCalc.fuelPenaltyAmount,
+                totalFinalAmount: returnCalc.totalFinalAmount,
                 status: 'RETURNED',
               }
             : c
         ),
       }),
       {
-        grossAmount: returnCalc.totalAmount,
-        description: `Penyelesaian Sewa Armada ${returnTarget.contractNumber} (${returnTarget.customerName})`,
+        grossAmount: returnCalc.totalFinalAmount,
+        description: `Penyelesaian Sewa Armada ${returnTarget.contractNumber} (${returnTarget.renterName})`,
       }
     );
     setReturnTarget(null);
@@ -233,7 +230,7 @@ export function RentalKendaraanModule() {
       {/* Fleet Status Cards */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-bold text-stone-900">Status Armada Mobil & Motor</h2>
+          <h2 className="text-base font-bold text-stone-900">Status Armada Mobil &amp; Motor</h2>
           <p className="text-xs text-stone-600">
             Pantau unit tersedia, sedang disewa, kilometer terakhir, dan buat kontrak sewa baru lengkap dengan upload syarat KTP/SIM.
           </p>
@@ -241,7 +238,9 @@ export function RentalKendaraanModule() {
         <button
           type="button"
           onClick={() => {
-            setVehicleId(availableVehicles[0]?.id ?? vehicles[0]?.id ?? '');
+            const defaultVeh = availableVehicles[0] ?? vehicles[0];
+            setVehicleId(defaultVeh?.id ?? '');
+            if (defaultVeh) setKmStart(String(defaultVeh.lastOdometerKm));
             setShowNewForm(true);
           }}
           className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
@@ -258,21 +257,21 @@ export function RentalKendaraanModule() {
               <div>
                 <div className="text-sm font-bold text-stone-900">{v.name}</div>
                 <div className="mt-0.5 font-mono text-xs font-semibold text-stone-600">
-                  {v.plateNumber} · {v.vehicleType === 'MOBIL' ? 'Mobil' : 'Motor'}
+                  {v.plateNumber} · {v.vehicleCategory === 'MOBIL' ? 'Mobil' : 'Motor'} ({v.year})
                 </div>
               </div>
               <span
                 className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
-                  v.status === 'AVAILABLE'
+                  v.status === 'TERSEDIA'
                     ? 'bg-emerald-50 text-emerald-700'
-                    : v.status === 'RENTED'
+                    : v.status === 'DISEWA'
                     ? 'bg-amber-50 text-amber-800'
                     : 'bg-stone-100 text-stone-600'
                 }`}
               >
-                {v.status === 'AVAILABLE'
+                {v.status === 'TERSEDIA'
                   ? 'Tersedia'
-                  : v.status === 'RENTED'
+                  : v.status === 'DISEWA'
                   ? 'Sedang Disewa'
                   : 'Servis'}
               </span>
@@ -305,19 +304,25 @@ export function RentalKendaraanModule() {
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
         <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
           <h3 className="text-sm font-bold text-stone-900">
-            Daftar Kontrak Peminjaman & Pengembalian ({contracts.length})
+            Daftar Kontrak Peminjaman &amp; Pengembalian ({contracts.length})
           </h3>
         </div>
         <div className="divide-y divide-stone-100">
           {contracts.map((c) => {
+            const kycBadges = [
+              c.kycIdPhotoUrl ? { label: 'e-KTP', value: c.kycIdPhotoUrl } : null,
+              c.kycSimPhotoUrl ? { label: 'SIM', value: c.kycSimPhotoUrl } : null,
+              c.handoverPhotoUrl ? { label: 'Serah Terima', value: c.handoverPhotoUrl } : null,
+            ].filter(Boolean) as Array<{ label: string; value: string }>;
+
             const waUrl = buildDirectWaLink(
-              c.customerPhone,
+              c.renterPhone,
               buildGenericBookingWaMessage({
                 businessName: tenant.name,
-                customerName: c.customerName,
+                customerName: c.renterName,
                 bookingRef: c.contractNumber,
-                summaryLine: `Unit ${c.vehicleLabel}, jadwal kembali ${c.plannedReturnDateTime}.`,
-                totalAmount: c.totalAmount,
+                summaryLine: `Unit ${c.vehicleName} (${c.plateNumber}), jadwal kembali ${c.plannedReturnDateTime}.`,
+                totalAmount: c.totalFinalAmount,
               })
             );
             return (
@@ -346,27 +351,27 @@ export function RentalKendaraanModule() {
                         : 'Sedang Dipinjam'}
                     </span>
                     <span className="text-xs text-stone-500">
-                      Berkas KYC: {c.kycUploads.length} file
+                      Syarat KYC: {kycBadges.length} berkas
                     </span>
                   </div>
                   <div className="text-sm font-semibold text-stone-900">
-                    {c.customerName} · {c.vehicleLabel}
+                    {c.renterName} · {c.vehicleName} ({c.plateNumber})
                   </div>
                   <div className="text-xs text-stone-600">
                     Mulai: <span className="font-mono">{c.startDateTime}</span> · Rencana Kembali:{' '}
                     <span className="font-mono">{c.plannedReturnDateTime}</span> · BBM Awal:{' '}
-                    <span className="font-semibold">{c.fuelLevelStart}</span> · KM Awal:{' '}
-                    <span className="font-mono tabular-nums">{c.odometerStartKm.toLocaleString('id-ID')}</span>
+                    <span className="font-mono font-semibold tabular-nums">{c.fuelStartPct}%</span> · KM Awal:{' '}
+                    <span className="font-mono tabular-nums">{c.kmStart.toLocaleString('id-ID')}</span>
                   </div>
-                  {c.kycUploads.length > 0 && (
+                  {kycBadges.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-1">
-                      {c.kycUploads.map((doc, idx) => (
+                      {kycBadges.map((doc) => (
                         <span
-                          key={`${c.id}-kyc-${idx}`}
+                          key={`${c.id}-${doc.label}`}
                           className="inline-flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-700"
                         >
                           <ShieldCheck className="h-3 w-3 text-emerald-600" strokeWidth={1.75} />
-                          {doc.docType}: {doc.fileName}
+                          {doc.label}: Terlampir
                         </span>
                       ))}
                     </div>
@@ -377,11 +382,12 @@ export function RentalKendaraanModule() {
                   <div className="mr-2 text-right">
                     <div className="text-[11px] text-stone-500">Total Tagihan</div>
                     <div className="font-mono text-sm font-bold tabular-nums text-stone-900">
-                      {formatRupiah(c.totalAmount)}
+                      {formatRupiah(c.totalFinalAmount)}
                     </div>
                   </div>
                   <button
                     type="button"
+                    data-testid={`print-rental-contract-${c.id}`}
                     onClick={() => setPrintContract(c)}
                     className="inline-flex items-center gap-1 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-stone-800 hover:bg-stone-50"
                   >
@@ -393,18 +399,21 @@ export function RentalKendaraanModule() {
                       type="button"
                       onClick={() => {
                         setReturnTarget(c);
-                        setOdometerEnd(String(c.odometerStartKm + 180));
-                        setFuelEnd(c.fuelLevelStart);
-                        setOvertimeHours('0');
-                        setDamageFee('0');
+                        setKmEnd(String(c.kmStart + 180));
+                        setFuelEndPct(String(Math.max(20, c.fuelStartPct - 20)));
+                        setActualReturnTime(
+                          c.plannedReturnDateTime.includes('T')
+                            ? c.plannedReturnDateTime.slice(0, 16)
+                            : c.plannedReturnDateTime.replace(' ', 'T').slice(0, 16)
+                        );
                       }}
                       className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                     >
                       <Fuel className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      Cek Kembali & Hitung Overtime
+                      Cek Kembali &amp; Overtime
                     </button>
                   )}
-                  {waStatus.isReady && waUrl && (
+                  {waStatus.ready && waUrl && (
                     <a
                       href={waUrl}
                       target="_blank"
@@ -431,7 +440,7 @@ export function RentalKendaraanModule() {
           >
             <div className="flex items-center justify-between border-b border-stone-200 pb-3">
               <h3 className="text-base font-bold text-stone-900">
-                Buat Kontrak Peminjaman & Upload Syarat KYC
+                Buat Kontrak Peminjaman &amp; Upload Syarat KYC
               </h3>
               <button
                 type="button"
@@ -453,7 +462,11 @@ export function RentalKendaraanModule() {
                 </label>
                 <select
                   value={vehicleId}
-                  onChange={(e) => setVehicleId(e.target.value)}
+                  onChange={(e) => {
+                    setVehicleId(e.target.value);
+                    const found = vehicles.find((v) => v.id === e.target.value);
+                    if (found) setKmStart(String(found.lastOdometerKm));
+                  }}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 >
                   {vehicles.map((v) => (
@@ -470,8 +483,8 @@ export function RentalKendaraanModule() {
                 <input
                   type="text"
                   required
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
+                  value={renterName}
+                  onChange={(e) => setRenterName(e.target.value)}
                   placeholder="Contoh: Reza Pratama"
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 />
@@ -483,8 +496,8 @@ export function RentalKendaraanModule() {
                 <input
                   type="text"
                   required
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  value={renterPhone}
+                  onChange={(e) => setRenterPhone(e.target.value)}
                   placeholder="0812-xxxx-xxxx"
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 />
@@ -496,22 +509,22 @@ export function RentalKendaraanModule() {
                 <input
                   type="text"
                   required
-                  value={customerNik}
-                  onChange={(e) => setCustomerNik(e.target.value)}
+                  value={renterNik}
+                  onChange={(e) => setRenterNik(e.target.value)}
                   placeholder="16 digit NIK"
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
                 />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Nomor SIM A / SIM C
+                  Alamat Domisili Penyewa
                 </label>
                 <input
                   type="text"
-                  value={customerSim}
-                  onChange={(e) => setCustomerSim(e.target.value)}
-                  placeholder="SIM-A-xxxx"
-                  className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
+                  value={renterAddress}
+                  onChange={(e) => setRenterAddress(e.target.value)}
+                  placeholder="Alamat sesuai KTP"
+                  className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 />
               </div>
               <div>
@@ -562,20 +575,18 @@ export function RentalKendaraanModule() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Posisi Bensin (BBM) Awal
+                  Level Bensin (BBM) Awal (%)
                 </label>
                 <select
-                  value={fuelLevelStart}
-                  onChange={(e) =>
-                    setFuelLevelStart(e.target.value as RentalContract['fuelLevelStart'])
-                  }
+                  value={fuelStartPct}
+                  onChange={(e) => setFuelStartPct(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 >
-                  <option value="FULL">Penuh (FULL)</option>
-                  <option value="THREE_QUARTER">3/4 Tangki</option>
-                  <option value="HALF">1/2 Tangki</option>
-                  <option value="QUARTER">1/4 Tangki</option>
-                  <option value="EMPTY">Hampir Kosong</option>
+                  <option value="100">100% (Penuh)</option>
+                  <option value="75">75% (3/4 Tangki)</option>
+                  <option value="50">50% (1/2 Tangki)</option>
+                  <option value="25">25% (1/4 Tangki)</option>
+                  <option value="10">10% (Hampir Kosong)</option>
                 </select>
               </div>
               <div>
@@ -585,8 +596,8 @@ export function RentalKendaraanModule() {
                 <input
                   type="number"
                   min="0"
-                  value={odometerStartKm}
-                  onChange={(e) => setOdometerStartKm(e.target.value)}
+                  value={kmStart}
+                  onChange={(e) => setKmStart(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
                 />
               </div>
@@ -650,7 +661,7 @@ export function RentalKendaraanModule() {
                 type="submit"
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
               >
-                Simpan & Terbitkan Kontrak
+                Simpan &amp; Terbitkan Kontrak
               </button>
             </div>
           </form>
@@ -674,9 +685,9 @@ export function RentalKendaraanModule() {
               </button>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <div>
+              <div className="sm:col-span-2">
                 <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Waktu Kembali Aktual
+                  Waktu Kembali Aktual (Batas: {returnTarget.plannedReturnDateTime})
                 </label>
                 <input
                   type="datetime-local"
@@ -687,54 +698,26 @@ export function RentalKendaraanModule() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Kelebihan Jam (Overtime)
+                  BBM Saat Kembali % (Awal: {returnTarget.fuelStartPct}%)
                 </label>
                 <input
                   type="number"
                   min="0"
-                  value={overtimeHours}
-                  onChange={(e) => setOvertimeHours(e.target.value)}
+                  max="100"
+                  step="5"
+                  value={fuelEndPct}
+                  onChange={(e) => setFuelEndPct(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
                 />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Bensin (BBM) Saat Kembali (Awal: {returnTarget.fuelLevelStart})
-                </label>
-                <select
-                  value={fuelEnd}
-                  onChange={(e) =>
-                    setFuelEnd(e.target.value as RentalContract['fuelLevelStart'])
-                  }
-                  className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
-                >
-                  <option value="FULL">Penuh (FULL)</option>
-                  <option value="THREE_QUARTER">3/4 Tangki</option>
-                  <option value="HALF">1/2 Tangki</option>
-                  <option value="QUARTER">1/4 Tangki</option>
-                  <option value="EMPTY">Hampir Kosong</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  KM Akhir (Awal: {returnTarget.odometerStartKm.toLocaleString('id-ID')})
+                  KM Akhir (Awal: {returnTarget.kmStart.toLocaleString('id-ID')})
                 </label>
                 <input
                   type="number"
-                  value={odometerEnd}
-                  onChange={(e) => setOdometerEnd(e.target.value)}
-                  className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Biaya Kerusakan / Cuci Tambahan (Rp)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={damageFee}
-                  onChange={(e) => setDamageFee(e.target.value)}
+                  value={kmEnd}
+                  onChange={(e) => setKmEnd(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
                 />
               </div>
@@ -744,31 +727,41 @@ export function RentalKendaraanModule() {
               <div className="flex justify-between">
                 <span className="text-stone-600">Biaya Sewa Dasar</span>
                 <span className="font-mono font-semibold tabular-nums">
-                  {formatRupiah(returnTarget.baseRentalFee)}
+                  {formatRupiah(returnTarget.baseRentalAmount)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-stone-600">Denda Overtime ({overtimeHours} jam)</span>
+                <span className="text-stone-600">Denda Overtime ({returnCalc.overtimeHours} jam)</span>
                 <span className="font-mono font-semibold tabular-nums text-amber-700">
-                  {formatRupiah(returnCalc.overtimeFee)}
+                  {formatRupiah(returnCalc.overtimeChargeAmount)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-stone-600">Denda Selisih Bensin ({returnCalc.fuelDeficitSteps} bar)</span>
+                <span className="text-stone-600">
+                  Denda Selisih Bensin (-{returnCalc.fuelShortagePct}%)
+                </span>
                 <span className="font-mono font-semibold tabular-nums text-amber-700">
-                  {formatRupiah(returnCalc.fuelPenaltyFee)}
+                  {formatRupiah(returnCalc.fuelPenaltyAmount)}
                 </span>
               </div>
               <div className="flex justify-between border-t border-stone-200 pt-2 text-sm font-bold text-stone-900">
                 <span>Total Akhir Tagihan</span>
-                <span className="font-mono tabular-nums">{formatRupiah(returnCalc.totalAmount)}</span>
+                <span className="font-mono tabular-nums">{formatRupiah(returnCalc.totalFinalAmount)}</span>
               </div>
               <div className="flex justify-between text-emerald-700">
-                <span>Sisa Bayar (Setelah Potong Deposit {formatRupiah(returnTarget.depositAmount)})</span>
+                <span>Deposit Dikembalikan (Dari {formatRupiah(returnTarget.depositAmount)})</span>
                 <span className="font-mono font-bold tabular-nums">
-                  {formatRupiah(returnCalc.balanceDueAfterDeposit)}
+                  {formatRupiah(returnCalc.depositRefundable)}
                 </span>
               </div>
+              {Number(returnCalc.remainingAfterDeposit) > 0 && (
+                <div className="flex justify-between text-red-700">
+                  <span>Tambahan Bayar Denda di Luar Deposit</span>
+                  <span className="font-mono font-bold tabular-nums">
+                    {formatRupiah(returnCalc.remainingAfterDeposit)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
@@ -784,7 +777,7 @@ export function RentalKendaraanModule() {
                 onClick={handleCompleteReturn}
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
               >
-                Selesaikan Pengembalian & Catat Kas
+                Selesaikan Pengembalian &amp; Catat Kas
               </button>
             </div>
           </div>
@@ -812,7 +805,9 @@ export function RentalKendaraanModule() {
                 <button
                   type="button"
                   onClick={() => {
-                    const frame = document.getElementById('rental-contract-iframe') as HTMLIFrameElement | null;
+                    const frame = document.getElementById(
+                      'rental-contract-iframe'
+                    ) as HTMLIFrameElement | null;
                     if (frame?.contentWindow) {
                       frame.contentWindow.print();
                     } else {
@@ -864,45 +859,54 @@ export function HomestayVillaModule() {
   const bookings = ops.homestayBookings ?? [];
   const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
 
-  const regionalTaxInfo = resolveEffectiveRegionalTax({
-    vertical: 'HOMESTAY_VILLA',
-    regionalSettings: tenant.settings.regionalTax,
-    registry: regionalTaxRegistry,
-  });
+  const regionalTaxInfo = resolveEffectiveRegionalTax(
+    'HOMESTAY_VILLA',
+    tenant.settings.regionalTax,
+    regionalTaxRegistry
+  );
 
   const [showBookingForm, setShowBookingForm] = useState(false);
   const [unitId, setUnitId] = useState(units[0]?.id ?? '');
   const [guestName, setGuestName] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
-  const [bookingMode, setBookingMode] = useState<'NIGHTLY' | 'HOURLY_SLOT'>('NIGHTLY');
+  const [bookingMode, setBookingMode] = useState<'PER_MALAM' | 'PER_SLOT_JAM'>('PER_MALAM');
   const [checkInDate, setCheckInDate] = useState('2026-11-23');
   const [checkOutDate, setCheckOutDate] = useState('2026-11-25');
-  const [unitsCount, setUnitsCount] = useState('2');
+  const [durationCount, setDurationCount] = useState('2');
   const [otaChannel, setOtaChannel] = useState<HomestayBooking['otaChannel']>('TRAVELOKA');
   const [otaRatePct, setOtaRatePct] = useState('15');
 
   const selectedUnit = units.find((u) => u.id === unitId) ?? units[0];
   const liveCalc = useMemo(() => {
     const rate =
-      bookingMode === 'NIGHTLY'
+      bookingMode === 'PER_MALAM'
         ? selectedUnit?.nightlyRate ?? '1000000'
         : selectedUnit?.hourlySlotRate ?? '350000';
     return calculateHomestaySettlement({
       ratePerUnit: rate,
-      unitsCount: Math.max(1, Number(unitsCount) || 1),
+      durationCount: Math.max(1, Number(durationCount) || 1),
       otaChannel,
-      otaCommissionRate: otaChannel === 'DIRECT' ? '0' : String((Number(otaRatePct) || 0) / 100),
-      pbjtHotelRate: regionalTaxInfo.applies ? regionalTaxInfo.rate : '0',
+      otaCommissionPctOverride:
+        otaChannel === 'DIRECT' ? '0' : String((Number(otaRatePct) || 0) / 100),
+      pbjtRate: regionalTaxInfo.applies ? regionalTaxInfo.rateDecimal : '0',
     });
-  }, [bookingMode, otaChannel, otaRatePct, regionalTaxInfo.applies, regionalTaxInfo.rate, selectedUnit, unitsCount]);
+  }, [
+    bookingMode,
+    durationCount,
+    otaChannel,
+    otaRatePct,
+    regionalTaxInfo.applies,
+    regionalTaxInfo.rateDecimal,
+    selectedUnit,
+  ]);
 
   const totals = useMemo(() => {
     return bookings.reduce(
       (acc, b) => ({
         gross: acc.gross.plus(new Decimal(b.grossRoomRevenue || '0')),
         ota: acc.ota.plus(new Decimal(b.otaCommissionAmount || '0')),
-        pbjt: acc.pbjt.plus(new Decimal(b.pbjtHotelTaxAmount || '0')),
-        net: acc.net.plus(new Decimal(b.netOwnerRevenue || '0')),
+        pbjt: acc.pbjt.plus(new Decimal(b.pbjtTaxAmount || '0')),
+        net: acc.net.plus(new Decimal(b.ownerNetRevenue || '0')),
       }),
       {
         gross: new Decimal(0),
@@ -922,20 +926,21 @@ export function HomestayVillaModule() {
         bookings.length + 1
       ).padStart(3, '0')}`,
       unitId: selectedUnit.id,
-      unitName: selectedUnit.unitName,
+      unitName: selectedUnit.name,
       guestName: guestName.trim(),
       guestPhone: guestPhone.trim() || '0812-0000-0000',
       bookingMode,
       checkInDate,
       checkOutDate,
-      nightsOrSlots: Math.max(1, Number(unitsCount) || 1),
+      durationCount: Math.max(1, Number(durationCount) || 1),
       otaChannel,
+      otaCommissionPct: liveCalc.otaCommissionPct,
       grossRoomRevenue: liveCalc.grossRoomRevenue,
-      otaCommissionRate: liveCalc.otaCommissionRate,
       otaCommissionAmount: liveCalc.otaCommissionAmount,
-      pbjtHotelTaxRate: liveCalc.pbjtHotelTaxRate,
-      pbjtHotelTaxAmount: liveCalc.pbjtHotelTaxAmount,
-      netOwnerRevenue: liveCalc.netOwnerRevenue,
+      pbjtRate: regionalTaxInfo.applies ? regionalTaxInfo.rateDecimal : '0.0000',
+      pbjtTaxAmount: liveCalc.pbjtTaxAmount,
+      ownerNetRevenue: liveCalc.ownerNetRevenue,
+      guestTotalPaid: liveCalc.guestTotalPaid,
       status: 'BOOKED',
       createdAt: new Date().toISOString(),
     };
@@ -947,9 +952,9 @@ export function HomestayVillaModule() {
       }),
       {
         grossAmount: liveCalc.grossRoomRevenue,
-        pbjtAmount: liveCalc.pbjtHotelTaxAmount,
+        pbjtAmount: liveCalc.pbjtTaxAmount,
         otaCommissionAmount: liveCalc.otaCommissionAmount,
-        description: `Booking ${newBooking.bookingCode} ${selectedUnit.unitName} (${otaChannel})`,
+        description: `Booking ${newBooking.bookingCode} ${selectedUnit.name} (${otaChannel})`,
       }
     );
     setShowBookingForm(false);
@@ -965,9 +970,9 @@ export function HomestayVillaModule() {
       ),
       homestayUnits: (prev.homestayUnits ?? []).map((u) => {
         if (u.id !== booking.unitId) return u;
-        if (nextStatus === 'CHECK_IN') return { ...u, status: 'OCCUPIED' };
+        if (nextStatus === 'CHECK_IN') return { ...u, status: 'TERISI' };
         if (nextStatus === 'CLEANING') return { ...u, status: 'CLEANING' };
-        if (nextStatus === 'CHECK_OUT') return { ...u, status: 'AVAILABLE' };
+        if (nextStatus === 'CHECK_OUT') return { ...u, status: 'TERSEDIA' };
         return u;
       }),
     }));
@@ -992,13 +997,13 @@ export function HomestayVillaModule() {
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
           <div className="text-xs font-semibold text-emerald-800">
-            Titipan PBJT Perhotelan ({regionalTaxInfo.applies ? `${Number(regionalTaxInfo.rate) * 100}%` : 'Bebas'})
+            Titipan PBJT Perhotelan ({regionalTaxInfo.applies ? regionalTaxInfo.ratePercentLabel : 'Bebas'})
           </div>
           <div className="mt-1 font-mono text-lg font-bold tabular-nums text-emerald-900">
             {formatRupiah(totals.pbjt)}
           </div>
           <div className="mt-0.5 text-[11px] text-emerald-700">
-            Dipisah otomatis dari omzet pemilik ({regionalTaxInfo.cityName})
+            Dipisah otomatis dari omzet pemilik ({regionalTaxInfo.regionName})
           </div>
         </div>
         <div className="rounded-xl border border-stone-200 bg-white p-4">
@@ -1006,13 +1011,13 @@ export function HomestayVillaModule() {
           <div className="mt-1 font-mono text-lg font-bold tabular-nums text-emerald-700">
             {formatRupiah(totals.net)}
           </div>
-          <div className="mt-0.5 text-[11px] text-stone-500">Di luar PBJT Daerah & Komisi OTA</div>
+          <div className="mt-0.5 text-[11px] text-stone-500">Di luar PBJT Daerah &amp; Komisi OTA</div>
         </div>
       </div>
 
       {/* Unit Status Board */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-bold text-stone-900">Daftar Kamar & Villa</h2>
+        <h2 className="text-base font-bold text-stone-900">Daftar Kamar &amp; Villa</h2>
         <button
           type="button"
           onClick={() => setShowBookingForm(true)}
@@ -1028,21 +1033,21 @@ export function HomestayVillaModule() {
           <div key={u.id} className="rounded-xl border border-stone-200 bg-white p-4">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <div className="text-sm font-bold text-stone-900">{u.unitName}</div>
-                <div className="text-xs text-stone-500">{u.unitType}</div>
+                <div className="text-sm font-bold text-stone-900">{u.name}</div>
+                <div className="text-xs text-stone-500">{u.unitType.replace(/_/g, ' ')}</div>
               </div>
               <span
                 className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
-                  u.status === 'AVAILABLE'
+                  u.status === 'TERSEDIA'
                     ? 'bg-emerald-50 text-emerald-700'
-                    : u.status === 'OCCUPIED'
+                    : u.status === 'TERISI'
                     ? 'bg-amber-50 text-amber-800'
                     : 'bg-sky-50 text-sky-700'
                 }`}
               >
-                {u.status === 'AVAILABLE'
+                {u.status === 'TERSEDIA'
                   ? 'Siap Huni'
-                  : u.status === 'OCCUPIED'
+                  : u.status === 'TERISI'
                   ? 'Check-In'
                   : 'Cleaning'}
               </span>
@@ -1069,7 +1074,7 @@ export function HomestayVillaModule() {
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
         <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
           <h3 className="text-sm font-bold text-stone-900">
-            Jadwal Reservasi Tamu, OTA & Pemisahan PBJT Perhotelan ({bookings.length})
+            Jadwal Reservasi Tamu, OTA &amp; Pemisahan PBJT Perhotelan ({bookings.length})
           </h3>
         </div>
         <div className="divide-y divide-stone-100">
@@ -1080,10 +1085,10 @@ export function HomestayVillaModule() {
                 businessName: tenant.name,
                 customerName: b.guestName,
                 bookingRef: b.bookingCode,
-                summaryLine: `${b.unitName} (${b.checkInDate} s/d ${b.checkOutDate}, ${b.nightsOrSlots} ${
-                  b.bookingMode === 'NIGHTLY' ? 'malam' : 'slot jam'
+                summaryLine: `${b.unitName} (${b.checkInDate} s/d ${b.checkOutDate}, ${b.durationCount} ${
+                  b.bookingMode === 'PER_MALAM' ? 'malam' : 'slot jam'
                 }).`,
-                totalAmount: new Decimal(b.grossRoomRevenue).plus(b.pbjtHotelTaxAmount).toFixed(0),
+                totalAmount: b.guestTotalPaid,
               })
             );
             return (
@@ -1105,8 +1110,8 @@ export function HomestayVillaModule() {
                     {b.guestName} · {b.unitName}
                   </div>
                   <div className="text-xs text-stone-600">
-                    {b.checkInDate} s/d {b.checkOutDate} ({b.nightsOrSlots}{' '}
-                    {b.bookingMode === 'NIGHTLY' ? 'malam' : 'slot jam'})
+                    {b.checkInDate} s/d {b.checkOutDate} ({b.durationCount}{' '}
+                    {b.bookingMode === 'PER_MALAM' ? 'malam' : 'slot jam'})
                   </div>
                   <div className="flex flex-wrap gap-3 pt-1 text-xs">
                     <span>
@@ -1124,13 +1129,13 @@ export function HomestayVillaModule() {
                     <span className="text-emerald-800">
                       PBJT Daerah:{' '}
                       <strong className="font-mono tabular-nums">
-                        {formatRupiah(b.pbjtHotelTaxAmount)}
+                        {formatRupiah(b.pbjtTaxAmount)}
                       </strong>
                     </span>
                     <span className="text-stone-900">
                       Net Pemilik:{' '}
                       <strong className="font-mono tabular-nums text-emerald-700">
-                        {formatRupiah(b.netOwnerRevenue)}
+                        {formatRupiah(b.ownerNetRevenue)}
                       </strong>
                     </span>
                   </div>
@@ -1151,7 +1156,7 @@ export function HomestayVillaModule() {
                       onClick={() => advanceBookingStatus(b, 'CLEANING')}
                       className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
                     >
-                      Check-Out & Cleaning
+                      Check-Out &amp; Cleaning
                     </button>
                   )}
                   {b.status === 'CLEANING' && (
@@ -1163,7 +1168,7 @@ export function HomestayVillaModule() {
                       Selesai Bersih (Siap Huni)
                     </button>
                   )}
-                  {waStatus.isReady && waUrl && (
+                  {waStatus.ready && waUrl && (
                     <a
                       href={waUrl}
                       target="_blank"
@@ -1208,7 +1213,7 @@ export function HomestayVillaModule() {
                 >
                   {units.map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.unitName} ({formatRupiah(u.nightlyRate)}/malam)
+                      {u.name} ({formatRupiah(u.nightlyRate)}/malam)
                     </option>
                   ))}
                 </select>
@@ -1237,22 +1242,22 @@ export function HomestayVillaModule() {
                 <label className="mb-1 block text-xs font-semibold text-stone-700">Mode Sewa</label>
                 <select
                   value={bookingMode}
-                  onChange={(e) => setBookingMode(e.target.value as 'NIGHTLY' | 'HOURLY_SLOT')}
+                  onChange={(e) => setBookingMode(e.target.value as 'PER_MALAM' | 'PER_SLOT_JAM')}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                 >
-                  <option value="NIGHTLY">Per Malam</option>
-                  <option value="HOURLY_SLOT">Per Slot Jam (Transit)</option>
+                  <option value="PER_MALAM">Per Malam</option>
+                  <option value="PER_SLOT_JAM">Per Slot Jam (Transit)</option>
                 </select>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-stone-700">
-                  Jumlah {bookingMode === 'NIGHTLY' ? 'Malam' : 'Slot Jam'}
+                  Jumlah {bookingMode === 'PER_MALAM' ? 'Malam' : 'Slot Jam'}
                 </label>
                 <input
                   type="number"
                   min="1"
-                  value={unitsCount}
-                  onChange={(e) => setUnitsCount(e.target.value)}
+                  value={durationCount}
+                  onChange={(e) => setDurationCount(e.target.value)}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm"
                 />
               </div>
@@ -1320,15 +1325,15 @@ export function HomestayVillaModule() {
                 </span>
               </div>
               <div className="flex justify-between text-emerald-800">
-                <span>PBJT Perhotelan ({regionalTaxInfo.cityName}) - Terpisah</span>
+                <span>PBJT Perhotelan ({regionalTaxInfo.regionName}) - Terpisah</span>
                 <span className="font-mono font-semibold tabular-nums">
-                  +{formatRupiah(liveCalc.pbjtHotelTaxAmount)}
+                  +{formatRupiah(liveCalc.pbjtTaxAmount)}
                 </span>
               </div>
               <div className="flex justify-between border-t border-stone-200 pt-1.5 text-sm font-bold text-stone-900">
                 <span>Pendapatan Bersih Pemilik</span>
                 <span className="font-mono tabular-nums text-emerald-700">
-                  {formatRupiah(liveCalc.netOwnerRevenue)}
+                  {formatRupiah(liveCalc.ownerNetRevenue)}
                 </span>
               </div>
             </div>
@@ -1345,7 +1350,7 @@ export function HomestayVillaModule() {
                 type="submit"
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
               >
-                Simpan Booking & Catat Jurnal
+                Simpan Booking &amp; Catat Jurnal
               </button>
             </div>
           </form>
@@ -1371,15 +1376,14 @@ export function SewaLapanganModule() {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [bookingDate, setBookingDate] = useState('2026-11-22');
-  const [startHour, setStartHour] = useState('19:00');
-  const [endHour, setEndHour] = useState('21:00');
+  const [startHourNum, setStartHourNum] = useState('19');
+  const [durationHours, setDurationHours] = useState('2');
   const [equipmentFee, setEquipmentFee] = useState('45000');
   const [dpAmount, setDpAmount] = useState('100000');
 
   const filteredBookings = bookings.filter((b) => {
     if (sportFilter === 'ALL') return true;
-    const court = courts.find((c) => c.id === b.courtId);
-    return court?.sportType === sportFilter;
+    return b.sportType === sportFilter;
   });
 
   const handleAddBooking = (e: React.FormEvent) => {
@@ -1388,43 +1392,49 @@ export function SewaLapanganModule() {
     const chosenCourt = courts.find((c) => c.id === courtId) ?? courts[0];
     if (!chosenCourt || !customerName.trim()) return;
 
+    const startH = Math.max(6, Math.min(23, Number(startHourNum) || 19));
+    const durH = Math.max(1, Math.min(6, Number(durationHours) || 1));
+
     if (
-      hasCourtSlotConflict({
-        existingBookings: bookings,
+      hasCourtSlotConflict(bookings, {
         courtId: chosenCourt.id,
         bookingDate,
-        startHour,
-        endHour,
+        startHour: startH,
+        durationHours: durH,
       })
     ) {
       setConflictMsg(
-        `Jadwal bentrok! ${chosenCourt.name} pada ${bookingDate} jam ${startHour}-${endHour} sudah dipesan.`
+        `Jadwal bentrok! ${chosenCourt.name} pada ${bookingDate} jam ${formatHourRange(
+          startH,
+          durH
+        )} sudah dipesan.`
       );
       return;
     }
 
     const calc = calculateCourtBookingAmounts({
       hourlyRate: chosenCourt.hourlyRate,
-      startHour,
-      endHour,
+      durationHours: durH,
       equipmentFee: equipmentFee || '0',
       dpAmount: dpAmount || '0',
     });
 
     const newBooking: CourtBooking = {
       id: `cb-${Date.now()}`,
+      bookingCode: `CRT-${String(bookings.length + 1).padStart(3, '0')}`,
       courtId: chosenCourt.id,
       courtName: chosenCourt.name,
+      sportType: chosenCourt.sportType,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim() || '0812-0000-0000',
       bookingDate,
-      startHour,
-      endHour,
-      courtFee: calc.courtFee,
+      startHour: startH,
+      durationHours: durH,
       equipmentFee: new Decimal(equipmentFee || '0').toFixed(4),
-      dpAmount: new Decimal(dpAmount || '0').toFixed(4),
-      remainingBalance: calc.remainingBalance,
-      status: Number(calc.remainingBalance) <= 0 ? 'PAID' : 'DP_PAID',
+      totalAmount: calc.totalAmount,
+      dpAmount: calc.dpAmount,
+      remainingAmount: calc.remainingAmount,
+      status: Number(calc.remainingAmount) <= 0 ? 'LUNAS' : 'BOOKED_DP',
       createdAt: new Date().toISOString(),
     };
 
@@ -1433,10 +1443,13 @@ export function SewaLapanganModule() {
         ...prev,
         courtBookings: [newBooking, ...(prev.courtBookings ?? [])],
       }),
-      Number(dpAmount) > 0
+      Number(calc.dpAmount) > 0
         ? {
-            grossAmount: dpAmount,
-            description: `DP Booking ${chosenCourt.name} (${customerName.trim()} · ${bookingDate} ${startHour}-${endHour})`,
+            grossAmount: calc.dpAmount,
+            description: `DP Booking ${chosenCourt.name} (${customerName.trim()} · ${bookingDate} ${formatHourRange(
+              startH,
+              durH
+            )})`,
           }
         : undefined
     );
@@ -1446,7 +1459,7 @@ export function SewaLapanganModule() {
   };
 
   const handleSettleBooking = (booking: CourtBooking) => {
-    const remaining = booking.remainingBalance;
+    const remaining = booking.remainingAmount;
     updateVerticalOps(
       (prev) => ({
         ...prev,
@@ -1454,9 +1467,9 @@ export function SewaLapanganModule() {
           b.id === booking.id
             ? {
                 ...b,
-                dpAmount: new Decimal(b.courtFee).plus(b.equipmentFee).toFixed(4),
-                remainingBalance: '0.0000',
-                status: 'PAID',
+                dpAmount: b.totalAmount,
+                remainingAmount: '0.0000',
+                status: 'LUNAS',
               }
             : b
         ),
@@ -1522,20 +1535,20 @@ export function SewaLapanganModule() {
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
         <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
           <h3 className="text-sm font-bold text-stone-900">
-            Jadwal Main & Pembayaran DP / Pelunasan ({filteredBookings.length})
+            Jadwal Main &amp; Pembayaran DP / Pelunasan ({filteredBookings.length})
           </h3>
         </div>
         <div className="divide-y divide-stone-100">
           {filteredBookings.map((b) => {
-            const total = new Decimal(b.courtFee).plus(b.equipmentFee).toFixed(0);
+            const slotRange = formatHourRange(b.startHour, b.durationHours);
             const waUrl = buildDirectWaLink(
               b.customerPhone,
               buildGenericBookingWaMessage({
                 businessName: tenant.name,
                 customerName: b.customerName,
                 bookingRef: `${b.courtName} (${b.bookingDate})`,
-                summaryLine: `Jam main ${b.startHour}-${b.endHour}. Sisa bayar: ${formatRupiah(b.remainingBalance)}.`,
-                totalAmount: total,
+                summaryLine: `Jam main ${slotRange}. Sisa bayar: ${formatRupiah(b.remainingAmount)}.`,
+                totalAmount: b.totalAmount,
               })
             );
             return (
@@ -1547,21 +1560,21 @@ export function SewaLapanganModule() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-bold text-stone-900">{b.courtName}</span>
                     <span className="font-mono text-xs font-semibold text-stone-700">
-                      {b.bookingDate} · {b.startHour}-{b.endHour}
+                      {b.bookingDate} · {slotRange}
                     </span>
                     <span
                       className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                        b.status === 'PAID'
+                        b.status === 'LUNAS' || b.status === 'SELESAI'
                           ? 'bg-emerald-50 text-emerald-700'
                           : 'bg-amber-50 text-amber-800'
                       }`}
                     >
-                      {b.status === 'PAID' ? 'Lunas' : 'DP Masuk'}
+                      {b.status === 'LUNAS' || b.status === 'SELESAI' ? 'Lunas' : 'DP Masuk'}
                     </span>
                   </div>
                   <div className="mt-1 text-xs text-stone-600">
-                    Pemesan: <strong>{b.customerName}</strong> ({b.customerPhone}) · Sewa Lapangan{' '}
-                    <span className="font-mono tabular-nums">{formatRupiah(b.courtFee)}</span> · Alat/Kantin{' '}
+                    Pemesan: <strong>{b.customerName}</strong> ({b.customerPhone}) · Total{' '}
+                    <span className="font-mono tabular-nums">{formatRupiah(b.totalAmount)}</span> · Alat/Kantin{' '}
                     <span className="font-mono tabular-nums">{formatRupiah(b.equipmentFee)}</span>
                   </div>
                 </div>
@@ -1569,10 +1582,10 @@ export function SewaLapanganModule() {
                   <div className="text-right">
                     <div className="text-[11px] text-stone-500">Sisa Bayar</div>
                     <div className="font-mono text-sm font-bold tabular-nums text-stone-900">
-                      {formatRupiah(b.remainingBalance)}
+                      {formatRupiah(b.remainingAmount)}
                     </div>
                   </div>
-                  {b.status !== 'PAID' && (
+                  {b.status === 'BOOKED_DP' && (
                     <button
                       type="button"
                       onClick={() => handleSettleBooking(b)}
@@ -1581,7 +1594,7 @@ export function SewaLapanganModule() {
                       Tandai Lunas
                     </button>
                   )}
-                  {waStatus.isReady && waUrl && (
+                  {waStatus.ready && waUrl && (
                     <a
                       href={waUrl}
                       target="_blank"
@@ -1670,19 +1683,26 @@ export function SewaLapanganModule() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-stone-700">Jam Mulai</label>
-                  <input
-                    type="time"
-                    value={startHour}
-                    onChange={(e) => setStartHour(e.target.value)}
+                  <select
+                    value={startHourNum}
+                    onChange={(e) => setStartHourNum(e.target.value)}
                     className="w-full rounded-lg border border-stone-200 px-2.5 py-2 font-mono text-sm"
-                  />
+                  >
+                    {Array.from({ length: 17 }, (_, i) => i + 7).map((h) => (
+                      <option key={h} value={String(h)}>
+                        {String(h).padStart(2, '0')}:00
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-stone-700">Jam Selesai</label>
+                  <label className="mb-1 block text-xs font-semibold text-stone-700">Durasi (Jam)</label>
                   <input
-                    type="time"
-                    value={endHour}
-                    onChange={(e) => setEndHour(e.target.value)}
+                    type="number"
+                    min="1"
+                    max="6"
+                    value={durationHours}
+                    onChange={(e) => setDurationHours(e.target.value)}
                     className="w-full rounded-lg border border-stone-200 px-2.5 py-2 font-mono text-sm"
                   />
                 </div>
@@ -1741,7 +1761,7 @@ export function SewaGarasiModule() {
   const [tenantName, setTenantName] = useState('');
   const [tenantPhone, setTenantPhone] = useState('');
   const [plateNumber, setPlateNumber] = useState('');
-  const [vehicleModel, setVehicleModel] = useState('');
+  const [carModel, setCarModel] = useState('');
   const [dueDate, setDueDate] = useState('2026-12-01');
 
   const handleAssignSubmit = (e: React.FormEvent) => {
@@ -1754,13 +1774,13 @@ export function SewaGarasiModule() {
           s.id === assignSlot.id
             ? {
                 ...s,
-                status: 'OCCUPIED',
+                status: 'TERISI',
                 tenantName: tenantName.trim(),
                 tenantPhone: tenantPhone.trim(),
                 plateNumber: plateNumber.trim().toUpperCase(),
-                vehicleModel: vehicleModel.trim(),
+                carModel: carModel.trim(),
                 nextDueDate: dueDate,
-                paymentStatus: 'PAID',
+                paymentStatus: 'LUNAS',
               }
             : s
         ),
@@ -1774,7 +1794,7 @@ export function SewaGarasiModule() {
     setTenantName('');
     setTenantPhone('');
     setPlateNumber('');
-    setVehicleModel('');
+    setCarModel('');
   };
 
   const handleMarkPaid = (slot: GarageSlot) => {
@@ -1782,7 +1802,7 @@ export function SewaGarasiModule() {
       (prev) => ({
         ...prev,
         garageSlots: (prev.garageSlots ?? []).map((s) =>
-          s.id === slot.id ? { ...s, paymentStatus: 'PAID' } : s
+          s.id === slot.id ? { ...s, paymentStatus: 'LUNAS' } : s
         ),
       }),
       {
@@ -1799,11 +1819,11 @@ export function SewaGarasiModule() {
         s.id === slot.id
           ? {
               ...s,
-              status: 'AVAILABLE',
+              status: 'KOSONG',
               tenantName: undefined,
               tenantPhone: undefined,
               plateNumber: undefined,
-              vehicleModel: undefined,
+              carModel: undefined,
               nextDueDate: undefined,
               paymentStatus: undefined,
             }
@@ -1815,7 +1835,7 @@ export function SewaGarasiModule() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-base font-bold text-stone-900">Peta Slot Garasi & Penagihan Bulanan</h2>
+        <h2 className="text-base font-bold text-stone-900">Peta Slot Garasi &amp; Penagihan Bulanan</h2>
         <p className="text-xs text-stone-600">
           Pantau slot terisi/kosong, nomor plat mobil penyewa, jatuh tempo, dan kirim pengingat WA langsung.
         </p>
@@ -1845,30 +1865,30 @@ export function SewaGarasiModule() {
                     <div className="font-mono text-sm font-bold text-stone-900">
                       Slot {s.slotCode}
                     </div>
-                    <div className="text-xs text-stone-500">{s.slotType}</div>
+                    <div className="text-xs text-stone-500">{s.slotType.replace(/_/g, ' ')}</div>
                   </div>
                   <span
                     className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
-                      s.status === 'AVAILABLE'
+                      s.status === 'KOSONG'
                         ? 'bg-emerald-50 text-emerald-700'
-                        : s.paymentStatus === 'OVERDUE'
+                        : s.paymentStatus === 'JATUH_TEMPO'
                         ? 'bg-red-50 text-red-700'
                         : 'bg-stone-100 text-stone-800'
                     }`}
                   >
-                    {s.status === 'AVAILABLE'
+                    {s.status === 'KOSONG'
                       ? 'Kosong'
-                      : s.paymentStatus === 'OVERDUE'
+                      : s.paymentStatus === 'JATUH_TEMPO'
                       ? 'Jatuh Tempo'
                       : 'Terisi · Lunas'}
                   </span>
                 </div>
 
-                {s.status === 'OCCUPIED' ? (
+                {s.status === 'TERISI' ? (
                   <div className="mt-3 space-y-1 border-t border-stone-100 pt-3 text-xs">
                     <div className="font-semibold text-stone-900">{s.tenantName}</div>
                     <div className="font-mono text-stone-700">
-                      {s.plateNumber} · {s.vehicleModel}
+                      {s.plateNumber} · {s.carModel}
                     </div>
                     <div className="text-stone-500">Jatuh tempo: {s.nextDueDate}</div>
                   </div>
@@ -1884,7 +1904,7 @@ export function SewaGarasiModule() {
                   {formatRupiah(s.monthlyRate)}/bln
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {s.status === 'AVAILABLE' ? (
+                  {s.status === 'KOSONG' ? (
                     <button
                       type="button"
                       onClick={() => setAssignSlot(s)}
@@ -1894,7 +1914,7 @@ export function SewaGarasiModule() {
                     </button>
                   ) : (
                     <>
-                      {s.paymentStatus !== 'PAID' && (
+                      {s.paymentStatus !== 'LUNAS' && (
                         <button
                           type="button"
                           onClick={() => handleMarkPaid(s)}
@@ -1903,7 +1923,7 @@ export function SewaGarasiModule() {
                           Lunas
                         </button>
                       )}
-                      {waStatus.isReady && waUrl && (
+                      {waStatus.ready && waUrl && (
                         <a
                           href={waUrl}
                           target="_blank"
@@ -1975,8 +1995,8 @@ export function SewaGarasiModule() {
                   <label className="mb-1 block text-xs font-semibold text-stone-700">Jenis Mobil</label>
                   <input
                     type="text"
-                    value={vehicleModel}
-                    onChange={(e) => setVehicleModel(e.target.value)}
+                    value={carModel}
+                    onChange={(e) => setCarModel(e.target.value)}
                     placeholder="Honda Brio"
                     className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm"
                   />
@@ -2004,7 +2024,7 @@ export function SewaGarasiModule() {
                 type="submit"
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
               >
-                Simpan & Terima Sewa
+                Simpan &amp; Terima Sewa
               </button>
             </div>
           </form>

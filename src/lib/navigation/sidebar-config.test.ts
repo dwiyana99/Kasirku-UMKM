@@ -46,6 +46,7 @@ test('Warung Sembako PRO places PO and Stock Opname strictly inside Gudang & Pem
   assert.equal(gudangDropdown.label, 'Gudang & Pembelian');
 
   const childPaths = (gudangDropdown.children ?? []).map((c) => c.path);
+  assert.ok(childPaths.includes('/inventory/restock-monitor'), 'Monitor Stok & Restok must be inside Gudang & Pembelian');
   assert.ok(childPaths.includes('/purchasing/restock'));
   assert.ok(childPaths.includes('/purchasing/po'), 'PO must be inside Gudang & Pembelian');
   assert.ok(childPaths.includes('/opname'), 'Stock Opname must be inside Gudang & Pembelian');
@@ -86,10 +87,12 @@ test('Warung Sembako LITE keeps sidebar ultra-simple: no PO, no Opname, no locke
   const transaksi = groups.find((g) => g.id === 'TRANSAKSI');
   assert.deepEqual(
     transaksi?.items.map((i) => i.path),
-    ['/pos', '/transactions', '/crm']
+    ['/pos', '/transactions', '/crm', '/returns']
   );
 
   const allPaths = collectAllPaths(groups);
+  assert.ok(allPaths.includes('/inventory/restock-monitor'), 'Stock-bearing LITE includes Monitor Stok & Restok');
+  assert.ok(!allPaths.includes('/contracts'), 'Warung Sembako hides Kontrak Digital');
   assert.ok(!allPaths.includes('/purchasing/po'), 'LITE must not show PO');
   assert.ok(!allPaths.includes('/opname'), 'LITE must not show Stock Opname');
   assert.ok(!allPaths.includes('/promo-crm'), 'LITE must not show Promo/CRM Pro');
@@ -178,6 +181,8 @@ test('Specialized verticals expose exact tailored menus and hide irrelevant modu
   });
   assert.equal(rentalGroups.some((g) => g.id === 'STOK_GUDANG'), false);
   assert.ok(collectAllPaths(rentalGroups).includes('/operations'));
+  assert.ok(collectAllPaths(rentalGroups).includes('/contracts'), 'Rental Kendaraan shows Kontrak Digital');
+  assert.ok(!collectAllPaths(rentalGroups).includes('/returns'), 'Rental Kendaraan hides Retur Penjualan');
 
   const homestayGroups = buildSidebarNavGroups({
     vertical: 'HOMESTAY_VILLA',

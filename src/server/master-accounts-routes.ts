@@ -23,6 +23,7 @@ import {
   countPostgresUsersSafe,
   removeUserFromPostgresByEmail,
   syncAllAccountsToPostgres,
+  syncTenantWorkspaceToPostgres,
   syncUserAccountToPostgres,
 } from '../lib/auth/postgres-sync.ts';
 import type { PartitionedTenantDatabase, SignedSessionPayload } from '../lib/db/tenant-db.ts';
@@ -277,6 +278,13 @@ export function mountMasterAccountsRoutes(
       accountStatus: provisioned.customer.status,
       maxTenantsAllowed: provisioned.customer.maxTenantsAllowed,
     });
+    if (pgSync.synced) {
+      await syncTenantWorkspaceToPostgres({
+        email: provisioned.customer.email,
+        customer: provisioned.customer,
+        workspace: provisioned.workspace,
+      });
+    }
 
     const payload = await buildPayload();
     return res.status(201).json({
@@ -533,9 +541,12 @@ export function mountMasterAccountsRoutes(
       });
     }
 
+    const allWs = tenantDb.listAllWorkspaces();
+    const wsMap = new Map(allWs.map((w) => [w.tenant.id, w]));
     const syncRes = await syncAllAccountsToPostgres({
       masterAccounts: tenantDb.listMasterAccounts(),
       customers: tenantDb.listCustomers(),
+      workspacesByTenantId: wsMap,
     });
 
     if (!syncRes.databaseConfigured) {

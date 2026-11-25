@@ -35,8 +35,17 @@ export function resolveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
     .replace(/\/+$/, '');
   if (explicit) return explicit;
 
+  const vercelProdUrl = (env.VERCEL_PROJECT_PRODUCTION_URL || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
   const vercelUrl = (env.VERCEL_URL || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+
+  if (env.VERCEL_ENV === 'production' && vercelProdUrl) {
+    return `https://${vercelProdUrl}`;
+  }
   if (vercelUrl) return `https://${vercelUrl}`;
+  if (vercelProdUrl) return `https://${vercelProdUrl}`;
 
   return 'http://localhost:3000';
 }
@@ -70,6 +79,10 @@ export function buildTrustedOrigins(env: NodeJS.ProcessEnv = process.env): strin
     .replace(/\/+$/, '');
   if (vercelProdUrl) {
     origins.add(`https://${vercelProdUrl}`);
+  }
+
+  if (env.VERCEL) {
+    origins.add('https://*.vercel.app');
   }
 
   const rootDomain = (env.ROOT_DOMAIN || env.NEXT_PUBLIC_ROOT_DOMAIN || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');

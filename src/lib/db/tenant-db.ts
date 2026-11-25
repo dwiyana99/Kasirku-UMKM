@@ -12,6 +12,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type {
   AccountScope,
@@ -19,6 +20,23 @@ import type {
   TenantWorkspaceData,
 } from '../../types/domain.ts';
 import type { MasterAdminAccountRecord } from '../auth/account-management.ts';
+
+export function resolveDefaultDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const custom = (env.KASIRAKUN_DATA_ROOT || '').trim();
+  if (custom) {
+    return path.resolve(custom);
+  }
+  const isServerless = Boolean(
+    env.VERCEL ||
+      env.NOW_REGION ||
+      env.AWS_LAMBDA_FUNCTION_NAME ||
+      env.LAMBDA_TASK_ROOT
+  );
+  if (isServerless) {
+    return path.join(os.tmpdir(), 'kasirakun-data', 'db');
+  }
+  return path.resolve(process.cwd(), '.data', 'db');
+}
 
 export interface SignedSessionPayload {
   role: 'MASTER_ADMIN' | 'CUSTOMER' | 'STAFF';
@@ -112,7 +130,7 @@ export class PartitionedTenantDatabase {
   private readonly rootDir: string;
 
   constructor(rootDir?: string) {
-    this.rootDir = rootDir || path.resolve(process.cwd(), '.data', 'db');
+    this.rootDir = rootDir || resolveDefaultDataRoot();
     this.ensureDirs();
   }
 

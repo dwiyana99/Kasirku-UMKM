@@ -5,9 +5,31 @@
  * or updated in Master Admin work natively with Better Auth Email + Google OAuth.
  */
 
+import crypto from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { getPrismaClient, isDatabaseConfigured } from '../prisma.ts';
-import type { ManagedCustomerAccount } from '../../types/domain.ts';
-import type { MasterAdminAccountRecord } from './account-management.ts';
+import type {
+  BusinessVertical,
+  ManagedCustomerAccount,
+  SubscriptionPlanCode,
+  TaxEntityType,
+  TenantWorkspaceData,
+} from '../../types/domain.ts';
+import {
+  buildMasterProvisionedAccountAndWorkspace,
+  type MasterAdminAccountRecord,
+} from './account-management.ts';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function toDeterministicUuid(input: string): string {
+  const trimmed = input.trim();
+  if (UUID_REGEX.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  const hex = crypto.createHash('sha256').update(`kasirakun:${trimmed}`).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
 
 export interface PostgresAccountSyncInput {
   email: string;
@@ -95,6 +117,216 @@ export async function syncUserAccountToPostgres(
   }
 }
 
+export async function syncTenantWorkspaceToPostgres(params: {
+  email: string;
+  customer: ManagedCustomerAccount;
+  workspace: TenantWorkspaceData;
+}): Promise<boolean> {
+  if (!isDatabaseConfigured()) return false;
+  const prisma = getPrismaClient();
+  if (!prisma) return false;
+
+  const emailNorm = params.email.trim().toLowerCase();
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email: emailNorm },
+      select: { id: true },
+    });
+    if (!user) return false;
+
+    const ws = params.workspace;
+    const tenantUuid = toDeterministicUuid(ws.tenant.id);
+    const slug = (ws.tenant.slug || ws.tenant.id).slice(0, 100);
+    const safeVertical = ws.tenant.vertical as BusinessVertical;
+    const safeTaxEntity = (ws.tenant.taxEntity || 'WP_OP') as TaxEntityType;
+
+    const settingsPayload = {
+      legacyTenantId: ws.tenant.id,
+      legacyCustomerId: params.customer.id,
+      accountScope: params.customer.accountScope ?? 'REAL',
+      planCode: params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC',
+      billingCycle: params.customer.billingCycle ?? 'MONTHLY',
+      selectedAddOns: params.customer.activeAddOns ?? ws.tenant.activeAddOns ?? [],
+      businessWhatsappNumber: ws.tenant.settings?.businessWhatsappNumber ?? null,
+    } as unknown as Prisma.InputJsonValue;
+
+    const verticalOpsPayload = (ws.verticalOps ?? {}) as unknown as Prisma.InputJsonValue;
+
+    const tenant = await prisma.tenant.upsert({
+      where: { slug },
+      create: {
+        id: tenantUuid,
+        name: ws.tenant.name.slice(0, 150),
+        slug,
+        vertical: safeVertical,
+        taxEntity: safeTaxEntity,
+        isPkp: Boolean(ws.tenant.isPkp),
+        npwp16: ws.tenant.npwp16?.slice(0, 16) ?? null,
+        nitku22: ws.tenant.nitku22?.slice(0, 22) ?? null,
+        address: ws.tenant.address ?? null,
+        logoUrl: ws.tenant.logoUrl ?? null,
+        planCode: (params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
+        settings: settingsPayload,
+        verticalOpsJson: verticalOpsPayload,
+      },
+      update: {
+        name: ws.tenant.name.slice(0, 150),
+        vertical: safeVertical,
+        taxEntity: safeTaxEntity,
+        isPkp: Boolean(ws.tenant.isPkp),
+        planCode: (params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
+        settings: settingsPayload,
+        verticalOpsJson: verticalOpsPayload,
+      },
+    });
+
+    await prisma.tenantMembership.upsert({
+      where: {
+        userId_tenantId: {
+          userId: user.id,
+          tenantId: tenant.id,
+        },
+      },
+      create: {
+        userId: user.id,
+        tenantId: tenant.id,
+        role: 'OWNER',
+        isActive: true,
+      },
+      update: {
+        role: 'OWNER',
+        isActive: true,
+      },
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface HydratedPostgresUserResult {
+  found: boolean;
+  userId?: string;
+  email: string;
+  fullName: string;
+  phone: string;
+  isSuperAdmin: boolean;
+  accountStatus: string;
+  passwordHash: string | null;
+  customer?: ManagedCustomerAccount;
+  workspaces?: TenantWorkspaceData[];
+}
+
+export async function hydrateUserFromPostgresByEmail(
+  email: string,
+): Promise<HydratedPostgresUserResult | null> {
+  if (!isDatabaseConfigured()) return null;
+  const prisma = getPrismaClient();
+  if (!prisma) return null;
+
+  const emailNorm = email.trim().toLowerCase();
+  try {
+    const pgUser = await prisma.user.findUnique({
+      where: { email: emailNorm },
+      include: {
+        authAccounts: {
+          where: { providerId: 'credential' },
+          select: { password: true },
+        },
+        memberships: {
+          where: { isActive: true },
+          include: { tenant: true },
+        },
+      },
+    });
+    if (!pgUser) return null;
+
+    const passwordHash = pgUser.authAccounts[0]?.password || pgUser.passwordHash || null;
+    const baseResult: HydratedPostgresUserResult = {
+      found: true,
+      userId: pgUser.id,
+      email: emailNorm,
+      fullName: pgUser.fullName || pgUser.name || emailNorm.split('@')[0],
+      phone: pgUser.phone || '',
+      isSuperAdmin: Boolean(pgUser.isSuperAdmin),
+      accountStatus: pgUser.accountStatus || 'ACTIVE',
+      passwordHash,
+    };
+
+    const primaryMembership = pgUser.memberships[0];
+    if (!primaryMembership?.tenant) {
+      return baseResult;
+    }
+
+    const t = primaryMembership.tenant;
+    const settingsObj =
+      t.settings && typeof t.settings === 'object' && !Array.isArray(t.settings)
+        ? (t.settings as Record<string, unknown>)
+        : {};
+    const scope = settingsObj.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
+    const planCode = (typeof settingsObj.planCode === 'string'
+      ? settingsObj.planCode
+      : t.planCode || 'BASIC') as SubscriptionPlanCode;
+    const billingCycle = settingsObj.billingCycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY';
+
+    const built = buildMasterProvisionedAccountAndWorkspace({
+      accountScope: scope,
+      fullName: baseResult.fullName,
+      email: emailNorm,
+      password: '••••••••',
+      phone: baseResult.phone || '081200000000',
+      allowGoogleLogin: true,
+      allowPasswordLogin: true,
+      status:
+        pgUser.accountStatus === 'SUSPENDED' || pgUser.accountStatus === 'TRIAL'
+          ? pgUser.accountStatus
+          : 'ACTIVE',
+      businessName: t.name,
+      vertical: t.vertical as BusinessVertical,
+      planCode,
+      billingCycle,
+      maxTenantsAllowed: pgUser.maxTenantsAllowed || 3,
+      passwordHash: passwordHash || '',
+    });
+
+    const resolvedTenantId =
+      typeof settingsObj.legacyTenantId === 'string' && settingsObj.legacyTenantId
+        ? settingsObj.legacyTenantId
+        : t.id;
+    const resolvedCustomerId =
+      typeof settingsObj.legacyCustomerId === 'string' && settingsObj.legacyCustomerId
+        ? settingsObj.legacyCustomerId
+        : built.customer.id;
+
+    const hydratedCustomer: ManagedCustomerAccount = {
+      ...built.customer,
+      id: resolvedCustomerId,
+      primaryTenantId: resolvedTenantId,
+      tenantIds: [resolvedTenantId],
+    };
+
+    const hydratedWorkspace: TenantWorkspaceData = {
+      ...built.workspace,
+      tenant: {
+        ...built.workspace.tenant,
+        id: resolvedTenantId,
+        slug: t.slug,
+        name: t.name,
+        ownerAccountId: resolvedCustomerId,
+      },
+    };
+
+    return {
+      ...baseResult,
+      customer: hydratedCustomer,
+      workspaces: [hydratedWorkspace],
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function removeUserFromPostgresByEmail(email: string): Promise<boolean> {
   if (!isDatabaseConfigured()) return false;
   const prisma = getPrismaClient();
@@ -124,6 +356,7 @@ export async function countPostgresUsersSafe(): Promise<number | null> {
 export async function syncAllAccountsToPostgres(params: {
   masterAccounts: MasterAdminAccountRecord[];
   customers: ManagedCustomerAccount[];
+  workspacesByTenantId?: Map<string, TenantWorkspaceData>;
 }): Promise<{
   databaseConfigured: boolean;
   masterSynced: number;
@@ -174,6 +407,15 @@ export async function syncAllAccountsToPostgres(params: {
     if (res.synced) {
       if (isDemo) demoSynced += 1;
       else realSynced += 1;
+
+      const ws = params.workspacesByTenantId?.get(c.primaryTenantId);
+      if (ws) {
+        await syncTenantWorkspaceToPostgres({
+          email: c.email,
+          customer: c,
+          workspace: ws,
+        });
+      }
     } else {
       failed += 1;
     }

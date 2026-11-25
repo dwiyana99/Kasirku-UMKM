@@ -20,6 +20,7 @@ import {
   PartitionedTenantDatabase,
   assertTenantAccess,
   resolveAccountScope,
+  resolveDefaultDataRoot,
   signSessionToken,
   verifySessionToken,
   type SignedSessionPayload,
@@ -68,7 +69,11 @@ import {
   sanitizeCustomerForApi,
   verifyAccountPassword,
 } from './src/lib/auth/account-management.ts';
-import { syncUserAccountToPostgres } from './src/lib/auth/postgres-sync.ts';
+import {
+  hydrateUserFromPostgresByEmail,
+  syncTenantWorkspaceToPostgres,
+  syncUserAccountToPostgres,
+} from './src/lib/auth/postgres-sync.ts';
 import { checkDatabaseHealth, getPrismaClient } from './src/lib/prisma.ts';
 import { isS3StorageConfigured } from './src/lib/storage/s3-client.ts';
 import type {
@@ -166,7 +171,7 @@ if (demoWarungRecord && demoWarungRecord.scope === 'DEMO') {
   }
 }
 
-const DATA_ROOT = path.resolve(process.cwd(), '.data', 'db');
+const DATA_ROOT = resolveDefaultDataRoot();
 const DEMO_CONFIG_PATH = path.join(DATA_ROOT, '_demo_config.json');
 const DEMO_REQUESTS_PATH = path.join(DATA_ROOT, '_demo_requests.json');
 const AI_USAGE_PATH = path.join(DATA_ROOT, '_ai_usage.json');
@@ -361,7 +366,15 @@ const subscriptionWebhookSchema = z.object({
   status: z.enum(['SETTLEMENT', 'VERIFIED_PAID']),
 });
 
-async function startServer() {
+export interface CreateExpressAppOptions {
+  httpServer?: http.Server;
+  enableVite?: boolean;
+  serveStatic?: boolean;
+}
+
+export async function createExpressApp(
+  options: CreateExpressAppOptions = {},
+): Promise<express.Express> {
   const app = express();
 
   // Seed Master Admin accounts directory with hashed credentials if empty
@@ -509,7 +522,21 @@ async function startServer() {
       }
 
       const masterAccounts = tenantDb.listMasterAccounts();
-      const customer = tenantDb.findCustomerByEmail(emailNorm);
+      let customer = tenantDb.findCustomerByEmail(emailNorm);
+      if (
+        !customer &&
+        !masterAccounts.some((m) => m.email.trim().toLowerCase() === emailNorm)
+      ) {
+        const hydrated = await hydrateUserFromPostgresByEmail(emailNorm);
+        if (hydrated?.customer && hydrated.workspaces?.length) {
+          const scope = resolveAccountScope(hydrated.customer);
+          tenantDb.upsertCustomer(hydrated.customer);
+          for (const ws of hydrated.workspaces) {
+            tenantDb.saveWorkspace(scope, hydrated.customer.id, ws);
+          }
+          customer = hydrated.customer;
+        }
+      }
       const staffMatch = customer ? null : tenantDb.findStaffByEmail(emailNorm);
 
       const resolution = resolveBetterAuthLoginTarget({
@@ -808,6 +835,42 @@ async function startServer() {
       });
     }
 
+    // 3. Cold-start fallback: verify against Neon PostgreSQL (e.g. Vercel ephemeral /tmp)
+    const hydrated = await hydrateUserFromPostgresByEmail(emailNorm);
+    if (hydrated?.found && hydrated.passwordHash) {
+      const pgPasswordOk = await verifyAccountPassword(password, hydrated.passwordHash);
+      if (pgPasswordOk) {
+        if (hydrated.accountStatus === 'SUSPENDED' || hydrated.accountStatus === 'DEACTIVATED') {
+          return res.status(403).json({
+            error: `Akun ini berstatus ${hydrated.accountStatus}. Hubungi Master Admin untuk mengaktifkan kembali.`,
+          });
+        }
+        if (hydrated.customer && hydrated.workspaces?.length) {
+          const scope = resolveAccountScope(hydrated.customer);
+          tenantDb.upsertCustomer(hydrated.customer);
+          for (const ws of hydrated.workspaces) {
+            tenantDb.saveWorkspace(scope, hydrated.customer.id, ws);
+          }
+          const token = signSessionToken({
+            role: 'CUSTOMER',
+            accountScope: scope,
+            ownerAccountId: hydrated.customer.id,
+            email: hydrated.customer.email,
+            allowedTenantIds: hydrated.customer.tenantIds,
+            issuedAt: Date.now(),
+          });
+          return res.status(200).json({
+            authenticated: true,
+            role: 'CUSTOMER',
+            accountScope: scope,
+            token,
+            customer: sanitizeCustomerForApi(hydrated.customer),
+            workspaces: hydrated.workspaces,
+          });
+        }
+      }
+    }
+
     return res.status(401).json({ error: 'Email atau kata sandi tidak cocok.' });
   });
 
@@ -854,7 +917,7 @@ async function startServer() {
     const savedCustomer = tenantDb.upsertCustomer(realCustomer);
     const savedWorkspace = tenantDb.saveWorkspace('REAL', savedCustomer.id, realWorkspace);
 
-    await syncUserAccountToPostgres({
+    const pgSync = await syncUserAccountToPostgres({
       email: savedCustomer.email,
       fullName: savedCustomer.fullName,
       phone: savedCustomer.phone,
@@ -863,6 +926,13 @@ async function startServer() {
       accountStatus: savedCustomer.status,
       maxTenantsAllowed: savedCustomer.maxTenantsAllowed,
     });
+    if (pgSync.synced) {
+      await syncTenantWorkspaceToPostgres({
+        email: savedCustomer.email,
+        customer: savedCustomer,
+        workspace: savedWorkspace,
+      });
+    }
 
     const token = signSessionToken({
       role: 'CUSTOMER',
@@ -2497,11 +2567,11 @@ async function startServer() {
   });
   app.use(createSubdomainRewriteMiddleware());
 
-  const httpServer = http.createServer(app);
-
-  // Vite dev middleware or static dist serving
   const isProd = process.env.NODE_ENV === 'production';
-  if (!isProd) {
+  const shouldEnableVite = options.enableVite ?? (!isProd && !process.env.VERCEL);
+  const shouldServeStatic = options.serveStatic ?? (isProd && !process.env.VERCEL);
+
+  if (shouldEnableVite && options.httpServer) {
     const { createServer: createViteServer } = await import('vite');
     const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
@@ -2509,13 +2579,13 @@ async function startServer() {
         middlewareMode: true,
         // Attach Vite's WebSocket upgrade handler directly to the port-3000 HTTP server
         // instead of spawning an unreachable standalone port 24678 server behind Cloud Run / HTTPS proxies.
-        hmr: disableHmr ? false : { server: httpServer },
-        ws: { server: httpServer },
+        hmr: disableHmr ? false : { server: options.httpServer },
+        ws: { server: options.httpServer },
       },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (shouldServeStatic) {
     const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
@@ -2528,9 +2598,50 @@ async function startServer() {
     });
   }
 
+  return app;
+}
+
+let cachedServerlessAppPromise: Promise<express.Express> | null = null;
+
+export function getExpressApp(): Promise<express.Express> {
+  if (!cachedServerlessAppPromise) {
+    cachedServerlessAppPromise = createExpressApp({
+      enableVite: false,
+      serveStatic: false,
+    }).catch((err) => {
+      cachedServerlessAppPromise = null;
+      throw err;
+    });
+  }
+  return cachedServerlessAppPromise;
+}
+
+async function startServer() {
+  const httpServer = http.createServer();
+  const isProd = process.env.NODE_ENV === 'production';
+  const app = await createExpressApp({
+    httpServer,
+    enableVite: !isProd,
+    serveStatic: isProd,
+  });
+  httpServer.on('request', app);
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`KasirAkun UMKM server listening on http://0.0.0.0:${PORT}`);
   });
 }
 
-void startServer();
+const isServerlessRuntime = Boolean(
+  process.env.VERCEL ||
+    process.env.NOW_REGION ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.KASIRAKUN_SERVERLESS_ONLY,
+);
+const isDirectServerEntry =
+  typeof process !== 'undefined' &&
+  Array.isArray(process.argv) &&
+  Boolean(process.argv[1]) &&
+  /(?:^|[\\/])server\.(?:ts|js|mjs|cjs)$/i.test(process.argv[1]);
+
+if (!isServerlessRuntime && isDirectServerEntry) {
+  void startServer();
+}

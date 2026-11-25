@@ -1,11 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import os from 'node:os';
+import { EventEmitter } from 'node:events';
 import {
   buildTrustedOrigins,
   getAuthConfigurationStatus,
   isGoogleOAuthConfigured,
   resolveBaseUrl,
 } from './auth.ts';
+import { resolveDefaultDataRoot } from './db/tenant-db.ts';
 import { isDatabaseConfigured } from './prisma.ts';
 import {
   buildInitialMasterAdminAccounts,
@@ -258,4 +262,82 @@ describe('Master / Real / Demo Account Management & Better Auth Resolution', () 
     assert.equal(newGoogle.targetRole, 'NEEDS_ONBOARDING');
   });
 });
+
+describe('Vercel Serverless Runtime Compatibility', () => {
+  it('uses writable tmpdir for DATA_ROOT on Vercel and trusts *.vercel.app origins', () => {
+    const vercelRoot = resolveDefaultDataRoot({ VERCEL: '1' });
+    assert.equal(vercelRoot, path.join(os.tmpdir(), 'kasirakun-data', 'db'));
+
+    const localRoot = resolveDefaultDataRoot({});
+    assert.equal(localRoot, path.resolve(process.cwd(), '.data', 'db'));
+
+    assert.equal(
+      resolveBaseUrl({
+        VERCEL_ENV: 'production',
+        VERCEL_PROJECT_PRODUCTION_URL: 'kasirakun-prod.vercel.app',
+        VERCEL_URL: 'kasirakun-git-main.vercel.app',
+      }),
+      'https://kasirakun-prod.vercel.app',
+    );
+
+    const origins = buildTrustedOrigins({ VERCEL: '1' });
+    assert.ok(origins.includes('https://*.vercel.app'));
+  });
+
+  it('serves /api/auth/config-status and /api/auth/master-login through api/index.ts without binding port', async () => {
+    const fs = await import('node:fs');
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kasirakun-vercel-test-'));
+    process.env.KASIRAKUN_SERVERLESS_ONLY = '1';
+    process.env.KASIRAKUN_DATA_ROOT = tempRoot;
+    const http = await import('node:http');
+    const { default: vercelHandler } = await import('../../api/index.ts');
+
+    const srv = http.createServer((req, res) => {
+      void vercelHandler(req, res);
+    });
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+    const addr = srv.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const cfgResp = await fetch(`${baseUrl}/api/auth/config-status`);
+      assert.equal(cfgResp.status, 200);
+      const cfgJson = (await cfgResp.json()) as Record<string, unknown>;
+      assert.equal(typeof cfgJson.betterAuthReady, 'boolean');
+
+      const loginResp = await fetch(`${baseUrl}/api/auth/master-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'master@kasirakun.id',
+          password: 'Master2026!',
+        }),
+      });
+      assert.equal(loginResp.status, 200);
+      const loginJson = (await loginResp.json()) as Record<string, unknown>;
+      assert.equal(loginJson.authenticated, true);
+      assert.equal(loginJson.role, 'MASTER_ADMIN');
+      assert.ok(typeof loginJson.token === 'string' && loginJson.token.length > 10);
+
+      const demoResp = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'demo.sembako@kasirakun.id',
+          password: 'Demo2026!',
+        }),
+      });
+      assert.equal(demoResp.status, 200);
+      const demoJson = (await demoResp.json()) as Record<string, unknown>;
+      assert.equal(demoJson.authenticated, true);
+      assert.equal(demoJson.role, 'CUSTOMER');
+    } finally {
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+      delete process.env.KASIRAKUN_DATA_ROOT;
+    }
+  });
+});
+
 

@@ -104,8 +104,8 @@ const CORE_POINTS = [
     detail: 'Warung tidak melihat menu meja resto. Kost tidak diganggu menu gudang.',
   },
   {
-    title: 'Tetap jalan saat sinyal drop',
-    detail: 'Kasir dan QR meja memakai cache lokal, bisa langsung selesai tanpa printer struk.',
+    title: 'Tetap jalan saat internet terputus',
+    detail: 'Kasir dan QR meja memakai penyimpanan lokal, bisa langsung selesai tanpa printer struk.',
   },
   {
     title: 'Stok, retur, dan untung sinkron',
@@ -124,7 +124,7 @@ const PLAN_SHORT_COPY: Record<string, { forWho: string; bullets: string[] }> = {
       'Kasir tunai cepat, bisa tanpa cetak struk',
       'Catatan belanja kulakan & monitor stok',
       'Laporan untung-rugi sederhana (harian sampai YTD)',
-      'Kirim nota & pengingat lewat WhatsApp pribadi (wa.me)',
+      'Kirim nota & pengingat lewat WhatsApp usaha (wa.me)',
     ],
   },
   BASIC: {
@@ -133,7 +133,7 @@ const PLAN_SHORT_COPY: Record<string, { forWho: string; bullets: string[] }> = {
       'Semua fitur LITE + hingga 3 akun pegawai',
       'QRIS, e-wallet, VA & transfer bank otomatis',
       'Cetak struk thermal 58mm/80mm',
-      'Simulasi harga jual agar margin tidak minus',
+      'Simulasi harga jual agar untung tetap terjaga',
     ],
   },
   PRO: {
@@ -141,7 +141,7 @@ const PLAN_SHORT_COPY: Record<string, { forWho: string; bullets: string[] }> = {
     bullets: [
       'Semua fitur BASIC + hingga 10 akun pegawai',
       'Purchase Order (PO) supplier & hutang tempo',
-      'Stock opname buta, resep bahan baku & satuan dus-eceran',
+      'Cek fisik stok berkala, resep bahan baku & satuan dus-eceran',
       'Harga grosir, promo, buku kasbon & komisi tim',
     ],
   },
@@ -297,7 +297,7 @@ export function LandingPage() {
               </h1>
 
               <p className="text-base text-stone-600 leading-relaxed max-w-[52ch] text-pretty">
-                Pilih bidang usaha Anda saat daftar. Menu, catatan stok, kontrak digital, hingga hitungan pajak otomatis menyesuaikan tanpa fitur yang mubazir.
+                Pilih bidang usaha Anda saat daftar. Menu, catatan stok, kontrak digital, hingga hitungan pajak otomatis menyesuaikan agar tampilan tetap ringkas dan tepat guna.
               </p>
 
               <div className="flex flex-wrap items-center gap-3 pt-1">

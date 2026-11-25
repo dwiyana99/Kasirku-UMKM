@@ -49,7 +49,7 @@ export const HYBRID_PLANS: HybridPlanDefinition[] = [
     code: 'LITE',
     name: 'Paket LITE',
     tagline:
-      'Paling hemat & super sederhana: khusus bayar tunai, tanpa cetak struk & tanpa menu PO yang ribet.',
+      'Paling hemat & super sederhana: khusus bayar tunai, biaya operasional harian, dan laporan untung-rugi sederhana.',
     badge: 'Paling Hemat',
     monthlyPrice: '49000.0000',
     annualMonthlyEquivalent: '41650.0000',
@@ -58,40 +58,40 @@ export const HYBRID_PLANS: HybridPlanDefinition[] = [
     includedAddOns: [],
     includedLegacyModules: ['POS_BASIC'],
     highlights: [
-      '1 Lokasi Usaha & 1 Akun Pemilik (tampilan super bersih, anti-ribet)',
-      'Cocok untuk Warung Sembako, Freelance, Kost & Kontrakan, Peternakan/Pertanian',
-      'Transaksi Kasir Tunai cepat + selesai otomatis tanpa cetak struk',
-      'Catat stok barang, belanja kulakan tunai cepat & untung-rugi harian',
-      'Bisa tambah Add-On Non-Tunai (+25rb), Cetak Struk (+15rb), atau PO (+20rb) kapan saja',
+      '1 Lokasi Usaha & 1 Akun Pemilik (tampilan ringkas, langsung pakai)',
+      'Cocok untuk Warung Sembako, Kost & Kontrakan, Freelance, dan Peternakan/Pertanian',
+      'Transaksi harian atau pengelolaan kamar/operasional sesuai jenis UMKM',
+      'Sudah termasuk Catat Biaya Operasional (listrik, air, Wi-Fi, gaji) & Laporan Laba Rugi / Kas Sederhana',
+      'Bisa tambah Add-On Non-Tunai (+25rb), Cetak Struk (+15rb), atau PO (+25rb) kapan saja',
     ],
-    zeroAiTokenNote: '0 Biaya Token AI · Solusi termurah untuk mulai rapi tanpa menu rumit',
+    zeroAiTokenNote: '0 Biaya Token AI · Solusi paling hemat dengan laporan untung-rugi & biaya operasional siap pakai',
   },
   {
     code: 'BASIC',
     name: 'Paket BASIC',
-    tagline: 'Fondasi kasir harian, pembayaran non-tunai otomatis, cetak struk & laba rugi dasar.',
-    monthlyPrice: '100000.0000',
-    annualMonthlyEquivalent: '85000.0000',
+    tagline: 'Lebih hemat Rp9rb-Rp29rb dibanding beli eceran: Non-Tunai otomatis, cetak struk, biaya operasional & 3 staf.',
+    monthlyPrice: '95000.0000',
+    annualMonthlyEquivalent: '80750.0000',
     maxBranches: 1,
     maxStaff: 3,
     includedAddOns: ['ADDON_NON_CASH_PAYMENT', 'ADDON_THERMAL_RECEIPT', 'ADDON_PRICING_SIMULATOR'],
     includedLegacyModules: ['POS_BASIC'],
     highlights: [
-      '1 Lokasi Usaha & Maksimal 3 Akun Staf/Kasir',
-      'POS Kasir adaptif untuk 8 jenis UMKM (termasuk Barbershop & Retail)',
+      '1 Lokasi Usaha & Maksimal 3 Akun Staf/Kasir (lebih hemat dibanding LITE + 3 Add-On eceran Rp104rb)',
       'Sudah termasuk Pembayaran Non-Tunai otomatis (QRIS, GoPay, ShopeePay, DANA, OVO, VA) & Layar Pelanggan',
-      'Sudah termasuk Cetak Struk Thermal 58/80mm + Simulasi Harga Jual Anti-Rugi',
-      'Kulakan Cepat, Shift Kasir & Laporan Laba Rugi Dasar (PO Supplier opsional +Rp20rb)',
+      'Sudah termasuk Cetak Struk Thermal 58/80mm + Simulasi Harga Jual & Untung',
+      'Sudah termasuk Biaya Operasional (listrik, Wi-Fi, gaji) & Laporan Laba Rugi / Arus Kas Sederhana',
+      'Kulakan Cepat & Shift Kasir Harian (Akuntansi Pro & PO Supplier tersedia sebagai Add-On / paket di atasnya)',
     ],
-    zeroAiTokenNote: '0 Biaya Token AI · 100% Bebas Biaya API Tambahan',
+    zeroAiTokenNote: '0 Biaya Token AI · Paket Bundling lebih murah dibanding tambah Add-On Non-Tunai + Struk + Simulasi eceran',
   },
   {
     code: 'PRO',
     name: 'Paket PRO',
-    tagline: 'Kontrol stok pro, PO Supplier, resep BOM, harga grosir, CRM & anti-fraud kasir.',
+    tagline: 'Lebih hemat Rp10rb-Rp80rb dari eceran: kontrol stok pro, PO Supplier, resep bahan, harga grosir & 10 staf.',
     badge: 'Paling Populer',
-    monthlyPrice: '199000.0000',
-    annualMonthlyEquivalent: '169150.0000',
+    monthlyPrice: '175000.0000',
+    annualMonthlyEquivalent: '148750.0000',
     maxBranches: 1,
     maxStaff: 10,
     includedAddOns: [
@@ -104,20 +104,20 @@ export const HYBRID_PLANS: HybridPlanDefinition[] = [
     ],
     includedLegacyModules: ['POS_BASIC'],
     highlights: [
-      'Semua fitur BASIC + Maksimal 10 Akun Staf (dengan hak akses RBAC ketat)',
+      'Semua fitur BASIC + Maksimal 10 Akun Staf (lebih hemat dibanding BASIC + PO + Inventori + CRM eceran Rp185rb)',
       'Sudah termasuk Purchase Order (PO Supplier), Hutang Tempo & Cetak PDF PO',
-      'Inventori Pro: Resep BOM, Satuan Bertingkat Dus/Pcs, Stock Opname Blind Count & Forecasting',
-      'Promo Diskon, Harga Grosir Bertingkat, Buku Piutang & Komisi Kapster',
-      'Deteksi Anti-Fraud Shift Kasir & Smart Upselling (0 Token AI)',
+      'Inventori Pro: Resep Bahan Baku, Satuan Bertingkat Dus/Pcs, Cek Fisik Stok & Prediksi Belanja',
+      'Promo Diskon, Harga Grosir Bertingkat, Buku Piutang & Komisi Pegawai',
+      'Pengawasan Selisih Shift Kasir + Biaya Operasional & Laporan Keuangan Harian',
     ],
     zeroAiTokenNote: '0 Biaya Token AI · Khusus Resto/Kedai cukup tambah Add-On QR Meja & KDS (+Rp45rb)',
   },
   {
     code: 'EXPERT',
     name: 'Paket EXPERT',
-    tagline: 'Akuntansi SAK EMKM/PSAK audit-ready & kepatuhan Pajak DJP 2026.',
-    monthlyPrice: '349000.0000',
-    annualMonthlyEquivalent: '296650.0000',
+    tagline: 'Lebih hemat Rp16rb-Rp116rb dari eceran: Akuntansi Pro SAK EMKM, Pajak DJP 2026 & Coretax, plus 20 staf.',
+    monthlyPrice: '279000.0000',
+    annualMonthlyEquivalent: '237150.0000',
     maxBranches: 1,
     maxStaff: 20,
     includedAddOns: [
@@ -132,11 +132,11 @@ export const HYBRID_PLANS: HybridPlanDefinition[] = [
     ],
     includedLegacyModules: ['POS_BASIC', 'ACCOUNTING_FULL', 'TAX_CORETAX'],
     highlights: [
-      'Semua fitur PRO + Maksimal 20 Akun Staf',
-      'Akuntansi Double-Entry Lengkap (Neraca SAK EMKM, Arus Kas, Perubahan Ekuitas & Rasio Keuangan)',
-      'Penyusutan Aset Tetap Garis Lurus Otomatis & Rekonsiliasi Pencairan Payment Gateway',
-      'Pajak DJP 2026 & Coretax (Tracker Bebas Rp500 Juta PP 20/2026 & NITKU 22-digit)',
-      'PPN DPP Nilai Lain 11/12 (PMK 131/2024), PB1 10%, PPh 21 TER, PPh 23 (2%) & PPh 4(2) (10%)',
+      'Semua fitur PRO + Maksimal 20 Akun Staf (lebih hemat dibanding PRO + Akuntansi Pro + Pajak eceran Rp295rb)',
+      'Akuntansi Double-Entry Lengkap (Neraca SAK EMKM, Arus Kas, Perubahan Ekuitas, Buku Besar & Rasio Keuangan)',
+      'Penyusutan Aset Tetap Garis Lurus Otomatis & Potongan PPh 21/23/4(2) pada Biaya Operasional',
+      'Pajak DJP 2026 & Coretax (Tracker Bebas Rp500 Juta PP 20/2026, NITKU 22-digit & Pajak Daerah Perda)',
+      'PPN DPP Nilai Lain 11/12 (PMK 131/2024), PB1/PBJT Daerah, PPh 21 TER, PPh 23 (2%) & PPh 4(2) (10%)',
     ],
     zeroAiTokenNote: '0 Biaya Token AI · Fitur QR Meja/KDS & Multi-Cabang opsional sebagai Add-On agar lebih hemat',
   },
@@ -163,7 +163,7 @@ export const ADDON_DEFINITIONS: AddOnDefinition[] = [
   },
   {
     code: 'ADDON_PRICING_SIMULATOR',
-    name: 'Simulasi Harga Jual Anti-Rugi & Ubah Harga Massal',
+    name: 'Simulasi Harga Jual & Ubah Harga Massal',
     shortLabel: 'Simulasi Harga',
     description:
       'Hitung harga jual ideal dengan memperhitungkan modal (HPP), biaya operasional, potongan QRIS/e-wallet, pajak, titik impas (BEP), plus ubah harga jual massal per kategori.',
@@ -176,7 +176,7 @@ export const ADDON_DEFINITIONS: AddOnDefinition[] = [
     shortLabel: 'PO Supplier',
     description:
       'Buat dokumen Purchase Order resmi ke supplier, cetak PDF PO, hitung ongkir masuk modal (landed cost), dan catat hutang tempo.',
-    monthlyPrice: '20000.0000',
+    monthlyPrice: '25000.0000',
     includedInPlans: ['PRO', 'EXPERT'],
   },
   {
@@ -278,8 +278,9 @@ export const ADDON_DEFINITIONS: AddOnDefinition[] = [
   },
 ];
 
-export const PRO_UPSELL_THRESHOLD = new Decimal('190000');
-export const BASIC_UPSELL_THRESHOLD = new Decimal('95000');
+export const BASIC_UPSELL_THRESHOLD = new Decimal('90000');
+export const PRO_UPSELL_THRESHOLD = new Decimal('169000');
+export const EXPERT_UPSELL_THRESHOLD = new Decimal('270000');
 
 export interface HybridPricingCalculation {
   planCode: SubscriptionPlanCode;
@@ -366,10 +367,13 @@ export function calculateHybridPricing(params: {
   let smartUpsellRecommendation: string | null = null;
   if (params.planCode === 'LITE' && planPlusNonAi.gt(BASIC_UPSELL_THRESHOLD)) {
     smartUpsellRecommendation =
-      'Lebih hemat pilih Paket BASIC Rp100.000/bln! Sudah langsung termasuk Pembayaran Non-Tunai, Cetak Struk Thermal & 3 Akun Staf.';
+      'Lebih hemat pilih Paket BASIC Rp95.000/bln! Sudah langsung termasuk Pembayaran Non-Tunai, Cetak Struk Thermal, Simulasi Harga & 3 Akun Staf.';
   } else if (params.planCode === 'BASIC' && planPlusNonAi.gt(PRO_UPSELL_THRESHOLD)) {
     smartUpsellRecommendation =
-      'Lebih hemat pilih Paket PRO Rp199.000/bln! Sudah mencakup PO Supplier, Inventori Pro, Promo/Harga Grosir/CRM, Anti-Fraud Kasir & 10 Staf.';
+      'Lebih hemat pilih Paket PRO Rp175.000/bln! Sudah mencakup PO Supplier, Inventori Pro, Promo/Harga Grosir/CRM, Pengawasan Shift Kasir & 10 Staf.';
+  } else if (params.planCode === 'PRO' && planPlusNonAi.gt(EXPERT_UPSELL_THRESHOLD)) {
+    smartUpsellRecommendation =
+      'Lebih hemat pilih Paket EXPERT Rp279.000/bln! Sudah langsung mencakup Akuntansi Pro SAK EMKM, Pajak DJP 2026 & Coretax, serta 20 Staf.';
   }
 
   return {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   ArrowLeft,
@@ -15,10 +15,14 @@ import {
   GraduationCap,
   Hammer,
   Home,
+  Landmark,
+  LocateFixed,
+  MapPin,
   Minus,
   PawPrint,
   Plus,
   Scissors,
+  Search,
   ShieldCheck,
   Shirt,
   ShoppingBag,
@@ -52,8 +56,15 @@ import {
 } from '../lib/verticals/vertical-registry';
 import {
   buildDefaultTenantRegionalTax,
+  describeNationalAndRegionalTaxSummary,
   getVerticalPbjtCategory,
 } from '../lib/tax/regional-tax-indonesia';
+import {
+  detectRegionFromCoordinates,
+  detectRegionFromLocationText,
+  lookupRegionalTaxRecommendations,
+  type RegionalTaxModuleSuggestion,
+} from '../lib/tax/regional-tax-lookup';
 import type {
   AddOnModuleCode,
   BillingCycle,
@@ -168,9 +179,13 @@ function parseInitialOnboardingQuery(): {
 }
 
 export function OnboardingPage() {
-  const { navigate, completeCustomerOnboarding, regionalTaxRegistry } = useApp();
+  const { navigate, completeCustomerOnboarding, regionalTaxRegistry, oauthPendingUser } = useApp();
 
   const initialQuery = useMemo(() => parseInitialOnboardingQuery(), []);
+  const isOAuthSource = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('source') === 'oauth';
+  }, []);
   const [step, setStep] = useState<StepNumber>(1);
   const [verticalGroupFilter, setVerticalGroupFilter] = useState<'ALL' | VerticalCategoryGroup>(
     'ALL'
@@ -204,11 +219,104 @@ export function OnboardingPage() {
   const [taxEntity, setTaxEntity] = useState<TaxEntityType>('WP_OP');
   const [regionCode, setRegionCode] = useState<string>('ID-NONE');
   const [applyRegionalTax, setApplyRegionalTax] = useState<boolean>(false);
+  const [customTaxName, setCustomTaxName] = useState<string>('');
+  const [customRegionalRatePct, setCustomRegionalRatePct] = useState<string>('');
+  const [locationSearchQuery, setLocationSearchQuery] = useState<string>('');
+  const [locationLookupNotice, setLocationLookupNotice] = useState<string>('');
+  const [appliedSuggestionId, setAppliedSuggestionId] = useState<string | null>(null);
+  const [gpsDetecting, setGpsDetecting] = useState<boolean>(false);
   const [isPkp, setIsPkp] = useState(false);
   const [npwp16, setNpwp16] = useState('');
   const [address, setAddress] = useState('');
   const [initialCapital, setInitialCapital] = useState('25000000');
   const [step3Error, setStep3Error] = useState('');
+
+  useEffect(() => {
+    if (!oauthPendingUser) return;
+    setEmail((prev) => prev || oauthPendingUser.email);
+    setFullName((prev) => prev || oauthPendingUser.fullName);
+  }, [oauthPendingUser]);
+
+  const regionalTaxLookup = useMemo(
+    () =>
+      lookupRegionalTaxRecommendations({
+        vertical,
+        regionCode,
+        taxEntity,
+        isPkp,
+        registry: regionalTaxRegistry,
+      }),
+    [vertical, regionCode, taxEntity, isPkp, regionalTaxRegistry]
+  );
+
+  const handleApplyLocationQuery = (query: string) => {
+    setLocationSearchQuery(query);
+    if (query.trim().length < 3) {
+      setLocationLookupNotice('');
+      return;
+    }
+    const detected = detectRegionFromLocationText(query, regionalTaxRegistry);
+    if (detected) {
+      setRegionCode(detected.region.regionCode);
+      const pbjtCat = getVerticalPbjtCategory(vertical);
+      setApplyRegionalTax(detected.region.regionCode !== 'ID-NONE' && pbjtCat !== 'NONE');
+      setLocationLookupNotice(
+        `Lokasi terdeteksi: ${detected.region.cityName} (${detected.region.province}) berdasarkan "${detected.matchedKeyword}".`
+      );
+    } else {
+      setLocationLookupNotice(
+        'Kota/kecamatan belum cocok otomatis. Silakan pilih kabupaten/kota terdekat di daftar domisili.'
+      );
+    }
+  };
+
+  const handleDetectGpsLocation = () => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setLocationLookupNotice('Browser tidak mendukung GPS otomatis. Ketik nama kota atau kecamatan Anda.');
+      return;
+    }
+    setGpsDetecting(true);
+    setLocationLookupNotice('Mendeteksi koordinat lokasi usaha...');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGpsDetecting(false);
+        const match = detectRegionFromCoordinates(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          regionalTaxRegistry
+        );
+        if (match) {
+          setRegionCode(match.region.regionCode);
+          const pbjtCat = getVerticalPbjtCategory(vertical);
+          setApplyRegionalTax(match.region.regionCode !== 'ID-NONE' && pbjtCat !== 'NONE');
+          setLocationLookupNotice(
+            `GPS berhasil mendeteksi wilayah terdekat: ${match.region.cityName} (${match.region.province}, ~${match.distanceKm} km).`
+          );
+        } else {
+          setLocationLookupNotice('Wilayah terdekat tidak ditemukan. Silakan pilih manual di daftar domisili.');
+        }
+      },
+      () => {
+        setGpsDetecting(false);
+        setLocationLookupNotice(
+          'Izin GPS ditolak atau tidak tersedia. Ketik nama kota/kecamatan Anda pada kolom pencarian lokasi.'
+        );
+      },
+      { timeout: 6000 }
+    );
+  };
+
+  const handleApplyTaxSuggestion = (s: RegionalTaxModuleSuggestion) => {
+    setApplyRegionalTax(s.presetConfig.applyRegionalTax);
+    setCustomTaxName(s.presetConfig.customTaxName ?? '');
+    if (s.presetConfig.customRateOverride) {
+      const pct = Number(s.presetConfig.customRateOverride) * 100;
+      setCustomRegionalRatePct(Number.isFinite(pct) ? String(pct) : '');
+    } else {
+      setCustomRegionalRatePct('');
+    }
+    setAppliedSuggestionId(s.id);
+  };
 
   const filteredVerticalOptions = useMemo(
     () =>
@@ -352,11 +460,16 @@ export function OnboardingPage() {
   const handleContinueToCustomization = (e: React.FormEvent) => {
     e.preventDefault();
     setStep3Error('');
-    if (!fullName.trim() || !email.trim() || !passwordDemo.trim() || !businessName.trim()) {
-      setStep3Error('Nama lengkap, email, kata sandi, dan nama usaha wajib diisi.');
+    const isUsingOAuthIdentity = Boolean(oauthPendingUser || isOAuthSource);
+    if (!fullName.trim() || !email.trim() || !businessName.trim()) {
+      setStep3Error('Nama lengkap, email, dan nama usaha wajib diisi.');
       return;
     }
-    if (passwordDemo.trim().length < 6) {
+    if (!isUsingOAuthIdentity && !passwordDemo.trim()) {
+      setStep3Error('Kata sandi login wajib diisi (minimal 6 karakter).');
+      return;
+    }
+    if (passwordDemo.trim() && passwordDemo.trim().length < 6) {
       setStep3Error('Kata sandi minimal 6 karakter.');
       return;
     }
@@ -386,6 +499,55 @@ export function OnboardingPage() {
     setNewCfLabel('');
   };
 
+  const parsedCustomRegionalRateDecimal = useMemo(() => {
+    const num = Number(customRegionalRatePct.replace(',', '.'));
+    if (!Number.isFinite(num) || num <= 0 || num > 100) return null;
+    return (num / 100).toFixed(4);
+  }, [customRegionalRatePct]);
+
+  const taxPreview = useMemo(() => {
+    const baseRegional = buildDefaultTenantRegionalTax(vertical, regionCode, regionalTaxRegistry);
+    const hasCustomLevy = regionCode !== 'ID-NONE' && parsedCustomRegionalRateDecimal !== null;
+    const draftRegional = {
+      ...baseRegional,
+      applyRegionalTax: regionCode !== 'ID-NONE' && (applyRegionalTax || hasCustomLevy),
+      customTaxName: customTaxName.trim() || null,
+      customRateOverride: parsedCustomRegionalRateDecimal,
+    };
+    return describeNationalAndRegionalTaxSummary({
+      vertical,
+      taxEntity,
+      isPkp,
+      regionalTax: draftRegional,
+      registry: regionalTaxRegistry,
+    });
+  }, [
+    applyRegionalTax,
+    customTaxName,
+    isPkp,
+    parsedCustomRegionalRateDecimal,
+    regionCode,
+    regionalTaxRegistry,
+    taxEntity,
+    vertical,
+  ]);
+
+  const postOnboardingRoute = useMemo(() => {
+    if (vertical === 'KOST_KONTRAKAN') return '/kost';
+    if (vertical === 'PETERNAKAN_PERTANIAN') return '/agro';
+    if (
+      vertical === 'RENTAL_KENDARAAN' ||
+      vertical === 'HOMESTAY_VILLA' ||
+      vertical === 'SEWA_GARASI' ||
+      vertical === 'BIMBEL_KURSUS_GYM' ||
+      vertical === 'SEWA_LAPANGAN' ||
+      vertical === 'LAUNDRY'
+    ) {
+      return '/operations';
+    }
+    return '/catalog';
+  }, [vertical]);
+
   const handleCompleteOnboarding = async () => {
     setFinishError('');
     if (!invoice || invoice.paymentStatus !== 'VERIFIED_PAID') {
@@ -393,9 +555,12 @@ export function OnboardingPage() {
       return;
     }
     const baseRegional = buildDefaultTenantRegionalTax(vertical, regionCode, regionalTaxRegistry);
+    const hasCustomLevy = regionCode !== 'ID-NONE' && parsedCustomRegionalRateDecimal !== null;
     const regionalTax = {
       ...baseRegional,
-      applyRegionalTax: regionCode !== 'ID-NONE' && applyRegionalTax,
+      applyRegionalTax: regionCode !== 'ID-NONE' && (applyRegionalTax || hasCustomLevy),
+      customTaxName: customTaxName.trim() || null,
+      customRateOverride: parsedCustomRegionalRateDecimal,
     };
     try {
       await completeCustomerOnboarding({
@@ -413,15 +578,15 @@ export function OnboardingPage() {
         address,
         receiptFooter,
         thermalPaperWidth,
-        autoPrintQrOrders,
-        tableCount: Number(tableCount) || 4,
+        autoPrintQrOrders: isFnb ? autoPrintQrOrders : false,
+        tableCount: isFnb ? Number(tableCount) || 4 : 0,
         initialCapital,
         menuDrafts: [],
         customFields,
         regionalTax,
         businessWhatsappNumber: phone.trim() || undefined,
       });
-      navigate('/catalog');
+      navigate(postOnboardingRoute);
     } catch (err) {
       setFinishError(err instanceof Error ? err.message : 'Gagal menyelesaikan setup akun.');
     }
@@ -848,12 +1013,18 @@ export function OnboardingPage() {
                   <p className="leading-snug">{pricing.smartUpsellRecommendation}</p>
                   <button
                     type="button"
-                    onClick={() => setPlanCode(planCode === 'LITE' ? 'BASIC' : 'PRO')}
+                    onClick={() =>
+                      setPlanCode(
+                        planCode === 'LITE' ? 'BASIC' : planCode === 'BASIC' ? 'PRO' : 'EXPERT'
+                      )
+                    }
                     className="font-semibold underline text-amber-900"
                   >
                     {planCode === 'LITE'
-                      ? 'Pindah ke Paket BASIC (Rp100.000/bln) →'
-                      : 'Pindah ke Paket PRO (Rp199.000/bln) →'}
+                      ? 'Pindah ke Paket BASIC (Rp95.000/bln) →'
+                      : planCode === 'BASIC'
+                      ? 'Pindah ke Paket PRO (Rp175.000/bln) →'
+                      : 'Pindah ke Paket EXPERT (Rp279.000/bln) →'}
                   </button>
                 </div>
               )}
@@ -1141,24 +1312,38 @@ export function OnboardingPage() {
                     id="onb-email"
                     type="email"
                     required
+                    readOnly={Boolean(oauthPendingUser)}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="nama@usahaku.id"
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg"
+                    className={`w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg ${
+                      oauthPendingUser ? 'bg-slate-100 text-slate-600' : 'bg-white'
+                    }`}
                   />
+                  {oauthPendingUser && (
+                    <p className="text-[11px] text-emerald-700 mt-1">
+                      Terhubung otomatis dengan akun Google: {oauthPendingUser.email}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label htmlFor="onb-password" className="block text-xs font-medium text-slate-700 mb-1">
-                    Kata Sandi Login *
+                    {oauthPendingUser || isOAuthSource
+                      ? 'Kata Sandi Cadangan (Opsional)'
+                      : 'Kata Sandi Login *'}
                   </label>
                   <input
                     id="onb-password"
                     type="password"
-                    required
+                    required={!oauthPendingUser && !isOAuthSource}
                     minLength={6}
                     value={passwordDemo}
                     onChange={(e) => setPasswordDemo(e.target.value)}
-                    placeholder="Minimal 6 karakter"
+                    placeholder={
+                      oauthPendingUser || isOAuthSource
+                        ? 'Opsional (sudah masuk dengan Google)'
+                        : 'Minimal 6 karakter'
+                    }
                     className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg"
                   />
                 </div>
@@ -1199,7 +1384,7 @@ export function OnboardingPage() {
 
                 <div>
                   <label htmlFor="onb-capital" className="block text-xs font-medium text-slate-700 mb-1">
-                    Modal Awal Kas &amp; Bank (Rp) — Jurnal Pembuka
+                    Modal Awal Kas &amp; Bank (Rp, Jurnal Pembuka)
                   </label>
                   <input
                     id="onb-capital"
@@ -1266,6 +1451,156 @@ export function OnboardingPage() {
                   />
                 </div>
 
+                {/* Layanan Deteksi Lokasi & Rekomendasi Pajak Daerah Otomatis */}
+                <div
+                  data-testid="onb-regional-tax-lookup"
+                  className="sm:col-span-2 rounded-xl border border-stone-200 bg-stone-50 p-4 space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
+                      <div>
+                        <p className="text-xs font-bold text-stone-900">
+                          Deteksi Lokasi &amp; Rekomendasi Pajak Daerah (Perda / UU HKPD)
+                        </p>
+                        <p className="text-[11px] text-stone-500">
+                          Ketik nama kota, kabupaten, atau kecamatan usaha Anda, atau klik Deteksi GPS agar sistem menyarankan modul pajak daerah dan pengecualian UMKM yang tepat.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="onb-gps-detect-btn"
+                      disabled={gpsDetecting}
+                      onClick={handleDetectGpsLocation}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-white hover:bg-emerald-50 border border-emerald-300 rounded-lg whitespace-nowrap shrink-0 disabled:opacity-60"
+                    >
+                      <LocateFixed className="w-3.5 h-3.5" strokeWidth={1.75} />
+                      <span>{gpsDetecting ? 'Mendeteksi...' : 'Deteksi Lokasi GPS'}</span>
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <Search
+                      className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                      strokeWidth={1.75}
+                    />
+                    <input
+                      type="text"
+                      data-testid="onb-location-lookup-input"
+                      value={locationSearchQuery}
+                      onChange={(e) => handleApplyLocationQuery(e.target.value)}
+                      placeholder="Ketik area usaha: misal Canggu, Tebet, Dago, Sleman, BSD, Malang..."
+                      className="w-full pl-8 pr-3 py-2 text-xs bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+
+                  {locationLookupNotice && (
+                    <p
+                      data-testid="onb-location-lookup-notice"
+                      className="text-[11px] font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5"
+                    >
+                      {locationLookupNotice}
+                    </p>
+                  )}
+
+                  {/* Rekomendasi Modul Pajak Daerah & Pengecualian UMKM */}
+                  <div data-testid="onb-regional-tax-suggestions" className="space-y-2">
+                    <p className="text-[11px] font-semibold text-stone-700">
+                      Pajak Nasional: {regionalTaxLookup.nationalSummary.label} · Wilayah:{' '}
+                      {regionalTaxLookup.region.cityName}
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      {regionalTaxLookup.suggestions.map((sug) => {
+                        const isApplied = appliedSuggestionId === sug.id;
+                        return (
+                          <div
+                            key={sug.id}
+                            data-testid={`onb-tax-suggestion-${sug.id}`}
+                            className={`rounded-lg border p-3 bg-white flex flex-col justify-between gap-2.5 ${
+                              isApplied
+                                ? 'border-emerald-500 ring-1 ring-emerald-500/30'
+                                : 'border-stone-200'
+                            }`}
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-xs font-bold text-stone-900 leading-snug">
+                                  {sug.title}
+                                </p>
+                                <span
+                                  className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                                    sug.badge === 'Pengecualian UMKM' || sug.badge === 'Disarankan'
+                                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                      : 'bg-amber-50 text-amber-800 border border-amber-200'
+                                  }`}
+                                >
+                                  {sug.ratePercentLabel}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-stone-600 leading-relaxed">
+                                {sug.summary}
+                              </p>
+                              <p className="text-[10px] text-stone-500">
+                                {sug.accountingImpact}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              data-testid={`onb-apply-tax-suggestion-${sug.id}`}
+                              onClick={() => handleApplyTaxSuggestion(sug)}
+                              className={`w-full py-1.5 px-2.5 text-[11px] font-semibold rounded-md transition-colors ${
+                                isApplied
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-stone-900 hover:bg-stone-800 text-white'
+                              }`}
+                            >
+                              {isApplied
+                                ? 'Diterapkan ke Mesin Akuntansi'
+                                : 'Terapkan ke Akuntansi Otomatis'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  data-testid="onb-regional-tax-preview"
+                  className="sm:col-span-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 space-y-2 text-xs"
+                >
+                  <div className="flex items-center gap-2 font-semibold text-emerald-950">
+                    <Landmark className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
+                    <span>Pratinjau Pajak Otomatis (Nasional DJP 2026 &amp; Perda Daerah)</span>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-2.5 text-[11px]">
+                    <div className="rounded-lg bg-white/90 border border-emerald-200/80 p-2.5 space-y-0.5">
+                      <p className="font-semibold text-stone-900">
+                        Pajak Nasional: {taxPreview.nationalLabel}
+                      </p>
+                      <p className="text-stone-600 leading-relaxed">{taxPreview.nationalDetail}</p>
+                    </div>
+                    <div className="rounded-lg bg-white/90 border border-emerald-200/80 p-2.5 space-y-0.5">
+                      <p className="font-semibold text-stone-900">
+                        Pajak Daerah ({taxPreview.regionalResolution.regionName}):{' '}
+                        <span className="font-mono tabular-nums text-emerald-700">
+                          {taxPreview.regionalResolution.ratePercentLabel}
+                        </span>
+                      </p>
+                      <p className="text-stone-700 font-medium">
+                        {taxPreview.regionalResolution.taxLabel}
+                      </p>
+                      <p className="text-stone-500 leading-relaxed">
+                        {taxPreview.regionalResolution.perdaReference} · Batas bebas UMKM:{' '}
+                        <span className="font-mono tabular-nums">
+                          {taxPreview.monthlyThresholdRupiah}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 {regionCode !== 'ID-NONE' && getVerticalPbjtCategory(vertical) !== 'NONE' && (
                   <label className="sm:col-span-2 inline-flex items-start gap-2 text-xs text-slate-700 cursor-pointer bg-slate-50 border border-slate-200 rounded-lg p-3">
                     <input
@@ -1280,6 +1615,57 @@ export function OnboardingPage() {
                       UMKM.
                     </span>
                   </label>
+                )}
+
+                {regionCode !== 'ID-NONE' && (
+                  <div
+                    data-testid="onb-custom-regional-tax"
+                    className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-2.5"
+                  >
+                    <div>
+                      <p className="text-xs font-semibold text-slate-900">
+                        Pajak / Retribusi Daerah Tambahan Khusus Perda Setempat (Opsional)
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Isi jika jenis usaha Anda dikenakan pungutan Perda di luar pajak nasional/restoran (misal: PBJT Kost &gt;10 kamar, Retribusi Parkir/Kebersihan, atau tarif Perda khusus kota Anda).
+                      </p>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="onb-custom-tax-name" className="block text-[11px] font-medium text-slate-700 mb-1">
+                          Nama Pungutan Daerah (Opsional)
+                        </label>
+                        <input
+                          id="onb-custom-tax-name"
+                          type="text"
+                          value={customTaxName}
+                          onChange={(e) => setCustomTaxName(e.target.value)}
+                          placeholder="Contoh: PBJT Kost (>10 Kamar) / Retribusi Daerah"
+                          className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="onb-custom-tax-rate" className="block text-[11px] font-medium text-slate-700 mb-1">
+                          Tarif Tambahan Daerah (%)
+                        </label>
+                        <input
+                          id="onb-custom-tax-rate"
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.5}
+                          value={customRegionalRatePct}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setCustomRegionalRatePct(v);
+                            if (Number(v) > 0) setApplyRegionalTax(true);
+                          }}
+                          placeholder="0 (kosongkan jika mengikuti standar Perda)"
+                          className="w-full px-3 py-2 text-xs font-mono tabular-nums bg-white border border-slate-200 rounded-lg"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 <label className="sm:col-span-2 inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
@@ -1351,7 +1737,9 @@ export function OnboardingPage() {
             <div className="grid md:grid-cols-2 gap-6">
               <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
                 <h2 className="text-sm font-bold text-slate-900">
-                  Pengaturan Operasional, Meja QR &amp; Struk
+                  {isFnb
+                    ? 'Pengaturan Operasional, Meja QR & Struk'
+                    : 'Pengaturan Operasional & Struk Pembayaran'}
                 </h2>
                 <div className="grid grid-cols-2 gap-3">
                   {isFnb && (
@@ -1370,7 +1758,7 @@ export function OnboardingPage() {
                       />
                     </div>
                   )}
-                  <div>
+                  <div className={isFnb ? '' : 'col-span-2'}>
                     <label htmlFor="onb-paper" className="block text-xs font-medium text-slate-700 mb-1">
                       Kertas Thermal
                     </label>
@@ -1397,15 +1785,17 @@ export function OnboardingPage() {
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg"
                   />
                 </div>
-                <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autoPrintQrOrders}
-                    onChange={(e) => setAutoPrintQrOrders(e.target.checked)}
-                    className="rounded border-slate-300 text-emerald-600"
-                  />
-                  <span>Aktifkan Auto-Print saat pesanan QR Meja lunas</span>
-                </label>
+                {isFnb && (
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoPrintQrOrders}
+                      onChange={(e) => setAutoPrintQrOrders(e.target.checked)}
+                      className="rounded border-slate-300 text-emerald-600"
+                    />
+                    <span>Aktifkan Auto-Print saat pesanan QR Meja lunas</span>
+                  </label>
+                )}
               </section>
 
               <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
@@ -1477,7 +1867,13 @@ export function OnboardingPage() {
                   Semua Siap! Akun &amp; Buku Besar SAK EMKM Siap Diaktifkan
                 </p>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Toko dimulai dengan katalog kosong (0 item). Anda langsung diarahkan ke Katalog &amp; Inventori untuk mulai mengisi barang/menu.
+                  {postOnboardingRoute === '/kost'
+                    ? 'Anda langsung diarahkan ke Kelola Kost & Kontrakan untuk menambahkan daftar kamar dan penghuni pertama.'
+                    : postOnboardingRoute === '/agro'
+                    ? 'Anda langsung diarahkan ke Operasional Peternakan & Pertanian untuk mencatat kandang/lahan pertama.'
+                    : postOnboardingRoute === '/operations'
+                    ? 'Anda langsung diarahkan ke ruang Operasional Utama sesuai jenis usaha Anda.'
+                    : 'Toko dimulai dengan katalog kosong (0 item). Anda langsung diarahkan ke Katalog & Inventori untuk mulai mengisi barang/menu.'}
                 </p>
               </div>
               <button
@@ -1487,7 +1883,15 @@ export function OnboardingPage() {
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 py-3 px-6 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>Selesaikan Setup &amp; Buka Katalog Toko</span>
+                <span>
+                  {postOnboardingRoute === '/kost'
+                    ? 'Selesaikan Setup & Buka Kelola Kost'
+                    : postOnboardingRoute === '/agro'
+                    ? 'Selesaikan Setup & Buka Operasional Agro'
+                    : postOnboardingRoute === '/operations'
+                    ? 'Selesaikan Setup & Buka Operasional Usaha'
+                    : 'Selesaikan Setup & Buka Katalog Toko'}
+                </span>
               </button>
             </div>
           </div>

@@ -11,6 +11,7 @@ const IV_LENGTH = 12; // 96-bit recommended IV for GCM
 
 function deriveEncryptionKey(): Buffer {
   const rawSecret =
+    process.env.PAYMENT_KEY_ENCRYPTION_SECRET ||
     process.env.PAYMENT_CREDENTIAL_ENCRYPTION_KEY ||
     process.env.APP_ENCRYPTION_KEY ||
     'kasirakun-umkm-default-dev-aes256-key-replace-in-production';

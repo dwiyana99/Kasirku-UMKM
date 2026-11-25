@@ -12,6 +12,7 @@ import { AppShell } from '../components/AppShell';
 import { ModalShell } from '../components/ui/ModalShell';
 import { useApp } from '../context/AppContext';
 import { formatRupiah } from '../lib/pos/checkout-service';
+import { formatDateIndo } from '../lib/date/indonesia-date';
 import type { AgroBatch, AgroBatchUsage } from '../types/domain';
 
 export function AgroManagementPage() {
@@ -233,42 +234,42 @@ export function AgroManagementPage() {
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <p className="text-xs text-slate-500">Siklus / Blok Aktif</p>
-            <p className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
+          <div className="bg-white border border-stone-200 rounded-xl p-5">
+            <p className="text-xs text-stone-500">Siklus / Blok Aktif</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-stone-900 mt-1">
               {kpi.activeCount}
             </p>
-            <p className="text-xs text-slate-500 mt-1">Sedang berjalan &amp; mengakumulasi WIP</p>
+            <p className="text-xs text-stone-500 mt-1">Sedang berjalan dan mencatat biaya pakan/pupuk</p>
           </div>
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <p className="text-xs text-slate-500">Total Aset Biologis / WIP (1109)</p>
+          <div className="bg-white border border-stone-200 rounded-xl p-5">
+            <p className="text-xs text-stone-500">Total Modal Siklus Berjalan</p>
             <p className="text-2xl font-bold font-mono tabular-nums text-emerald-700 mt-1">
               {formatRupiah(kpi.wipTotal)}
             </p>
-            <p className="text-xs text-slate-500 mt-1">Akumulasi pakan, bibit, pupuk &amp; upah</p>
+            <p className="text-xs text-stone-500 mt-1">Akumulasi pakan, bibit, pupuk &amp; upah</p>
           </div>
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <p className="text-xs text-slate-500">Siklus Sudah Panen</p>
-            <p className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
+          <div className="bg-white border border-stone-200 rounded-xl p-5">
+            <p className="text-xs text-stone-500">Siklus Sudah Panen</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-stone-900 mt-1">
               {kpi.harvestedCount}
             </p>
-            <p className="text-xs text-slate-500 mt-1">Stok otomatis masuk ke gudang hasil panen</p>
+            <p className="text-xs text-stone-500 mt-1">Stok otomatis masuk ke gudang hasil panen</p>
           </div>
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <p className="text-xs text-slate-500">Rata-rata Mortalitas / Susut</p>
-            <p className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
+          <div className="bg-white border border-stone-200 rounded-xl p-5">
+            <p className="text-xs text-stone-500">Rata-rata Susut / Kematian</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-stone-900 mt-1">
               {kpi.mortalityRatePct}%
             </p>
-            <p className="text-xs text-slate-500 mt-1">Diperhitungkan pada HPP per unit panen</p>
+            <p className="text-xs text-stone-500 mt-1">Diperhitungkan pada harga pokok per unit panen</p>
           </div>
         </div>
 
         {/* Filter */}
-        <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+        <div className="inline-flex items-center gap-1 p-1 bg-stone-100 rounded-lg">
           {(
             [
               { id: 'ALL', label: `Semua Siklus (${batches.length})` },
-              { id: 'ACTIVE', label: 'Aktif (WIP)' },
+              { id: 'ACTIVE', label: 'Sedang Berjalan' },
               { id: 'HARVESTED', label: 'Selesai Panen' },
             ] as const
           ).map((f) => (
@@ -278,8 +279,8 @@ export function AgroManagementPage() {
               onClick={() => setStatusFilter(f.id)}
               className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors ${
                 statusFilter === f.id
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-white text-stone-900 shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
               }`}
             >
               {f.label}
@@ -308,23 +309,23 @@ export function AgroManagementPage() {
                 <div
                   key={batch.id}
                   data-testid={`agro-batch-card-${batch.id}`}
-                  className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5"
+                  className="bg-white border border-stone-200 rounded-xl p-5 sm:p-6 space-y-5"
                 >
                   <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                     <div className="space-y-1">
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-stone-500">
                         {batch.agroType === 'TERNAK' ? 'Peternakan' : 'Pertanian'} · Mulai{' '}
-                        <span className="font-mono">{batch.startDate}</span> ·{' '}
+                        <strong className="text-stone-700">{formatDateIndo(batch.startDate)}</strong> ·{' '}
                         <span
                           className={`font-semibold ${
-                            batch.status === 'ACTIVE' ? 'text-emerald-700' : 'text-slate-700'
+                            batch.status === 'ACTIVE' ? 'text-emerald-700' : 'text-stone-700'
                           }`}
                         >
-                          {batch.status === 'ACTIVE' ? 'Aktif (Akumulasi WIP)' : 'Sudah Dipanen'}
+                          {batch.status === 'ACTIVE' ? 'Sedang Berjalan' : 'Sudah Dipanen'}
                         </span>
                       </p>
-                      <h3 className="text-lg font-bold text-slate-900">{batch.name}</h3>
-                      {batch.notes && <p className="text-xs text-slate-500">{batch.notes}</p>}
+                      <h3 className="text-lg font-bold text-stone-900">{batch.name}</h3>
+                      {batch.notes && <p className="text-xs text-stone-500">{batch.notes}</p>}
                     </div>
 
                     {batch.status === 'ACTIVE' && (
@@ -385,24 +386,24 @@ export function AgroManagementPage() {
                               const val = e.target.value;
                               if (val !== '') updateAgroMortality(batch.id, val);
                             }}
-                            className="w-20 px-2 py-1 text-xs font-mono border border-slate-200 rounded-md"
+                            className="w-20 px-2 py-1 text-xs font-mono border border-stone-200 rounded-md"
                           />
-                          <span className="text-xs text-slate-500">{batch.unit}</span>
+                          <span className="text-xs text-stone-500">{batch.unit}</span>
                         </div>
                       ) : (
-                        <p className="text-sm font-bold font-mono tabular-nums text-slate-900 mt-0.5">
+                        <p className="text-sm font-bold font-mono tabular-nums text-stone-900 mt-0.5">
                           {new Decimal(batch.mortalityQty).toDecimalPlaces(0).toString()} {batch.unit}
                         </p>
                       )}
                     </div>
                     <div>
-                      <p className="text-xs text-slate-500">Estimasi Hidup / Aktif</p>
-                      <p className="text-sm font-bold font-mono tabular-nums text-slate-900 mt-0.5">
+                      <p className="text-xs text-stone-500">Estimasi Hidup / Aktif</p>
+                      <p className="text-sm font-bold font-mono tabular-nums text-stone-900 mt-0.5">
                         {liveQty.toDecimalPlaces(0).toString()} {batch.unit}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-slate-500">Total Biaya Terakumulasi (WIP)</p>
+                      <p className="text-xs text-stone-500">Total Modal Siklus Berjalan</p>
                       <p className="text-sm font-bold font-mono tabular-nums text-emerald-700 mt-0.5">
                         {formatRupiah(batch.accumulatedCost)}
                       </p>
@@ -414,7 +415,7 @@ export function AgroManagementPage() {
                     <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-wrap items-center justify-between gap-3 text-xs">
                       <div>
                         <p className="font-bold text-emerald-900">
-                          Hasil Panen Tercatat ({lastHarvest.harvestDate}) → {lastHarvest.targetProductName}
+                          Hasil Panen Tercatat ({formatDateIndo(lastHarvest.harvestDate)}) → {lastHarvest.targetProductName}
                         </p>
                         <p className="text-emerald-800 mt-0.5 font-mono tabular-nums">
                           Panen Bersih: {new Decimal(lastHarvest.netHarvestQty).toDecimalPlaces(2).toString()}{' '}
@@ -422,7 +423,7 @@ export function AgroManagementPage() {
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-[11px] text-emerald-700">HPP Otomatis per {lastHarvest.unit}</p>
+                        <p className="text-[11px] text-emerald-700">Modal per {lastHarvest.unit}</p>
                         <p className="text-base font-bold font-mono tabular-nums text-emerald-950">
                           {formatRupiah(lastHarvest.unitHppComputed)}
                         </p>
@@ -432,31 +433,37 @@ export function AgroManagementPage() {
 
                   {/* Recent Usages Table */}
                   {batch.usages.length > 0 && (
-                    <div className="pt-3 border-t border-slate-100">
-                      <p className="text-xs font-semibold text-slate-600 mb-2">
+                    <div className="pt-3 border-t border-stone-100">
+                      <p className="text-xs font-semibold text-stone-600 mb-2">
                         Riwayat Pemakaian Pakan / Bibit / Pupuk / Upah ({batch.usages.length})
                       </p>
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs text-left">
                           <thead>
-                            <tr className="text-[11px] text-slate-400 border-b border-slate-100">
+                            <tr className="text-[11px] text-stone-500 border-b border-stone-100">
                               <th className="py-1.5 pr-3">Tanggal</th>
                               <th className="py-1.5 pr-3">Kategori</th>
                               <th className="py-1.5 pr-3">Keterangan</th>
                               <th className="py-1.5 pr-3 text-right">Qty</th>
-                              <th className="py-1.5 text-right">Total Biaya (Dr 1109)</th>
+                              <th className="py-1.5 text-right">Total Biaya</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-slate-100">
+                          <tbody className="divide-y divide-stone-100">
                             {batch.usages.slice(0, 6).map((u) => (
                               <tr key={u.id}>
-                                <td className="py-2 pr-3 font-mono text-slate-500">{u.usageDate}</td>
-                                <td className="py-2 pr-3 font-medium text-slate-700">{u.usageCategory}</td>
-                                <td className="py-2 pr-3 text-slate-800">{u.description}</td>
-                                <td className="py-2 pr-3 text-right font-mono tabular-nums text-slate-700">
+                                <td className="py-2 pr-3 font-medium text-stone-600">
+                                  {formatDateIndo(u.usageDate)}
+                                </td>
+                                <td className="py-2 pr-3 font-medium text-stone-700">
+                                  {u.usageCategory === 'TENAGA_KERJA'
+                                    ? 'Tenaga Kerja'
+                                    : u.usageCategory.charAt(0) + u.usageCategory.slice(1).toLowerCase()}
+                                </td>
+                                <td className="py-2 pr-3 text-stone-800">{u.description}</td>
+                                <td className="py-2 pr-3 text-right font-mono tabular-nums text-stone-700">
                                   {new Decimal(u.qtyUsed).toDecimalPlaces(2).toString()} {u.unit}
                                 </td>
-                                <td className="py-2 text-right font-mono font-semibold tabular-nums text-slate-900">
+                                <td className="py-2 text-right font-mono font-semibold tabular-nums text-stone-900">
                                   {formatRupiah(u.totalCost)}
                                 </td>
                               </tr>

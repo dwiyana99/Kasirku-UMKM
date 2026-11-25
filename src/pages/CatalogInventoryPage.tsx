@@ -527,7 +527,7 @@ export function CatalogInventoryPage({
           open={pricingSimOpen}
           onClose={() => setPricingSimOpen(false)}
           headerId="pricing-simulator-modal-title"
-          title="Simulasi Harga Jual & Cek Anti-Rugi"
+          title="Simulasi Harga Jual & Cek Untung Bersih"
           subtitle="Hitung harga jual aman dari modal beli (HPP), biaya operasional, potongan QRIS, dan pajak."
           maxWidthClass="max-w-2xl"
         >

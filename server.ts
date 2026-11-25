@@ -49,10 +49,28 @@ import {
   validatePostgresConnectionUri,
   validateStorageTargetConfig,
 } from './src/lib/infra/pg-migration-builder.ts';
+import { toNodeHandler, fromNodeHeaders } from 'better-auth/node';
 import { mountPaymentAndWaRoutes } from './src/server/payment-routes.ts';
 import { mountMasterEnvSecretsRoutes } from './src/server/env-secrets-routes.ts';
 import { mountLandingPageRoutes } from './src/server/landing-routes.ts';
+import { mountUploadRoutes } from './src/server/upload-routes.ts';
+import { mountMasterAccountsRoutes } from './src/server/master-accounts-routes.ts';
 import { createSubdomainRewriteMiddleware } from './src/middleware.ts';
+import {
+  getAuthConfigurationStatus,
+  getBetterAuthInstance,
+  getCurrentSession,
+} from './src/lib/auth.ts';
+import {
+  buildInitialMasterAdminAccounts,
+  hashAccountPassword,
+  resolveBetterAuthLoginTarget,
+  sanitizeCustomerForApi,
+  verifyAccountPassword,
+} from './src/lib/auth/account-management.ts';
+import { syncUserAccountToPostgres } from './src/lib/auth/postgres-sync.ts';
+import { checkDatabaseHealth, getPrismaClient } from './src/lib/prisma.ts';
+import { isS3StorageConfigured } from './src/lib/storage/s3-client.ts';
 import type {
   AddOnModuleCode,
   AiInsightCacheRecord,
@@ -345,6 +363,65 @@ const subscriptionWebhookSchema = z.object({
 
 async function startServer() {
   const app = express();
+
+  // Seed Master Admin accounts directory with hashed credentials if empty
+  if (tenantDb.listMasterAccounts().length === 0) {
+    const initialMasters = await buildInitialMasterAdminAccounts({
+      primaryEmail: MASTER_LOGIN_EMAIL,
+      primaryPassword: MASTER_LOGIN_PASSWORD,
+      secondaryOwnerEmail: 'dwiyana99@gmail.com',
+    });
+    tenantDb.saveMasterAccounts(initialMasters);
+  }
+
+  // Mount Better Auth handler BEFORE express.json() for Better Auth specific paths,
+  // preserving existing `/api/auth/login`, `/api/auth/master-login`, `/api/auth/register-onboarded`,
+  // `/api/auth/demo-*`, and `/api/auth/magic-demo/*` endpoints intact.
+  const BETTER_AUTH_PREFIXES = [
+    '/api/auth/sign-in',
+    '/api/auth/sign-up',
+    '/api/auth/sign-out',
+    '/api/auth/get-session',
+    '/api/auth/callback',
+    '/api/auth/error',
+    '/api/auth/ok',
+    '/api/auth/list-sessions',
+    '/api/auth/revoke-session',
+    '/api/auth/revoke-sessions',
+    '/api/auth/link-social',
+    '/api/auth/verify-email',
+    '/api/auth/forget-password',
+    '/api/auth/reset-password',
+  ];
+  app.use((req, res, next) => {
+    const reqPath = req.path || '';
+    const isBetterAuthPath = BETTER_AUTH_PREFIXES.some(
+      (prefix) => reqPath === prefix || reqPath.startsWith(`${prefix}/`),
+    );
+    if (!isBetterAuthPath) {
+      next();
+      return;
+    }
+
+    const authInstance = getBetterAuthInstance();
+    if (!authInstance) {
+      return res.status(503).json({
+        error:
+          'Layanan Better Auth (PostgreSQL Neon) belum terhubung. Atur DATABASE_URL dan BETTER_AUTH_SECRET di Vercel atau Master Admin > Pengaturan API.',
+        code: 'BETTER_AUTH_DB_UNCONFIGURED',
+      });
+    }
+
+    const handler = toNodeHandler(authInstance);
+    void Promise.resolve(handler(req, res)).catch(() => {
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: 'Terjadi gangguan pada layanan autentikasi. Silakan coba lagi.',
+        });
+      }
+    });
+  });
+
   app.use(
     express.json({
       limit: '10mb',
@@ -354,29 +431,268 @@ async function startServer() {
     })
   );
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'kasirakun-umkm', timestamp: new Date().toISOString() });
+  // Healthcheck endpoint for Vercel, Neon PostgreSQL, Universal S3, and Better Auth verification
+  app.get('/api/health', async (_req, res) => {
+    const dbHealth = await checkDatabaseHealth();
+    const authStatus = getAuthConfigurationStatus();
+    const storageConfigured = isS3StorageConfigured();
+    res.status(200).json({
+      status: dbHealth.status === 'error' ? 'degraded' : 'ok',
+      database: dbHealth.status,
+      ...(typeof dbHealth.latencyMs === 'number' ? { databaseLatencyMs: dbHealth.latencyMs } : {}),
+      storageConfigured,
+      googleAuthConfigured: authStatus.googleAuthConfigured,
+      betterAuthConfigured: authStatus.betterAuthReady,
+      service: 'kasirakun-umkm',
+      timestamp: new Date().toISOString(),
+    });
   });
 
-  // 0a. Master Admin Login (Signed HMAC-SHA256 Session Token + Full Multi-Scope View)
-  app.post('/api/auth/master-login', (req, res) => {
+  // Public non-sensitive auth capability check for Login & Register pages
+  app.get('/api/auth/config-status', (_req, res) => {
+    const authStatus = getAuthConfigurationStatus();
+    return res.status(200).json({
+      googleAuthConfigured: authStatus.googleAuthConfigured,
+      betterAuthSecretConfigured: authStatus.betterAuthSecretConfigured,
+      databaseConfigured: authStatus.databaseConfigured,
+      betterAuthReady: authStatus.betterAuthReady,
+      storageConfigured: isS3StorageConfigured(),
+    });
+  });
+
+  // Unified current session reader (Better Auth cookie OR existing HMAC Bearer token)
+  app.get('/api/auth/me', async (req, res) => {
+    const current = await getCurrentSession(req, extractSessionFromRequest);
+    if (!current) {
+      return res.status(200).json({ authenticated: false });
+    }
+    return res.status(200).json({
+      authenticated: true,
+      user: current,
+    });
+  });
+
+  // Exchange an active Better Auth cookie session (Email/Password or Google OAuth via Neon PostgreSQL)
+  // into a scoped KasirAkun workspace session + HMAC Bearer token.
+  app.get('/api/auth/better-auth/exchange', async (req, res) => {
+    const authInstance = getBetterAuthInstance();
+    if (!authInstance) {
+      return res.status(200).json({ authenticated: false, betterAuthReady: false });
+    }
+    try {
+      const baSession = await authInstance.api.getSession({
+        headers: fromNodeHeaders(req.headers),
+      });
+      if (!baSession?.user?.email) {
+        return res.status(200).json({ authenticated: false, betterAuthReady: true });
+      }
+
+      const emailNorm = baSession.user.email.trim().toLowerCase();
+      const prismaClient = getPrismaClient();
+      const dbUser = prismaClient
+        ? await prismaClient.user.findUnique({
+            where: { email: emailNorm },
+            select: { isSuperAdmin: true, accountStatus: true, fullName: true },
+          })
+        : null;
+
+      // Determine whether user signed in via Google OAuth or credential
+      let authMethod: 'GOOGLE' | 'EMAIL' = 'EMAIL';
+      if (prismaClient) {
+        const googleAcct = await prismaClient.authAccount.findFirst({
+          where: { userId: baSession.user.id, providerId: 'google' },
+          select: { id: true },
+        });
+        if (googleAcct) {
+          authMethod = 'GOOGLE';
+        }
+      }
+
+      const masterAccounts = tenantDb.listMasterAccounts();
+      const customer = tenantDb.findCustomerByEmail(emailNorm);
+      const staffMatch = customer ? null : tenantDb.findStaffByEmail(emailNorm);
+
+      const resolution = resolveBetterAuthLoginTarget({
+        email: emailNorm,
+        authMethod,
+        masterAccounts,
+        customer,
+        staffMatch,
+        isPostgresSuperAdmin: Boolean(dbUser?.isSuperAdmin),
+      });
+
+      if (!resolution.allowed) {
+        return res.status(403).json({
+          authenticated: false,
+          error: resolution.error || 'Akses akun ditolak.',
+        });
+      }
+
+      if (resolution.targetRole === 'MASTER_ADMIN') {
+        const masterAcc = resolution.masterAccount;
+        if (masterAcc) {
+          tenantDb.upsertMasterAccount({
+            ...masterAcc,
+            lastLoginAt: new Date().toISOString(),
+          });
+        }
+        const token = signSessionToken({
+          role: 'MASTER_ADMIN',
+          accountScope: 'REAL',
+          ownerAccountId: masterAcc?.id || 'master-admin',
+          email: emailNorm,
+          allowedTenantIds: [],
+          issuedAt: Date.now(),
+        });
+        return res.status(200).json({
+          authenticated: true,
+          role: 'MASTER_ADMIN',
+          accountScope: 'REAL',
+          authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
+          email: emailNorm,
+          fullName: masterAcc?.fullName || dbUser?.fullName || baSession.user.name || 'Master Admin',
+          phone: masterAcc?.phone || '',
+          token,
+          customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
+          workspaces: tenantDb.listAllWorkspaces(),
+        });
+      }
+
+      if (resolution.targetRole === 'CUSTOMER' && resolution.customer) {
+        const cust = resolution.customer;
+        const scope = resolveAccountScope(cust);
+        const workspaces = tenantDb.listWorkspacesForOwner(scope, cust.id);
+        const token = signSessionToken({
+          role: 'CUSTOMER',
+          accountScope: scope,
+          ownerAccountId: cust.id,
+          email: cust.email,
+          allowedTenantIds: cust.tenantIds,
+          issuedAt: Date.now(),
+        });
+        return res.status(200).json({
+          authenticated: true,
+          role: 'CUSTOMER',
+          accountScope: scope,
+          authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
+          token,
+          customer: sanitizeCustomerForApi(cust),
+          workspaces,
+        });
+      }
+
+      if (resolution.targetRole === 'STAFF' && resolution.staffMatch) {
+        const hit = resolution.staffMatch;
+        const token = signSessionToken({
+          role: 'STAFF',
+          accountScope: hit.scope,
+          ownerAccountId: hit.ownerAccountId,
+          email: hit.staff.email,
+          allowedTenantIds: [hit.workspace.tenant.id],
+          staffId: hit.staff.id,
+          staffTenantId: hit.workspace.tenant.id,
+          issuedAt: Date.now(),
+        });
+        return res.status(200).json({
+          authenticated: true,
+          role: 'STAFF',
+          accountScope: hit.scope,
+          authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
+          token,
+          staff: hit.staff,
+          ownerAccount: hit.ownerAccount ? sanitizeCustomerForApi(hit.ownerAccount) : null,
+          workspaces: [hit.workspace],
+        });
+      }
+
+      return res.status(200).json({
+        authenticated: true,
+        needsOnboarding: true,
+        authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
+        profile: {
+          userId: baSession.user.id,
+          email: emailNorm,
+          fullName: dbUser?.fullName || baSession.user.name || emailNorm.split('@')[0],
+          image: baSession.user.image ?? null,
+        },
+      });
+    } catch {
+      return res.status(200).json({ authenticated: false, betterAuthReady: true });
+    }
+  });
+
+  // 0a. Master Admin Login (Verifies scrypt hash from Master Accounts directory + PostgreSQL fallback)
+  app.post('/api/auth/master-login', async (req, res) => {
     const parsed = masterLoginSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Format email atau kata sandi tidak valid.' });
     }
     const emailNorm = parsed.data.email.trim().toLowerCase();
-    const isValidMaster =
-      (emailNorm === MASTER_LOGIN_EMAIL.toLowerCase() || emailNorm === 'dwiyana99@gmail.com') &&
-      parsed.data.password === MASTER_LOGIN_PASSWORD;
+    const password = parsed.data.password;
 
-    if (!isValidMaster) {
+    const masterAcc = tenantDb.findMasterAccountByEmail(emailNorm);
+    let verified = false;
+    let displayName = 'Master Pemilik KasirAkun';
+    let masterPhone = '';
+    let masterId = 'master-admin';
+
+    if (masterAcc) {
+      if (masterAcc.status !== 'ACTIVE') {
+        return res.status(403).json({
+          error: 'Akun Master Admin ini sedang ditangguhkan. Hubungi pengelola utama.',
+        });
+      }
+      if (!masterAcc.allowPasswordLogin) {
+        return res.status(403).json({
+          error: 'Login kata sandi dinonaktifkan untuk akun ini. Gunakan Masuk dengan Google.',
+        });
+      }
+      verified = await verifyAccountPassword(password, masterAcc.passwordHash);
+      displayName = masterAcc.fullName;
+      masterPhone = masterAcc.phone;
+      masterId = masterAcc.id;
+    } else {
+      // Fallback check against PostgreSQL Better Auth user if created directly in Neon DB
+      const prismaClient = getPrismaClient();
+      if (prismaClient) {
+        try {
+          const pgMaster = await prismaClient.user.findUnique({
+            where: { email: emailNorm },
+            include: {
+              authAccounts: {
+                where: { providerId: 'credential' },
+                select: { password: true },
+              },
+            },
+          });
+          if (pgMaster?.isSuperAdmin && pgMaster.accountStatus === 'ACTIVE') {
+            const hash = pgMaster.authAccounts[0]?.password || pgMaster.passwordHash;
+            verified = await verifyAccountPassword(password, hash);
+            displayName = pgMaster.fullName || pgMaster.name || displayName;
+            masterPhone = pgMaster.phone || '';
+            masterId = pgMaster.id;
+          }
+        } catch {
+          verified = false;
+        }
+      }
+    }
+
+    if (!verified) {
       return res.status(401).json({ error: 'Email atau kata sandi Master Admin tidak sesuai.' });
+    }
+
+    if (masterAcc) {
+      tenantDb.upsertMasterAccount({
+        ...masterAcc,
+        lastLoginAt: new Date().toISOString(),
+      });
     }
 
     const token = signSessionToken({
       role: 'MASTER_ADMIN',
       accountScope: 'REAL',
-      ownerAccountId: 'master-admin',
+      ownerAccountId: masterId,
       email: emailNorm,
       allowedTenantIds: [],
       issuedAt: Date.now(),
@@ -387,15 +703,16 @@ async function startServer() {
       role: 'MASTER_ADMIN',
       accountScope: 'REAL',
       email: emailNorm,
-      fullName: 'Master Pemilik KasirAkun',
+      fullName: displayName,
+      phone: masterPhone,
       token,
-      customers: tenantDb.listCustomers(),
+      customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
       workspaces: tenantDb.listAllWorkspaces(),
     });
   });
 
   // 0a-2. Customer / Demo / Staff Login (Strict Per-User & DEMO vs REAL Partition Isolation)
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     const parsed = masterLoginSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Format email atau kata sandi tidak valid.' });
@@ -405,31 +722,52 @@ async function startServer() {
 
     // 1. Check Customer / Demo Owner accounts
     const customer = tenantDb.findCustomerByEmail(emailNorm);
-    if (customer && customer.passwordDemo === password) {
-      if (customer.status === 'SUSPENDED' || customer.status === 'DEACTIVATED') {
-        return res.status(403).json({
-          error: `Akun ini berstatus ${customer.status}. Hubungi Master Admin untuk mengaktifkan kembali.`,
+    if (customer) {
+      const passwordOk = await verifyAccountPassword(
+        password,
+        customer.passwordHash,
+        customer.passwordDemo
+      );
+      if (passwordOk) {
+        if (customer.status === 'SUSPENDED' || customer.status === 'DEACTIVATED') {
+          return res.status(403).json({
+            error: `Akun ini berstatus ${customer.status}. Hubungi Master Admin untuk mengaktifkan kembali.`,
+          });
+        }
+        if (customer.allowPasswordLogin === false) {
+          return res.status(403).json({
+            error: 'Login kata sandi dinonaktifkan untuk akun ini. Gunakan tombol Masuk dengan Google.',
+          });
+        }
+        if (
+          customer.accountScope === 'DEMO' &&
+          customer.demoExpiresAt &&
+          new Date(customer.demoExpiresAt).getTime() < Date.now()
+        ) {
+          return res.status(403).json({
+            error: 'Masa uji coba akun demo ini telah berakhir. Hubungi Master Admin untuk perpanjangan.',
+          });
+        }
+        const scope = resolveAccountScope(customer);
+        const workspaces = tenantDb.listWorkspacesForOwner(scope, customer.id);
+        const token = signSessionToken({
+          role: 'CUSTOMER',
+          accountScope: scope,
+          ownerAccountId: customer.id,
+          email: customer.email,
+          allowedTenantIds: customer.tenantIds,
+          issuedAt: Date.now(),
+        });
+
+        return res.status(200).json({
+          authenticated: true,
+          role: 'CUSTOMER',
+          accountScope: scope,
+          token,
+          customer: sanitizeCustomerForApi(customer),
+          workspaces,
         });
       }
-      const scope = resolveAccountScope(customer);
-      const workspaces = tenantDb.listWorkspacesForOwner(scope, customer.id);
-      const token = signSessionToken({
-        role: 'CUSTOMER',
-        accountScope: scope,
-        ownerAccountId: customer.id,
-        email: customer.email,
-        allowedTenantIds: customer.tenantIds,
-        issuedAt: Date.now(),
-      });
-
-      return res.status(200).json({
-        authenticated: true,
-        role: 'CUSTOMER',
-        accountScope: scope,
-        token,
-        customer,
-        workspaces,
-      });
     }
 
     // 2. Check Staff accounts within any tenant
@@ -465,7 +803,7 @@ async function startServer() {
         accountScope: staffHit.scope,
         token,
         staff: staffHit.staff,
-        ownerAccount: staffHit.ownerAccount,
+        ownerAccount: staffHit.ownerAccount ? sanitizeCustomerForApi(staffHit.ownerAccount) : null,
         workspaces: [staffHit.workspace],
       });
     }
@@ -473,8 +811,8 @@ async function startServer() {
     return res.status(401).json({ error: 'Email atau kata sandi tidak cocok.' });
   });
 
-  // 0a-3. Persist Newly Onboarded REAL Customer + Workspace into `.data/db/real/`
-  app.post('/api/auth/register-onboarded', (req, res) => {
+  // 0a-3. Persist Newly Onboarded REAL Customer + Workspace into `.data/db/real/` (+ Neon PostgreSQL)
+  app.post('/api/auth/register-onboarded', async (req, res) => {
     const body = req.body as {
       customer?: ManagedCustomerAccount;
       workspace?: TenantWorkspaceData;
@@ -491,9 +829,16 @@ async function startServer() {
       });
     }
 
+    const rawPass = body.customer.passwordDemo?.trim() || `Ka-${Date.now().toString(36)}`;
+    const passwordHash = await hashAccountPassword(rawPass);
+
     const realCustomer: ManagedCustomerAccount = {
       ...body.customer,
       email: emailNorm,
+      passwordDemo: '••••••••',
+      passwordHash,
+      allowGoogleLogin: true,
+      allowPasswordLogin: true,
       accountScope: 'REAL',
       isDemoAccount: false,
     };
@@ -509,6 +854,16 @@ async function startServer() {
     const savedCustomer = tenantDb.upsertCustomer(realCustomer);
     const savedWorkspace = tenantDb.saveWorkspace('REAL', savedCustomer.id, realWorkspace);
 
+    await syncUserAccountToPostgres({
+      email: savedCustomer.email,
+      fullName: savedCustomer.fullName,
+      phone: savedCustomer.phone,
+      passwordHash,
+      isSuperAdmin: false,
+      accountStatus: savedCustomer.status,
+      maxTenantsAllowed: savedCustomer.maxTenantsAllowed,
+    });
+
     const token = signSessionToken({
       role: 'CUSTOMER',
       accountScope: 'REAL',
@@ -523,7 +878,7 @@ async function startServer() {
       role: 'CUSTOMER',
       accountScope: 'REAL',
       token,
-      customer: savedCustomer,
+      customer: sanitizeCustomerForApi(savedCustomer),
       workspace: savedWorkspace,
     });
   });
@@ -539,7 +894,7 @@ async function startServer() {
       return res.status(200).json({
         role: 'MASTER_ADMIN',
         accountScope: 'REAL',
-        customers: tenantDb.listCustomers(),
+        customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
         workspaces: tenantDb.listAllWorkspaces(),
       });
     }
@@ -2119,6 +2474,17 @@ async function startServer() {
     extractSessionFromRequest,
     loadJsonFile,
     saveJsonFile,
+  });
+
+  // Mount Master Admin Account Management (Demo, Real, Master + Neon PostgreSQL Sync)
+  mountMasterAccountsRoutes(app, {
+    tenantDb,
+    extractSessionFromRequest,
+  });
+
+  // Mount Universal S3 Object Storage Upload API (`POST /api/upload`)
+  mountUploadRoutes(app, {
+    extractSessionFromRequest,
   });
 
   // Mount Add-On Landing Page Usaha (+Rp25k/bln) APIs & Subdomain-Ready Middleware

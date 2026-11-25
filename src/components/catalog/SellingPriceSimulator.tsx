@@ -105,7 +105,7 @@ export function SellingPriceSimulator({
           <Lock className="w-4 h-4 text-stone-500 shrink-0 mt-0.5" strokeWidth={1.75} />
           <div className="space-y-0.5">
             <p className="text-xs font-bold text-stone-900">
-              Simulasi Harga Jual &amp; Cek Anti-Rugi (Tersedia mulai Paket BASIC)
+              Simulasi Harga Jual &amp; Cek Untung Bersih (Tersedia mulai Paket BASIC)
             </p>
             <p className="text-[11px] text-stone-600 leading-relaxed max-w-[60ch]">
               Hitung otomatis harga jual dari persentase modal beli (HPP), biaya operasional,
@@ -140,11 +140,11 @@ export function SellingPriceSimulator({
           <Calculator className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
           <div>
             <h4 className="text-xs font-bold text-stone-900">
-              Simulasi Harga Jual &amp; Cek Untung Bersih (Anti-Rugi)
+              Simulasi Harga Jual &amp; Cek Untung Bersih
             </h4>
             <p className="text-[11px] text-stone-500">
               Uji dulu harga jual Anda agar biaya operasional, kemasan, potongan QRIS, dan pajak
-              tidak bikin minus.
+              tetap menghasilkan untung yang sehat.
             </p>
           </div>
         </div>

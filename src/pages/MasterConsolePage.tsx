@@ -17,12 +17,14 @@ import {
   Plus,
   Settings2,
   ShieldCheck,
+  UserCheck,
   UserCog,
   Users,
   Wrench,
   X,
 } from 'lucide-react';
 import { AccountModal } from '../components/AccountModal';
+import { AccountManagementPanel } from '../components/master/AccountManagementPanel';
 import { ContractTemplatesPanel } from '../components/master/ContractTemplatesPanel';
 import { DemoControlPanel } from '../components/master/DemoControlPanel';
 import { EnvSecretsPanel } from '../components/master/EnvSecretsPanel';
@@ -83,11 +85,13 @@ export function MasterConsolePage() {
     deactivateManagedCustomer,
     reactivateManagedCustomer,
     impersonateCustomer,
+    refreshMasterBootstrap,
     logoutSession,
   } = useApp();
 
   const [masterTab, setMasterTab] = useState<
     | 'CUSTOMERS'
+    | 'ACCOUNTS'
     | 'LANDING_PAGES'
     | 'DEMO_CONTROL'
     | 'REGIONAL_TAX'
@@ -236,6 +240,11 @@ export function MasterConsolePage() {
       subtitle:
         'Pantau seluruh pengguna berbayar, atur paket aktif, status akun, batas cabang, dan parameter operasional.',
     },
+    ACCOUNTS: {
+      title: 'Manajemen Akun Login (Demo, Real & Master)',
+      subtitle:
+        'Kelola seluruh akun login Master Admin, Akun Usaha Asli, Akun Demo, akses Google OAuth, dan sinkronisasi Neon PostgreSQL.',
+    },
     LANDING_PAGES: {
       title: 'Landing Page UMKM & Bantuan Kustomisasi Gratis',
       subtitle:
@@ -338,6 +347,25 @@ export function MasterConsolePage() {
             </span>
             <span className="text-[11px] font-mono tabular-nums text-slate-500">
               {customers.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="master-tab-accounts"
+            onClick={() => {
+              setMasterTab('ACCOUNTS');
+              setMobileMenuOpen(false);
+            }}
+            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+              masterTab === 'ACCOUNTS'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <span className="flex items-center gap-2.5 min-w-0">
+              <UserCheck className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
+              <span className="truncate">Manajemen Akun Login</span>
             </span>
           </button>
 
@@ -633,7 +661,15 @@ export function MasterConsolePage() {
             </section>
           )}
 
-          {masterTab === 'LANDING_PAGES' ? (
+          {masterTab === 'ACCOUNTS' ? (
+            <AccountManagementPanel
+              authToken={session.token}
+              currentMasterEmail={session.email}
+              onOpenEnvSecrets={() => setMasterTab('ENV_SECRETS')}
+              onImpersonateCustomer={(custId) => impersonateCustomer(custId)}
+              onAccountsMutated={refreshMasterBootstrap}
+            />
+          ) : masterTab === 'LANDING_PAGES' ? (
             <MasterLandingPagesPanel onPendingCountChange={setPendingLandingAssistCount} />
           ) : masterTab === 'DEMO_CONTROL' ? (
             <DemoControlPanel />
@@ -841,7 +877,10 @@ export function MasterConsolePage() {
                     {selectedCustomer.fullName}
                   </h2>
                   <p className="text-xs font-mono text-slate-500 truncate">
-                    {selectedCustomer.email} · Sandi Demo: {selectedCustomer.passwordDemo}
+                    {selectedCustomer.email} ·{' '}
+                    {selectedCustomer.isDemoAccount || selectedCustomer.accountScope === 'DEMO'
+                      ? `Sandi Demo: ${selectedCustomer.passwordDemo}`
+                      : 'Sandi Terenkripsi (scrypt)'}
                   </p>
                 </div>
                 <button

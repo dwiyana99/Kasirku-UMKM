@@ -77,8 +77,8 @@ export function calculateOrderTax(input: OrderTaxInput): OrderTaxBreakdown {
     input.regionalTaxRegistry ?? DEFAULT_INDONESIA_REGIONAL_TAXES
   );
 
-  // If tenant explicitly configured regionalTax, honor their regional PBJT rate (or 0% if opted out / exempt)
-  if (regionalResolution.category !== 'NONE') {
+  // If tenant explicitly configured regionalTax, honor their regional PBJT / custom Perda levy rate (or 0% if opted out / exempt)
+  if (regionalResolution.category !== 'NONE' || regionalResolution.applies) {
     if (input.regionalTax) {
       if (regionalResolution.applies) {
         const rateDec = new Decimal(regionalResolution.rateDecimal);

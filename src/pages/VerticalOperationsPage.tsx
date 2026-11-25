@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { CheckCircle2, ClipboardList, MessageCircle, Save } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ArrowRight, ClipboardList, MessageCircle, ShoppingBag } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getVerticalMeta } from '../lib/verticals/vertical-registry';
-import { checkDirectWaReadiness } from '../lib/messaging/whatsapp-direct';
+import { evaluateWhatsappSendingPolicy } from '../lib/messaging/whatsapp-policy';
+import { canAccessRouteWithStaffPermissions } from '../lib/rbac/staff-rbac';
+import { OwnerWaReminderModal } from '../components/whatsapp/OwnerWaReminderModal';
 import {
   HomestayVillaModule,
   RentalKendaraanModule,
@@ -17,20 +19,21 @@ import {
 } from '../components/operations/ServicesAndProductionOps';
 
 export function VerticalOperationsPage() {
-  const { activeWorkspace, updateTenantRegionalAndWa, navigate } = useApp();
+  const { activeWorkspace, navigate, hasAddOn, session } = useApp();
   const tenant = activeWorkspace.tenant;
   const meta = getVerticalMeta(tenant.vertical);
-  const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
+  const [waReminderModalOpen, setWaReminderModalOpen] = useState(false);
 
-  const [waInput, setWaInput] = useState(tenant.settings.businessWhatsappNumber ?? '');
-  const [waSavedNotice, setWaSavedNotice] = useState(false);
+  const waPolicy = useMemo(
+    () =>
+      evaluateWhatsappSendingPolicy({
+        businessWhatsappNumber: tenant.settings?.businessWhatsappNumber,
+        hasFonnte: hasAddOn('ADDON_WA_FONNTE'),
+      }),
+    [tenant.settings?.businessWhatsappNumber, hasAddOn]
+  );
 
-  const handleSaveWa = (e: React.FormEvent) => {
-    e.preventDefault();
-    updateTenantRegionalAndWa({ businessWhatsappNumber: waInput });
-    setWaSavedNotice(true);
-    setTimeout(() => setWaSavedNotice(false), 3000);
-  };
+  const canOpenSettings = canAccessRouteWithStaffPermissions('/settings/custom-fields', session);
 
   const renderVerticalBody = () => {
     switch (tenant.vertical) {
@@ -66,62 +69,84 @@ export function VerticalOperationsPage() {
           </div>
           <p className="mt-1 max-w-[65ch] text-sm text-stone-600">{meta.headline}</p>
         </div>
-        <button
-          type="button"
-          onClick={() => navigate('/pos')}
-          className="inline-flex items-center justify-center rounded-lg border border-stone-300 bg-white px-3.5 py-2 text-xs font-semibold text-stone-800 hover:bg-stone-50"
-        >
-          Buka Kasir Utama
-        </button>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {waPolicy.canShowSendButtons && (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800">
+              <MessageCircle className="h-3.5 w-3.5 text-emerald-700" strokeWidth={1.75} />
+              <span>
+                {waPolicy.channel === 'FONNTE'
+                  ? 'WA Gateway Fonnte Aktif'
+                  : `WA Pemilik Aktif (${tenant.settings.businessWhatsappNumber})`}
+              </span>
+            </span>
+          )}
+          {meta.supportsPos && (
+            <button
+              type="button"
+              data-testid="operations-open-pos-btn"
+              onClick={() => navigate('/pos')}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3.5 py-2 text-xs font-semibold text-stone-800 hover:bg-stone-50"
+            >
+              <ShoppingBag className="h-3.5 w-3.5 text-emerald-700" strokeWidth={1.75} />
+              <span>{meta.primarySalesLabel || 'Buka Kasir Utama'}</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Direct WhatsApp (wa.me) Quick Setup Banner — Free starting Paket LITE without Fonnte */}
-      <form
-        onSubmit={handleSaveWa}
-        className="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 lg:flex-row lg:items-center lg:justify-between"
-      >
-        <div className="flex items-start gap-2.5">
-          <MessageCircle
-            className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"
-            strokeWidth={1.75}
-          />
-          <div className="text-xs leading-relaxed text-emerald-950">
-            <div className="font-bold">
-              Kirim Pesan WhatsApp Langsung (wa.me) · Gratis Mulai Paket LITE Tanpa Add-On Fonnte
-            </div>
-            <p className="mt-0.5 text-emerald-800">
-              {waStatus.ready
-                ? `Nomor WA usaha aktif (${tenant.settings.businessWhatsappNumber}). Anda bisa langsung klik tombol Kirim WA di setiap transaksi.`
-                : 'Masukkan nomor WhatsApp usaha Anda sendiri di sebelah kanan agar tombol Kirim WA (wa.me) langsung aktif.'}
-            </p>
-          </div>
-        </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              value={waInput}
-              onChange={(e) => setWaInput(e.target.value)}
-              placeholder="Contoh: 0812-3456-7890"
-              className="w-48 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 font-mono text-xs text-stone-900 focus:border-emerald-600 focus:outline-none"
+      {/* Owner WA Reminder Banner (Shown ONLY when Owner WA is unset & Fonnte is inactive) */}
+      {waPolicy.needsOwnerWaReminder && (
+        <section
+          data-testid="operations-owner-wa-reminder"
+          aria-label="Pengingat Nomor WhatsApp Pemilik"
+          className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex items-start gap-2.5">
+            <MessageCircle
+              className="mt-0.5 h-4 w-4 shrink-0 text-amber-800"
+              strokeWidth={1.75}
             />
-            <button
-              type="submit"
-              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-            >
-              <Save className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Simpan Nomor WA
-            </button>
-            {waSavedNotice && (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-800">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Tersimpan
-              </span>
-            )}
+            <div className="text-xs leading-relaxed text-stone-700">
+              <p className="font-semibold text-stone-900">
+                Nomor WhatsApp Pemilik Belum Diisi
+              </p>
+              <p className="mt-0.5 max-w-[65ch]">
+                Tombol kirim pengingat atau rincian pesanan ke WhatsApp pelanggan disembunyikan sementara sampai Anda menambahkan nomor WA pemilik di Pengaturan.
+              </p>
+            </div>
           </div>
-        </form>
+          {canOpenSettings && (
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                data-testid="operations-wa-quick-modal-btn"
+                onClick={() => setWaReminderModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+              >
+                <span>Isi Nomor WA Sekarang</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/settings/custom-fields?tab=payments_wa')}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100"
+              >
+                <span>Pengaturan</span>
+                <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Active Vertical Dedicated Module */}
       {renderVerticalBody()}
+
+      <OwnerWaReminderModal
+        open={waReminderModalOpen}
+        onClose={() => setWaReminderModalOpen(false)}
+        contextLabel={`Kirim pengingat dan info ${meta.shortLabel} ke pelanggan`}
+      />
     </div>
   );
 }

@@ -287,10 +287,10 @@ export function DemoControlPanel() {
                   onChange={(e) => setAllowedPlan(e.target.value as SubscriptionPlanCode)}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
                 >
-                  <option value="LITE">LITE (Rp49rb — Kasir Tunai Super Simpel)</option>
-                  <option value="BASIC">BASIC (Rp100rb)</option>
-                  <option value="PRO">PRO (Rp199rb)</option>
-                  <option value="EXPERT">EXPERT (Rp349rb — Semua Fitur)</option>
+                  <option value="LITE">LITE (Rp49rb · Sederhana + Biaya Operasional)</option>
+                  <option value="BASIC">BASIC (Rp95rb)</option>
+                  <option value="PRO">PRO (Rp175rb)</option>
+                  <option value="EXPERT">EXPERT (Rp279rb · Akuntansi &amp; Pajak Lengkap)</option>
                 </select>
               </div>
             </div>

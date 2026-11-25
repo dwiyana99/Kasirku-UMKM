@@ -156,11 +156,13 @@ export async function runPrismaSeed(prismaClient: PrismaSeedClientLike) {
   ) {
     await prismaClient.user.upsert({
       where: { email: DEFAULT_SAMPLE_TENANT_SEED.masterAdminEmail },
-      update: { isSuperAdmin: true },
+      update: { isSuperAdmin: true, name: 'Master Pemilik KasirAkun' },
       create: {
         email: DEFAULT_SAMPLE_TENANT_SEED.masterAdminEmail,
         passwordHash: 'SCRYPT_HASH_CONFIGURED_AT_RUNTIME',
+        name: 'Master Pemilik KasirAkun',
         fullName: 'Master Pemilik KasirAkun',
+        emailVerified: true,
         phone: '081100009999',
         isSuperAdmin: true,
         accountStatus: 'ACTIVE',
@@ -170,11 +172,13 @@ export async function runPrismaSeed(prismaClient: PrismaSeedClientLike) {
 
     const demoUser = await prismaClient.user.upsert({
       where: { email: DEFAULT_SAMPLE_TENANT_SEED.demoCustomerEmail },
-      update: {},
+      update: { name: 'Rina Kusuma (Akun Demo)' },
       create: {
         email: DEFAULT_SAMPLE_TENANT_SEED.demoCustomerEmail,
         passwordHash: 'SCRYPT_HASH_CONFIGURED_AT_RUNTIME',
+        name: 'Rina Kusuma (Akun Demo)',
         fullName: 'Rina Kusuma (Akun Demo)',
+        emailVerified: true,
         phone: '081234567890',
         isSuperAdmin: false,
         accountStatus: 'ACTIVE',

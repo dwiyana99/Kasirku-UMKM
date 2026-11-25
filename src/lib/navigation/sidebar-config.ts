@@ -397,7 +397,7 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
     { path: '/expenses', label: 'Biaya Operasional', iconKey: 'expenses' },
     {
       path: '/accounting',
-      label: hasAccountingPro ? 'Akuntansi & Laporan' : 'Laporan Keuangan',
+      label: hasAccountingPro ? 'Akuntansi & Laporan' : 'Laporan Laba & Kas',
       iconKey: 'accounting',
     },
     ...(hasTaxCoretax
@@ -408,8 +408,9 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
       : []),
   ];
 
-  // 5. PENGATURAN — Account, payments, team & plan management
+  // 5. PENGATURAN — Account, payments, team & plan management (Pengaturan Usaha always first for fast access)
   const pengaturanItems: SidebarNavItem[] = [
+    { path: '/settings/custom-fields', label: 'Pengaturan Usaha', iconKey: 'settings' },
     ...(hasNonCash
       ? [{ path: '/settings/payments', label: 'Pembayaran & QRIS', iconKey: 'payment' as const }]
       : []),
@@ -421,7 +422,6 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
     ...(plan !== 'LITE' || isMaster
       ? [{ path: '/activity-log', label: 'Log Aktivitas', iconKey: 'activity' as const }]
       : []),
-    { path: '/settings/custom-fields', label: 'Pengaturan Usaha', iconKey: 'settings' },
     ...(isMaster
       ? [{ path: '/master-admin', label: 'Master Admin Console', iconKey: 'master' as const }]
       : []),

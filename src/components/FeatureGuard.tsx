@@ -63,7 +63,7 @@ export function FeatureGuard({
 
   const handleUpgradeToPro = () => {
     switchHybridPlan('PRO', currentAddOns);
-    setActivatedMsg('Berhasil beralih ke Paket PRO Rp199.000/bln.');
+    setActivatedMsg('Berhasil beralih ke Paket PRO Rp175.000/bln.');
   };
 
   return (
@@ -135,7 +135,7 @@ export function FeatureGuard({
             onClick={handleUpgradeToPro}
             className="px-3.5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
-            Pilih PRO Rp199rb/bln
+            Pilih PRO Rp175rb/bln
           </button>
         </div>
       )}

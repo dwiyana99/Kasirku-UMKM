@@ -16,6 +16,7 @@ import {
 import { useApp } from '../../context/AppContext';
 
 type EnvSecretCategory =
+  | 'AUTH_SSO'
   | 'DATABASE_STORAGE'
   | 'PAYMENT_GATEWAY'
   | 'WHATSAPP_AI'
@@ -49,9 +50,10 @@ interface EnvSecretsStats {
 
 const CATEGORY_TABS: Array<{ id: 'ALL' | EnvSecretCategory; label: string }> = [
   { id: 'ALL', label: 'Semua Variabel' },
+  { id: 'AUTH_SSO', label: 'Login & Google OAuth' },
+  { id: 'DATABASE_STORAGE', label: 'Neon DB & S3 Storage' },
   { id: 'PAYMENT_GATEWAY', label: 'Payment Gateway' },
   { id: 'WHATSAPP_AI', label: 'WhatsApp & AI' },
-  { id: 'DATABASE_STORAGE', label: 'Database & Storage' },
   { id: 'SECURITY_CUSTOM', label: 'Keamanan & Custom' },
 ];
 
@@ -421,9 +423,10 @@ export function EnvSecretsPanel() {
                   onChange={(e) => setCustomCategory(e.target.value as EnvSecretCategory)}
                   className="w-full px-3 py-2 text-xs bg-stone-50 border border-stone-200 rounded-lg focus:bg-white focus:border-emerald-600"
                 >
+                  <option value="AUTH_SSO">Login &amp; Google OAuth</option>
+                  <option value="DATABASE_STORAGE">Neon DB &amp; S3 Storage</option>
                   <option value="PAYMENT_GATEWAY">Payment Gateway</option>
                   <option value="WHATSAPP_AI">WhatsApp &amp; AI</option>
-                  <option value="DATABASE_STORAGE">Database &amp; Storage</option>
                   <option value="SECURITY_CUSTOM">Keamanan &amp; Custom</option>
                 </select>
               </div>

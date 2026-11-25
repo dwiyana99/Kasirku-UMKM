@@ -25,6 +25,7 @@ import type {
   AgroBatchUsage,
   AppSession,
   AuditLog,
+  BoardingFacilityAddOn,
   BoardingInvoice,
   BoardingRoom,
   BoardingTenant,
@@ -112,6 +113,7 @@ import { calculateWithholdingTax } from '../lib/tax/indonesia-tax-engine';
 import {
   DEFAULT_INDONESIA_REGIONAL_TAXES,
   mergeLatestRegionalTaxRegistry,
+  resolveEffectiveRegionalTax,
 } from '../lib/tax/regional-tax-indonesia';
 import {
   applyMasterCustomerUpdate,
@@ -140,6 +142,11 @@ import {
   recordAgroBatchUsage,
   recordAgroHarvest,
 } from '../lib/verticals/kost-agro-engine';
+import {
+  computeFacilityAddOnsTotal,
+  computePrepaidDueDate,
+  computePrepaidRentAmount,
+} from '../lib/verticals/kost-facilities';
 import {
   approveStockOpnameSession,
   ensureBranchStocksForTenant,
@@ -177,6 +184,10 @@ import {
   toFirestoreInventoryDoc,
   toFirestoreOrderDoc,
 } from '../lib/db/firestore-sync';
+import {
+  authClient,
+  exchangeBetterAuthSession,
+} from '../lib/auth-client';
 
 export interface AutoPrintNotification {
   id: string;
@@ -400,6 +411,15 @@ interface AppContextValue {
   customers: ManagedCustomerAccount[];
   session: AppSession;
   activeCustomer: ManagedCustomerAccount | null;
+  oauthPendingUser: { email: string; fullName: string; image?: string | null } | null;
+  betterAuthError: string | null;
+  hydrateFromBetterAuthSession: () => Promise<{
+    ok: boolean;
+    needsOnboarding?: boolean;
+    defaultRoute?: string;
+    error?: string;
+  }>;
+  refreshMasterBootstrap: () => Promise<void>;
   loginAsMaster: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   loginAsCustomer: (
     email: string,
@@ -488,6 +508,7 @@ interface AppContextValue {
     roomType: string;
     monthlyRate: string;
     yearlyRate?: string;
+    includedFacilities?: string[];
     notes?: string;
   }) => BoardingRoom;
   updateBoardingRoomStatus: (roomId: string, status: BoardingRoom['status']) => void;
@@ -498,16 +519,31 @@ interface AppContextValue {
     phoneWa: string;
     emergencyContact: string;
     checkInDate: string;
+    billingCycle?: 'BULANAN' | 'TAHUNAN';
+    monthsPaid?: number; // Bayar di muka berapa bulan (1..24)
+    collectOpeningRentNow?: boolean; // Langsung buat kuitansi & jurnal sewa awal lunas
+    openingRentAmount?: string; // Opsional override total sewa awal
+    nextDueDate?: string;
     depositAmount: string;
     paymentAccountCode: '1101' | '1102';
+    includedFacilities?: string[];
+    facilityAddOns?: BoardingFacilityAddOn[];
   }) => BoardingTenant;
+  checkOutBoardingTenant: (tenantId: string) => void;
   createBoardingInvoice: (input: {
     roomId: string;
     boardingTenantId: string;
     periodMonth: string;
+    billingCycle?: 'BULANAN' | 'TAHUNAN';
+    monthsCount?: number;
+    dueDate?: string;
     rentAmount: string;
     utilityFee: string;
+    facilityAddOns?: BoardingFacilityAddOn[];
+    persistAddOnsToTenant?: boolean;
     lateFee: string;
+    lateFeePerDay?: string;
+    daysOverdue?: number;
   }) => BoardingInvoice;
   payBoardingInvoice: (invoiceId: string, paymentAccountCode: '1101' | '1102') => void;
   // Peternakan & Pertanian
@@ -771,6 +807,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
+  const [oauthPendingUser, setOauthPendingUser] = useState<{
+    email: string;
+    fullName: string;
+    image?: string | null;
+  } | null>(null);
+  const [betterAuthError, setBetterAuthError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'local' | 'saving' | 'synced'>('local');
   const [autoPrintQueue, setAutoPrintQueue] = useState<AutoPrintNotification[]>([]);
   const [regionalTaxRegistry, setRegionalTaxRegistry] = useState<RegionalTaxRule[]>(() => {
@@ -1045,6 +1087,173 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [session.role, session.token]);
+
+  const refreshMasterBootstrap = useCallback(async () => {
+    if (!session.token || session.role !== 'MASTER_ADMIN') return;
+    try {
+      const res = await fetch('/api/db/bootstrap', {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        customers?: ManagedCustomerAccount[];
+        workspaces?: TenantWorkspaceData[];
+      };
+      if (Array.isArray(data.customers)) {
+        setCustomers(data.customers);
+      }
+      if (Array.isArray(data.workspaces) && data.workspaces.length > 0) {
+        setWorkspaces(data.workspaces);
+        setActiveTenantId((prevId) =>
+          data.workspaces!.some((w) => w.tenant.id === prevId)
+            ? prevId
+            : data.workspaces![0].tenant.id
+        );
+      }
+    } catch {
+      // ignore transient errors
+    }
+  }, [session.role, session.token]);
+
+  const hydrateFromBetterAuthSession = useCallback(async (): Promise<{
+    ok: boolean;
+    needsOnboarding?: boolean;
+    defaultRoute?: string;
+    error?: string;
+  }> => {
+    setBetterAuthError(null);
+    const exchanged = await exchangeBetterAuthSession();
+    if (!exchanged.authenticated) {
+      if (exchanged.error) {
+        setBetterAuthError(exchanged.error);
+      }
+      return { ok: false, error: exchanged.error };
+    }
+
+    if (exchanged.needsOnboarding) {
+      setOauthPendingUser({
+        email: exchanged.profile.email,
+        fullName: exchanged.profile.fullName,
+        image: exchanged.profile.image,
+      });
+      return {
+        ok: true,
+        needsOnboarding: true,
+        defaultRoute: '/onboarding?mode=real&source=oauth',
+      };
+    }
+
+    setOauthPendingUser(null);
+
+    if (exchanged.role === 'MASTER_ADMIN') {
+      const custs = exchanged.customers as ManagedCustomerAccount[];
+      const wss = exchanged.workspaces as TenantWorkspaceData[];
+      if (Array.isArray(custs)) setCustomers(custs);
+      if (Array.isArray(wss) && wss.length > 0) {
+        setWorkspaces(wss);
+        setActiveTenantId(wss[0].tenant.id);
+      }
+      setSession({
+        role: 'MASTER_ADMIN',
+        accountScope: 'REAL',
+        email: exchanged.email,
+        fullName: exchanged.fullName,
+        phone: exchanged.phone,
+        token: exchanged.token,
+        authProvider: exchanged.authProvider ?? 'BETTER_AUTH_EMAIL',
+      });
+      setSyncStatus('synced');
+      return { ok: true, defaultRoute: '/master' };
+    }
+
+    if (exchanged.role === 'CUSTOMER') {
+      const cust = exchanged.customer as ManagedCustomerAccount;
+      const wss = exchanged.workspaces as TenantWorkspaceData[];
+      setCustomers([cust]);
+      if (Array.isArray(wss) && wss.length > 0) {
+        setWorkspaces(wss);
+        setActiveTenantId(cust.primaryTenantId || wss[0].tenant.id);
+      }
+      setSession({
+        role: 'CUSTOMER',
+        accountScope: exchanged.accountScope,
+        email: cust.email,
+        fullName: cust.fullName,
+        phone: cust.phone,
+        customerId: cust.id,
+        token: exchanged.token,
+        authProvider: exchanged.authProvider ?? 'BETTER_AUTH_EMAIL',
+      });
+      setSyncStatus('synced');
+      return { ok: true, defaultRoute: '/dashboard' };
+    }
+
+    if (exchanged.role === 'STAFF') {
+      const staff = exchanged.staff as StaffAccount;
+      const ownerAccount = exchanged.ownerAccount as ManagedCustomerAccount | null;
+      const wss = exchanged.workspaces as TenantWorkspaceData[];
+      if (Array.isArray(wss) && wss.length > 0) {
+        const staffWs = wss[0];
+        setCustomers(ownerAccount ? [ownerAccount] : []);
+        setWorkspaces([staffWs]);
+        setActiveTenantId(staffWs.tenant.id);
+        const nextSession: AppSession = {
+          role: 'STAFF',
+          accountScope: exchanged.accountScope,
+          email: staff.email,
+          fullName: staff.fullName,
+          phone: staff.phone,
+          staffId: staff.id,
+          staffTenantId: staffWs.tenant.id,
+          staffRoleTitle: staff.roleTitle,
+          staffPermissions: staff.permissions,
+          token: exchanged.token,
+          authProvider: exchanged.authProvider ?? 'BETTER_AUTH_EMAIL',
+        };
+        setSession(nextSession);
+        setSyncStatus('synced');
+        return { ok: true, defaultRoute: getDefaultHomeRouteForSession(nextSession) };
+      }
+    }
+
+    return { ok: false };
+  }, []);
+
+  // On mount when GUEST, exchange any Better Auth cookie session (e.g. returning from Google OAuth redirect)
+  useEffect(() => {
+    if (session.role !== 'GUEST') return;
+    let cancelled = false;
+    void hydrateFromBetterAuthSession().then((res) => {
+      if (cancelled || !res.ok) return;
+      const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/';
+      const isPublicCustomerRoute =
+        currentPath.startsWith('/order/') ||
+        currentPath.startsWith('/toko/') ||
+        currentPath.startsWith('/customer-display/');
+      if (isPublicCustomerRoute) return;
+      if (res.needsOnboarding) {
+        if (
+          currentPath === '/login' ||
+          currentPath === '/register' ||
+          currentPath === '/master/login' ||
+          currentPath === '/dashboard' ||
+          currentPath === '/master'
+        ) {
+          navigate('/onboarding?mode=real&source=oauth');
+        }
+      } else if (
+        res.defaultRoute &&
+        (currentPath === '/login' ||
+          currentPath === '/register' ||
+          currentPath === '/master/login')
+      ) {
+        navigate(res.defaultRoute);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.role, hydrateFromBetterAuthSession, navigate]);
 
   // Hydrate authenticated session from real backend partitioned database on page load/reload
   useEffect(() => {
@@ -1996,6 +2205,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const logoutSession = useCallback(async () => {
     // Clear private user workspaces & customer records from memory & sessionStorage on logout
     setSession(GUEST_SESSION);
+    setOauthPendingUser(null);
+    setBetterAuthError(null);
     setCustomers(createInitialCustomers());
     setWorkspaces(createInitialWorkspaces());
     setActiveTenantId('tenant-resto-pak-budi');
@@ -2006,6 +2217,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
     } catch {
       // ignore
+    }
+    try {
+      await authClient.signOut();
+    } catch {
+      // ignore if Better Auth is unconfigured
     }
     if (user) {
       await signOut(auth);
@@ -2032,6 +2248,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Strictly isolate state to ONLY this newly registered REAL user
+      setOauthPendingUser(null);
       setCustomers([data.customer]);
       setWorkspaces([data.workspace]);
       setActiveTenantId(data.workspace.tenant.id);
@@ -4440,6 +4657,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         roomType: input.roomType.trim() || 'Standar AC',
         monthlyRate: new Decimal(input.monthlyRate || '0').toFixed(4),
         yearlyRate: input.yearlyRate ? new Decimal(input.yearlyRate).toFixed(4) : undefined,
+        includedFacilities:
+          input.includedFacilities && input.includedFacilities.length > 0
+            ? [...input.includedFacilities]
+            : undefined,
         status: 'AVAILABLE',
         notes: input.notes?.trim() || undefined,
         createdAt: new Date().toISOString(),
@@ -4467,6 +4688,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (input) => {
       const ws = activeWorkspace;
       const room = (ws.boardingRooms ?? []).find((r) => r.id === input.roomId);
+      const monthsPaid = Math.max(
+        1,
+        Math.min(36, Math.round(input.monthsPaid ?? (input.billingCycle === 'TAHUNAN' ? 12 : 1)))
+      );
+      const cycle: 'BULANAN' | 'TAHUNAN' =
+        input.billingCycle ?? (monthsPaid >= 12 ? 'TAHUNAN' : 'BULANAN');
+
+      const normalizedAddOns: BoardingFacilityAddOn[] | undefined =
+        input.facilityAddOns && input.facilityAddOns.length > 0
+          ? input.facilityAddOns
+              .filter((a) => a.name.trim().length > 0)
+              .map((a) => ({
+                id: a.id || `addon-${Date.now().toString(36)}`,
+                name: a.name.trim(),
+                monthlyFee: new Decimal(a.monthlyFee || '0').toFixed(4),
+                durationMode: a.durationMode ?? 'FOLLOW_RENT',
+                durationMonths: a.durationMonths,
+              }))
+          : undefined;
+
+      const computedNextDue =
+        input.nextDueDate?.trim() || computePrepaidDueDate(input.checkInDate, monthsPaid);
+
       const created: BoardingTenant = {
         id: `bten-${Date.now().toString(36)}`,
         tenantId: ws.tenant.id,
@@ -4476,10 +4720,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         phoneWa: input.phoneWa.trim(),
         emergencyContact: input.emergencyContact.trim(),
         checkInDate: input.checkInDate,
+        billingCycle: cycle,
+        nextDueDate: computedNextDue,
         depositAmount: new Decimal(input.depositAmount || '0').toFixed(4),
+        includedFacilities:
+          input.includedFacilities && input.includedFacilities.length > 0
+            ? [...input.includedFacilities]
+            : room?.includedFacilities
+            ? [...room.includedFacilities]
+            : undefined,
+        facilityAddOns: normalizedAddOns,
         isActive: true,
         createdAt: new Date().toISOString(),
       };
+
       const depJe = createBoardingDepositJournal({
         tenantId: ws.tenant.id,
         branchId: room?.branchId ?? ws.branches?.[0]?.id ?? null,
@@ -4490,26 +4744,142 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         entrySeq: ws.journalEntries.length + 1,
         entryDate: input.checkInDate,
       });
+
+      // Optional: Collect opening prepaid rent immediately at Check-In (1..24 months) with balanced journal
+      let openingInvoice: BoardingInvoice | null = null;
+      let openingRentJe: ReturnType<typeof createBoardingRentPaymentJournal> | null = null;
+      if (input.collectOpeningRentNow) {
+        const monthlyRate = room?.monthlyRate ?? room?.monthlyPrice ?? '0';
+        const yearlyRate = room?.yearlyRate ?? room?.annualPrice;
+        const rentAmt =
+          input.openingRentAmount ??
+          computePrepaidRentAmount({ monthlyRate, yearlyRate, monthsCount: monthsPaid });
+        const addOnAmt = computeFacilityAddOnsTotal(normalizedAddOns, monthsPaid);
+        const regResolution = resolveEffectiveRegionalTax(
+          'KOST_KONTRAKAN',
+          ws.tenant.settings?.regionalTax,
+          regionalTaxRegistry
+        );
+        const calc = calculateBoardingInvoice({
+          rentAmount: rentAmt,
+          utilityFee: addOnAmt,
+          lateFee: '0',
+          regionalTaxRate: regResolution.applies ? regResolution.rateDecimal : '0',
+        });
+        const paidAt = new Date().toISOString();
+        const periodLabel =
+          monthsPaid === 1
+            ? input.checkInDate.slice(0, 7)
+            : monthsPaid === 12
+            ? `TAHUNAN-${input.checkInDate.slice(0, 4)}`
+            : `${monthsPaid}BLN-${input.checkInDate.slice(0, 7)}`;
+
+        openingInvoice = {
+          id: `binv-${Date.now().toString(36)}-in`,
+          tenantId: ws.tenant.id,
+          branchId: room?.branchId ?? ws.branches?.[0]?.id ?? null,
+          roomId: input.roomId,
+          boardingTenantId: created.id,
+          periodMonth: periodLabel,
+          billingCycle: cycle,
+          monthsCount: monthsPaid,
+          dueDate: input.checkInDate,
+          rentAmount: new Decimal(rentAmt).toFixed(4),
+          utilityFee: new Decimal(addOnAmt).toFixed(4),
+          facilityAddOns: normalizedAddOns,
+          lateFee: '0.0000',
+          regionalTaxAmount: calc.regionalTaxAmount,
+          regionalTaxLabel: regResolution.applies ? regResolution.taxLabel : undefined,
+          totalAmount: calc.totalAmount,
+          pph42Amount: calc.pph42Amount,
+          paymentStatus: 'PAID',
+          paidAt,
+          createdAt: paidAt,
+        };
+
+        openingRentJe = createBoardingRentPaymentJournal({
+          tenantId: ws.tenant.id,
+          branchId: openingInvoice.branchId,
+          invoice: openingInvoice,
+          tenantName: created.fullName,
+          roomNumber: room?.roomNumber ?? '-',
+          paymentAccountCode: input.paymentAccountCode,
+          accounts: ws.accounts,
+          entrySeq: ws.journalEntries.length + (depJe ? 2 : 1),
+          entryDate: input.checkInDate,
+        });
+      }
+
       updateWorkspaceById(ws.tenant.id, (prev) => ({
         ...prev,
         boardingRooms: (prev.boardingRooms ?? []).map((r) =>
           r.id === input.roomId ? { ...r, status: 'OCCUPIED' } : r
         ),
         boardingTenants: [created, ...(prev.boardingTenants ?? [])],
-        journalEntries: depJe ? [depJe, ...prev.journalEntries] : prev.journalEntries,
+        boardingInvoices: openingInvoice
+          ? [openingInvoice, ...(prev.boardingInvoices ?? [])]
+          : prev.boardingInvoices,
+        journalEntries: [
+          ...(openingRentJe ? [openingRentJe] : []),
+          ...(depJe ? [depJe] : []),
+          ...prev.journalEntries,
+        ],
       }));
       return created;
+    },
+    [activeWorkspace, regionalTaxRegistry, updateWorkspaceById]
+  );
+
+  const checkOutBoardingTenant: AppContextValue['checkOutBoardingTenant'] = useCallback(
+    (tenantId) => {
+      const ws = activeWorkspace;
+      const target = (ws.boardingTenants ?? []).find((t) => t.id === tenantId);
+      if (!target) return;
+      updateWorkspaceById(ws.tenant.id, (prev) => ({
+        ...prev,
+        boardingTenants: (prev.boardingTenants ?? []).map((t) =>
+          t.id === tenantId ? { ...t, isActive: false } : t
+        ),
+        boardingRooms: (prev.boardingRooms ?? []).map((r) =>
+          r.id === target.roomId ? { ...r, status: 'AVAILABLE' } : r
+        ),
+      }));
     },
     [activeWorkspace, updateWorkspaceById]
   );
 
   const createBoardingInvoice: AppContextValue['createBoardingInvoice'] = useCallback(
     (input) => {
+      const normalizedAddOns: BoardingFacilityAddOn[] | undefined =
+        input.facilityAddOns && input.facilityAddOns.length > 0
+          ? input.facilityAddOns
+              .filter((a) => a.name.trim().length > 0)
+              .map((a) => ({
+                id: a.id || `addon-${Date.now().toString(36)}`,
+                name: a.name.trim(),
+                monthlyFee: new Decimal(a.monthlyFee || '0').toFixed(4),
+                durationMode: a.durationMode ?? 'FOLLOW_RENT',
+                durationMonths: a.durationMonths,
+              }))
+          : undefined;
+      const regResolution = resolveEffectiveRegionalTax(
+        'KOST_KONTRAKAN',
+        activeWorkspace.tenant.settings?.regionalTax,
+        regionalTaxRegistry
+      );
       const calc = calculateBoardingInvoice({
         rentAmount: input.rentAmount,
         utilityFee: input.utilityFee,
         lateFee: input.lateFee,
+        regionalTaxRate: regResolution.applies ? regResolution.rateDecimal : '0',
       });
+      const bt = (activeWorkspace.boardingTenants ?? []).find((t) => t.id === input.boardingTenantId);
+      const monthsCount = Math.max(
+        1,
+        Math.min(36, Math.round(input.monthsCount ?? (input.billingCycle === 'TAHUNAN' ? 12 : 1)))
+      );
+      const cycle = input.billingCycle ?? bt?.billingCycle ?? (monthsCount >= 12 ? 'TAHUNAN' : 'BULANAN');
+      const dueDate = input.dueDate?.trim() || bt?.nextDueDate || `${input.periodMonth}-10`;
       const created: BoardingInvoice = {
         id: `binv-${Date.now().toString(36)}`,
         tenantId: activeWorkspace.tenant.id,
@@ -4517,9 +4887,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         roomId: input.roomId,
         boardingTenantId: input.boardingTenantId,
         periodMonth: input.periodMonth,
+        billingCycle: cycle,
+        monthsCount,
+        dueDate,
         rentAmount: new Decimal(input.rentAmount || '0').toFixed(4),
         utilityFee: new Decimal(input.utilityFee || '0').toFixed(4),
+        facilityAddOns: normalizedAddOns,
         lateFee: new Decimal(input.lateFee || '0').toFixed(4),
+        lateFeePerDay: input.lateFeePerDay
+          ? new Decimal(input.lateFeePerDay).toFixed(4)
+          : undefined,
+        daysOverdue: input.daysOverdue,
+        regionalTaxAmount: calc.regionalTaxAmount,
+        regionalTaxLabel: regResolution.applies ? regResolution.taxLabel : undefined,
         totalAmount: calc.totalAmount,
         pph42Amount: calc.pph42Amount,
         paymentStatus: 'UNPAID',
@@ -4529,10 +4909,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateWorkspaceById(activeWorkspace.tenant.id, (prev) => ({
         ...prev,
         boardingInvoices: [created, ...(prev.boardingInvoices ?? [])],
+        boardingTenants: input.persistAddOnsToTenant
+          ? (prev.boardingTenants ?? []).map((t) =>
+              t.id === input.boardingTenantId
+                ? { ...t, facilityAddOns: normalizedAddOns ?? [] }
+                : t
+            )
+          : prev.boardingTenants,
       }));
       return created;
     },
-    [activeBranchId, activeWorkspace.branches, activeWorkspace.tenant.id, updateWorkspaceById]
+    [
+      activeBranchId,
+      activeWorkspace.boardingTenants,
+      activeWorkspace.branches,
+      activeWorkspace.tenant.id,
+      activeWorkspace.tenant.settings?.regionalTax,
+      regionalTaxRegistry,
+      updateWorkspaceById,
+    ]
   );
 
   const payBoardingInvoice: AppContextValue['payBoardingInvoice'] = useCallback(
@@ -4553,10 +4948,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         entrySeq: ws.journalEntries.length + 1,
       });
       const paidAt = new Date().toISOString();
+      const monthsToExtend = Math.max(
+        1,
+        Math.round(inv.monthsCount ?? ((inv.billingCycle ?? bt?.billingCycle) === 'TAHUNAN' ? 12 : 1))
+      );
+      // Prepaid Kost rule: advance from the tenant's CURRENT nextDueDate (or invoice dueDate)
+      // so paying early BEFORE the due date extends seamlessly from the due date!
+      const baseDue = bt?.nextDueDate || inv.dueDate;
+      const nextDueAfterPay = baseDue ? computePrepaidDueDate(baseDue, monthsToExtend) : undefined;
       updateWorkspaceById(ws.tenant.id, (prev) => ({
         ...prev,
         boardingInvoices: (prev.boardingInvoices ?? []).map((i) =>
           i.id === invoiceId ? { ...i, paymentStatus: 'PAID', paidAt } : i
+        ),
+        boardingTenants: (prev.boardingTenants ?? []).map((t) =>
+          t.id === inv.boardingTenantId && nextDueAfterPay
+            ? { ...t, nextDueDate: nextDueAfterPay }
+            : t
         ),
         journalEntries: [je, ...prev.journalEntries],
       }));
@@ -5904,6 +6312,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     customers,
     session,
     activeCustomer,
+    oauthPendingUser,
+    betterAuthError,
+    hydrateFromBetterAuthSession,
+    refreshMasterBootstrap,
     loginAsMaster,
     loginAsCustomer,
     impersonateCustomer,
@@ -5933,6 +6345,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addBoardingRoom,
     updateBoardingRoomStatus,
     checkInBoardingTenant,
+    checkOutBoardingTenant,
     createBoardingInvoice,
     payBoardingInvoice,
     createAgroBatch,

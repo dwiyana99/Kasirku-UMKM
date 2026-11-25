@@ -41,6 +41,21 @@ export function LiteSimpleCrmView() {
     [activeWorkspace.tenant.vertical]
   );
 
+  const primaryWorkTarget = useMemo(() => {
+    const v = activeWorkspace.tenant.vertical;
+    if (v === 'KOST_KONTRAKAN') return { path: '/kost', label: 'Kamar & Tagihan Kost' };
+    if (v === 'PETERNAKAN_PERTANIAN') return { path: '/agro', label: 'Siklus Ternak & Panen' };
+    if (
+      v === 'RENTAL_KENDARAAN' ||
+      v === 'HOMESTAY_VILLA' ||
+      v === 'SEWA_GARASI' ||
+      v === 'BIMBEL_KURSUS_GYM'
+    ) {
+      return { path: '/operations', label: 'Buka Operasional' };
+    }
+    return { path: '/pos', label: 'Buka Kasir' };
+  }, [activeWorkspace.tenant.vertical]);
+
   const customers = activeWorkspace.crmCustomers ?? [];
   const orders = activeWorkspace.orders ?? [];
 
@@ -206,11 +221,11 @@ export function LiteSimpleCrmView() {
             </button>
             <button
               type="button"
-              onClick={() => navigate('/pos')}
+              onClick={() => navigate(primaryWorkTarget.path)}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-stone-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-lg"
             >
               <ShoppingBag className="w-3.5 h-3.5" strokeWidth={1.75} />
-              <span>Buka Kasir</span>
+              <span>{primaryWorkTarget.label}</span>
             </button>
           </div>
         </div>
@@ -332,10 +347,10 @@ export function LiteSimpleCrmView() {
                     </h3>
                     <button
                       type="button"
-                      onClick={() => navigate('/pos')}
+                      onClick={() => navigate(primaryWorkTarget.path)}
                       className="text-xs font-medium text-emerald-700 hover:underline"
                     >
-                      Buat Transaksi Baru
+                      {primaryWorkTarget.path === '/pos' ? 'Buat Transaksi Baru' : primaryWorkTarget.label}
                     </button>
                   </div>
 

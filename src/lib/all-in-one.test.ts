@@ -96,7 +96,7 @@ function assertJournalBalanced(
   assert.equal(res.valid, true, res.error || 'Journal must be balanced');
 }
 
-test('Hybrid Pricing: Basic 100k, Annual 15% discount, Smart PRO upsell > Rp190k, Separate AI Add-On excluded from Expert', () => {
+test('Hybrid Pricing: Calibrated bundle discounts (every higher tier strictly cheaper than lower tier + individual Add-Ons), Annual 15% discount, Smart upsells, Separate AI Add-On', () => {
   const basicMonthly = calculateHybridPricing({
     planCode: 'BASIC',
     billingCycle: 'MONTHLY',
@@ -104,7 +104,7 @@ test('Hybrid Pricing: Basic 100k, Annual 15% discount, Smart PRO upsell > Rp190k
     extraBranchQty: 0,
     extraStaffQty: 0,
   });
-  assert.equal(basicMonthly.billingSubtotal, '100000.0000');
+  assert.equal(basicMonthly.billingSubtotal, '95000.0000');
   assert.equal(basicMonthly.smartUpsellRecommendation, null);
 
   const basicAnnual = calculateHybridPricing({
@@ -112,17 +112,38 @@ test('Hybrid Pricing: Basic 100k, Annual 15% discount, Smart PRO upsell > Rp190k
     billingCycle: 'ANNUAL',
     selectedAddOns: [],
   });
-  // 100,000 * 12 = 1,200,000; 15% discount = 180,000; subtotal = 1,020,000 -> 85,000/mo
-  assert.equal(basicAnnual.effectiveMonthlySubtotal, '85000.0000');
+  // 95,000 * 12 = 1,140,000; 15% discount = 171,000; subtotal = 969,000 -> 80,750/mo
+  assert.equal(basicAnnual.effectiveMonthlySubtotal, '80750.0000');
 
-  // Basic (100k) + Resto QR/KDS (45k) + Inventory Pro (35k) + Promo CRM (30k) = 210k > 190k -> suggest PRO 199k!
-  const basicHeavy = calculateHybridPricing({
+  // Strict Bundle Value Invariant: Every higher bundle MUST be strictly cheaper than lower tier + its newly included Add-Ons!
+  // LITE (49k) + Non-Cash (25k) + Receipt (15k) + Simulator (15k) = 104k > BASIC (95k)
+  const litePlusBasicAddOns = calculateHybridPricing({
+    planCode: 'LITE',
+    billingCycle: 'MONTHLY',
+    selectedAddOns: ['ADDON_NON_CASH_PAYMENT', 'ADDON_THERMAL_RECEIPT', 'ADDON_PRICING_SIMULATOR'],
+  });
+  assert.ok(new Decimal(litePlusBasicAddOns.billingSubtotal).gt(new Decimal('95000')));
+  assert.ok(litePlusBasicAddOns.smartUpsellRecommendation?.includes('Rp95.000'));
+
+  // BASIC (95k) + PO (25k) + Inventory Pro (35k) + Promo CRM (30k) = 185k > PRO (175k)
+  const basicPlusProAddOns = calculateHybridPricing({
     planCode: 'BASIC',
     billingCycle: 'MONTHLY',
-    selectedAddOns: ['ADDON_RESTO_QR_KDS', 'ADDON_INVENTORY_PRO', 'ADDON_PROMO_CRM'],
+    selectedAddOns: ['ADDON_PURCHASE_ORDER', 'ADDON_INVENTORY_PRO', 'ADDON_PROMO_CRM'],
   });
-  assert.equal(basicHeavy.billingSubtotal, '210000.0000');
-  assert.ok(basicHeavy.smartUpsellRecommendation?.includes('Rp199.000'));
+  assert.equal(basicPlusProAddOns.billingSubtotal, '185000.0000');
+  assert.ok(new Decimal(basicPlusProAddOns.billingSubtotal).gt(new Decimal('175000')));
+  assert.ok(basicPlusProAddOns.smartUpsellRecommendation?.includes('Rp175.000'));
+
+  // PRO (175k) + Accounting Pro (75k) + Tax Coretax (45k) = 295k > EXPERT (279k)
+  const proPlusExpertAddOns = calculateHybridPricing({
+    planCode: 'PRO',
+    billingCycle: 'MONTHLY',
+    selectedAddOns: ['ADDON_ACCOUNTING_PRO', 'ADDON_TAX_CORETAX'],
+  });
+  assert.equal(proPlusExpertAddOns.billingSubtotal, '295000.0000');
+  assert.ok(new Decimal(proPlusExpertAddOns.billingSubtotal).gt(new Decimal('279000')));
+  assert.ok(proPlusExpertAddOns.smartUpsellRecommendation?.includes('Rp279.000'));
 
   // Rebalanced PRO & EXPERT do NOT auto-include ADDON_RESTO_QR_KDS (strictly modular Add-On for F&B only!)
   const proAddOns = resolveTenantEffectiveAddOns({ subscriptionPlan: 'PRO', activeAddOns: [] });
@@ -823,16 +844,16 @@ test('WhatsApp Fonnte Add-On (ADDON_WA_FONNTE) is Rp66.000/bln strictly modular 
     true
   );
 
-  // Exact Decimal billing calculation: BASIC (100,000) + Fonnte (66,000) = 166,000 subtotal
+  // Exact Decimal billing calculation: BASIC (95,000) + Fonnte (66,000) = 161,000 subtotal
   const quote = calculateHybridPricing({
     planCode: 'BASIC',
     selectedAddOns: ['ADDON_WA_FONNTE'],
     billingCycle: 'MONTHLY',
   });
-  assert.equal(quote.basePlanMonthly, '100000.0000');
+  assert.equal(quote.basePlanMonthly, '95000.0000');
   assert.equal(quote.paidAddOnsMonthly, '66000.0000');
-  assert.equal(quote.effectiveMonthlySubtotal, '166000.0000');
-  assert.ok(new Decimal(quote.grandTotal).gt(new Decimal('166000')));
+  assert.equal(quote.effectiveMonthlySubtotal, '161000.0000');
+  assert.ok(new Decimal(quote.grandTotal).gt(new Decimal('161000')));
 });
 
 test('jsPDF Real PDF Generators produce valid %PDF- documents for PO and Stock Transfer Surat Jalan', () => {

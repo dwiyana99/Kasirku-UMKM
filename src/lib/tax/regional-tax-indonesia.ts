@@ -376,6 +376,30 @@ export function resolveEffectiveRegionalTax(
   const rule = getRegionalTaxRuleByCode(tenantRegionalTax?.regionCode ?? 'ID-NONE', registry);
 
   if (category === 'NONE') {
+    const customOverride = tenantRegionalTax?.customRateOverride
+      ? new Decimal(tenantRegionalTax.customRateOverride || '0')
+      : new Decimal(0);
+    if (
+      tenantRegionalTax?.applyRegionalTax &&
+      tenantRegionalTax.regionCode !== 'ID-NONE' &&
+      customOverride.gt(0)
+    ) {
+      const pctNum = customOverride.times(100).toDecimalPlaces(2).toString();
+      const customLabel =
+        tenantRegionalTax.customTaxName?.trim() || 'Pajak / Retribusi Daerah Khusus';
+      return {
+        applies: true,
+        category,
+        taxType: 'PBJT_HOTEL_10',
+        rateDecimal: customOverride.toFixed(4),
+        ratePercentLabel: `${pctNum}%`,
+        taxLabel: `${customLabel} ${pctNum}% (${rule.cityName})`,
+        perdaReference: rule.perdaReference,
+        regionName: rule.cityName,
+        exemptionNote: `Pungutan daerah tambahan aktif sesuai pengaturan Perda ${rule.cityName}.`,
+      };
+    }
+
     return {
       applies: false,
       category,
@@ -385,7 +409,8 @@ export function resolveEffectiveRegionalTax(
       taxLabel: 'Bukan Objek Pajak Daerah (PBJT)',
       perdaReference: 'UU HKPD No. 1/2022',
       regionName: rule.cityName,
-      exemptionNote: 'Jenis usaha ini tidak dikenakan PBJT daerah; hanya mengikuti aturan PPh/PPN nasional.',
+      exemptionNote:
+        'Jenis usaha ini secara bawaan tidak dikenakan PBJT daerah; hanya mengikuti PPh/PPN nasional (dapat ditambah tarif Perda khusus jika berlaku di daerah Anda).',
     };
   }
 
@@ -439,16 +464,18 @@ export function resolveEffectiveRegionalTax(
   }
 
   const pctNum = rateDec.times(100).toDecimalPlaces(2).toString();
-  const baseLabel =
-    category === 'FOOD_BEVERAGE'
-      ? `PBJT Makanan/Minuman ${pctNum}%`
-      : category === 'HOSPITALITY'
-      ? `PBJT Perhotelan/Villa ${pctNum}%`
-      : category === 'ENTERTAINMENT_SPA'
-      ? `PBJT SPA & Hiburan ${pctNum}%`
-      : category === 'PARKING'
-      ? `PBJT Parkir/Garasi ${pctNum}%`
-      : `PBJT Daerah ${pctNum}%`;
+  const customName = tenantRegionalTax?.customTaxName?.trim();
+  const baseLabel = customName
+    ? `${customName} ${pctNum}%`
+    : category === 'FOOD_BEVERAGE'
+    ? `PBJT Makanan/Minuman ${pctNum}%`
+    : category === 'HOSPITALITY'
+    ? `PBJT Perhotelan/Villa ${pctNum}%`
+    : category === 'ENTERTAINMENT_SPA'
+    ? `PBJT SPA & Hiburan ${pctNum}%`
+    : category === 'PARKING'
+    ? `PBJT Parkir/Garasi ${pctNum}%`
+    : `PBJT Olahraga / Daerah ${pctNum}%`;
 
   return {
     applies: true,
@@ -460,6 +487,70 @@ export function resolveEffectiveRegionalTax(
     perdaReference: rule.perdaReference,
     regionName: rule.cityName,
     exemptionNote: rule.notes,
+  };
+}
+
+export interface TaxProfilePreviewSummary {
+  nationalLabel: string;
+  nationalDetail: string;
+  regionalResolution: EffectiveRegionalTaxResolution;
+  hasStandardPbjtCategory: boolean;
+  monthlyThresholdRupiah: string;
+}
+
+/**
+ * Generates a human-readable Indonesian preview of BOTH National (DJP 2026)
+ * and Regional (Perda / UU HKPD) taxes based on user domicile + business vertical.
+ */
+export function describeNationalAndRegionalTaxSummary(params: {
+  vertical: BusinessVertical;
+  taxEntity: 'WP_OP' | 'PT_PERORANGAN' | 'CV_FIRMA' | 'PT_BIASA';
+  isPkp: boolean;
+  regionalTax?: TenantRegionalTaxSettings | null;
+  registry?: RegionalTaxRule[];
+}): TaxProfilePreviewSummary {
+  const registry = params.registry ?? DEFAULT_INDONESIA_REGIONAL_TAXES;
+  const regionalResolution = resolveEffectiveRegionalTax(
+    params.vertical,
+    params.regionalTax,
+    registry
+  );
+  const rule = getRegionalTaxRuleByCode(params.regionalTax?.regionCode ?? 'ID-NONE', registry);
+  const category = getVerticalPbjtCategory(params.vertical);
+
+  let nationalLabel = 'PPh Final UMKM 0,5% (PP 20/2026)';
+  let nationalDetail =
+    params.taxEntity === 'WP_OP'
+      ? 'WP Orang Pribadi bebas PPh Final untuk omzet kumulatif sampai Rp500 juta/tahun, selebihnya 0,5%.'
+      : params.taxEntity === 'PT_PERORANGAN'
+      ? 'PT Perorangan dikenakan PPh Final 0,5% selama omzet <= Rp4,8 miliar/tahun.'
+      : 'Mengikuti tarif PPh Badan / Tarif Umum sesuai ketentuan DJP 2026.';
+
+  if (params.vertical === 'KOST_KONTRAKAN') {
+    nationalLabel = 'PPh Final Sewa Bangunan Pasal 4(2) 10%';
+    nationalDetail =
+      'Pendapatan sewa kamar kost/kontrakan dihitung PPh Final Pasal 4(2) 10% terpisah dari uang jaminan/deposit.';
+  } else if (params.vertical === 'FREELANCE') {
+    nationalLabel = 'PPh 21 / PPh 23 Jasa (Pasal 56)';
+    nationalDetail =
+      'Penghasilan jasa profesional mengikuti skema PPh 21/23 atau norma penghitungan sesuai status NPWP/PKP.';
+  }
+
+  if (params.isPkp) {
+    nationalLabel += ' + PPN 11% Efektif';
+    nationalDetail += ' Status PKP aktif: pungut PPN 12% x DPP Nilai Lain 11/12 (11% efektif).';
+  }
+
+  const thresholdNum = new Decimal(rule.umkmExemptMonthlyThreshold || '0').toDecimalPlaces(0).toNumber();
+  const monthlyThresholdRupiah =
+    thresholdNum > 0 ? `Rp${thresholdNum.toLocaleString('id-ID')}/bln` : 'Mengikuti Perda setempat';
+
+  return {
+    nationalLabel,
+    nationalDetail,
+    regionalResolution,
+    hasStandardPbjtCategory: category !== 'NONE',
+    monthlyThresholdRupiah,
   };
 }
 

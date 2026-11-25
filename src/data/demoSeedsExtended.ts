@@ -704,44 +704,98 @@ export function createDemoKostWorkspace(): {
     { num: '206', type: 'VIP Studio Balkon', rate: '3200000.0000', status: 'MAINTENANCE' },
   ];
 
-  const boardingRooms: BoardingRoom[] = roomSpecs.map((r, i) => ({
-    id: `room-kst-${r.num}`,
-    tenantId,
-    branchId: branch.id,
-    roomNumber: r.num,
-    roomType: r.type,
-    monthlyRate: r.rate,
-    yearlyRate: String(Number(r.rate) * 11) + '.0000',
-    status: r.status,
-    notes: r.status === 'MAINTENANCE' ? 'Perbaikan AC & cat ulang dinding' : undefined,
-    createdAt: `2026-10-0${(i % 9) + 1}T08:00:00.000Z`,
-  }));
+  const boardingRooms: BoardingRoom[] = roomSpecs.map((r, i) => {
+    const isNonAc = r.type.toLowerCase().includes('non-ac');
+    const includedFacilities = isNonAc
+      ? ['Air PDAM', 'Listrik', 'Wi-Fi', 'Kasur & Lemari', 'Parkir Motor']
+      : ['Air PDAM', 'Listrik', 'Wi-Fi', 'Kasur & Lemari', 'AC', 'Kamar Mandi Dalam', 'Parkir Motor'];
+    return {
+      id: `room-kst-${r.num}`,
+      tenantId,
+      branchId: branch.id,
+      roomNumber: r.num,
+      roomType: r.type,
+      monthlyRate: r.rate,
+      yearlyRate: String(Number(r.rate) * 11) + '.0000',
+      includedFacilities,
+      status: r.status,
+      notes: r.status === 'MAINTENANCE' ? 'Perbaikan AC & cat ulang dinding' : undefined,
+      createdAt: `2026-10-0${(i % 9) + 1}T08:00:00.000Z`,
+    };
+  });
 
-  const tenantProfiles = [
-    { room: '101', name: 'Nadia Larasati', nik: '3174015506960001', wa: '0812-1010-2001', dep: '1000000.0000', paid: true },
-    { room: '102', name: 'Reza Mahendra', nik: '3174021208940002', wa: '0812-1010-2002', dep: '1000000.0000', paid: true },
-    { room: '103', name: 'Ayu Wulandari', nik: '3273016403970003', wa: '0813-1010-2003', dep: '1000000.0000', paid: true },
-    { room: '104', name: 'Fajar Nugroho', nik: '3578010911930004', wa: '0815-1010-2004', dep: '1000000.0000', paid: false },
-    { room: '105', name: 'Bagus Setiawan', nik: '3374011805980005', wa: '0812-1010-2005', dep: '750000.0000', paid: true },
-    { room: '201', name: 'Clarissa Tan', nik: '3173014809950006', wa: '0811-1010-2006', dep: '1500000.0000', paid: true },
-    { room: '202', name: 'Kevin Pratama', nik: '3171012204920007', wa: '0812-1010-2007', dep: '1500000.0000', paid: true },
-    { room: '203', name: 'Dina Oktaviani', nik: '3275015110960008', wa: '0813-1010-2008', dep: '1500000.0000', paid: false },
-    { room: '205', name: 'dr. Hendry Gunawan', nik: '3174011402900009', wa: '0811-1010-2009', dep: '2000000.0000', paid: true },
+  const todayDate = new Date();
+  const isoOffset = (offsetDays: number) => {
+    const d = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate() + offsetDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const currentPeriodYm = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}`;
+
+  const tenantProfiles: Array<{
+    room: string;
+    name: string;
+    nik: string;
+    wa: string;
+    dep: string;
+    paid: boolean;
+    cycle: 'BULANAN' | 'TAHUNAN';
+    checkIn: string;
+    dueOffsetDays: number;
+    addOns?: Array<{ id: string; name: string; monthlyFee: string }>;
+  }> = [
+    { room: '101', name: 'Nadia Larasati', nik: '3174015506960001', wa: '0812-1010-2001', dep: '1000000.0000', paid: true, cycle: 'BULANAN', checkIn: '2026-09-01', dueOffsetDays: 14 },
+    { room: '102', name: 'Reza Mahendra', nik: '3174021208940002', wa: '0812-1010-2002', dep: '1000000.0000', paid: true, cycle: 'BULANAN', checkIn: '2026-08-15', dueOffsetDays: 4 },
+    { room: '103', name: 'Ayu Wulandari', nik: '3273016403970003', wa: '0813-1010-2003', dep: '1000000.0000', paid: true, cycle: 'TAHUNAN', checkIn: '2026-06-01', dueOffsetDays: 190 },
+    {
+      room: '104',
+      name: 'Fajar Nugroho',
+      nik: '3578010911930004',
+      wa: '0815-1010-2004',
+      dep: '1000000.0000',
+      paid: false,
+      cycle: 'BULANAN',
+      checkIn: '2026-09-05',
+      dueOffsetDays: -3,
+      addOns: [{ id: 'addon-104-parkir', name: 'Parkir Mobil', monthlyFee: '150000.0000' }],
+    },
+    { room: '105', name: 'Bagus Setiawan', nik: '3374011805980005', wa: '0812-1010-2005', dep: '750000.0000', paid: true, cycle: 'BULANAN', checkIn: '2026-10-01', dueOffsetDays: 18 },
+    { room: '201', name: 'Clarissa Tan', nik: '3173014809950006', wa: '0811-1010-2006', dep: '1500000.0000', paid: true, cycle: 'TAHUNAN', checkIn: '2026-07-10', dueOffsetDays: 229 },
+    {
+      room: '202',
+      name: 'Kevin Pratama',
+      nik: '3171012204920007',
+      wa: '0812-1010-2007',
+      dep: '1500000.0000',
+      paid: true,
+      cycle: 'BULANAN',
+      checkIn: '2026-09-12',
+      dueOffsetDays: 2,
+      addOns: [{ id: 'addon-202-laundry', name: 'Laundry Bulanan', monthlyFee: '120000.0000' }],
+    },
+    { room: '203', name: 'Dina Oktaviani', nik: '3275015110960008', wa: '0813-1010-2008', dep: '1500000.0000', paid: false, cycle: 'BULANAN', checkIn: '2026-09-01', dueOffsetDays: 0 },
+    { room: '205', name: 'dr. Hendry Gunawan', nik: '3174011402900009', wa: '0811-1010-2009', dep: '2000000.0000', paid: true, cycle: 'TAHUNAN', checkIn: '2026-05-01', dueOffsetDays: 159 },
   ];
 
-  const boardingTenants: BoardingTenant[] = tenantProfiles.map((tp, i) => ({
-    id: `bten-${tp.room}`,
-    tenantId,
-    roomId: `room-kst-${tp.room}`,
-    fullName: tp.name,
-    nikKtp: tp.nik,
-    phoneWa: tp.wa,
-    emergencyContact: `Keluarga ${tp.name.split(' ')[0]} (0812-9000-000${i + 1})`,
-    checkInDate: '2026-09-01',
-    depositAmount: tp.dep,
-    isActive: true,
-    createdAt: '2026-09-01T08:00:00.000Z',
-  }));
+  const boardingTenants: BoardingTenant[] = tenantProfiles.map((tp, i) => {
+    const rm = boardingRooms.find((r) => r.roomNumber === tp.room);
+    return {
+      id: `bten-${tp.room}`,
+      tenantId,
+      roomId: `room-kst-${tp.room}`,
+      fullName: tp.name,
+      nikKtp: tp.nik,
+      phoneWa: tp.wa,
+      emergencyContact: `Keluarga ${tp.name.split(' ')[0]} (0812-9000-000${i + 1})`,
+      checkInDate: tp.checkIn,
+      billingCycle: tp.cycle,
+      nextDueDate: isoOffset(tp.dueOffsetDays),
+      depositAmount: tp.dep,
+      includedFacilities: rm?.includedFacilities ? [...rm.includedFacilities] : undefined,
+      facilityAddOns: tp.addOns ? tp.addOns.map((a) => ({ ...a })) : [],
+      isActive: true,
+      createdAt: `${tp.checkIn}T08:00:00.000Z`,
+    };
+  });
 
   const journalEntries = [
     buildJournalEntry({
@@ -784,10 +838,17 @@ export function createDemoKostWorkspace(): {
     if (depJe) journalEntries.push(depJe);
 
     const roomMonthlyRate = room.monthlyRate ?? room.monthlyPrice ?? '1500000.0000';
-    const utilityFee = Number(roomMonthlyRate) >= 2400000 ? '200000.0000' : '150000.0000';
-    const lateFee = !tp.paid ? '50000.0000' : '0.0000';
+    const roomYearlyRate = room.yearlyRate ?? room.annualPrice ?? String(Number(roomMonthlyRate) * 11) + '.0000';
+    const baseRent = tp.cycle === 'TAHUNAN' ? roomYearlyRate : roomMonthlyRate;
+    const activeAddOns = bt.facilityAddOns ?? [];
+    const addOnSum = activeAddOns.reduce(
+      (acc, item) => acc + Number(item.monthlyFee) * (tp.cycle === 'TAHUNAN' ? 12 : 1),
+      0
+    );
+    const utilityFee = `${addOnSum.toFixed(4)}`;
+    const lateFee = !tp.paid && tp.dueOffsetDays < 0 ? '50000.0000' : '0.0000';
     const calc = calculateBoardingInvoice({
-      rentAmount: roomMonthlyRate,
+      rentAmount: baseRent,
       utilityFee,
       lateFee,
     });
@@ -798,13 +859,16 @@ export function createDemoKostWorkspace(): {
       branchId: branch.id,
       roomId: room.id,
       boardingTenantId: bt.id,
-      periodMonth: '2026-11',
-      rentAmount: roomMonthlyRate,
+      periodMonth: tp.cycle === 'TAHUNAN' ? `TAHUNAN-${todayDate.getFullYear()}-${todayDate.getFullYear() + 1}` : currentPeriodYm,
+      billingCycle: tp.cycle,
+      dueDate: isoOffset(tp.dueOffsetDays),
+      rentAmount: baseRent,
       utilityFee,
+      facilityAddOns: activeAddOns.length > 0 ? activeAddOns : undefined,
       lateFee,
       totalAmount: calc.totalAmount,
       pph42Amount: calc.pph42Amount,
-      paymentStatus: tp.paid ? 'PAID' : 'OVERDUE',
+      paymentStatus: tp.paid ? 'PAID' : tp.dueOffsetDays < 0 ? 'OVERDUE' : 'UNPAID',
       paidAt: tp.paid ? '2026-11-04T09:30:00.000Z' : null,
       createdAt: '2026-11-01T08:00:00.000Z',
     };

@@ -80,3 +80,29 @@ test('Master Admin mergeLatestRegionalTaxRegistry preserves custom regions while
   assert.ok(merged.some((r) => r.regionCode === 'ID-CUSTOM-01'));
   assert.ok(merged.length >= DEFAULT_INDONESIA_REGIONAL_TAXES.length + 1);
 });
+
+test('Explicit custom regional Perda levy applies cleanly when opted in on any vertical (e.g., Kost >10 kamar or Sports PBJT)', () => {
+  const customKostRegional = {
+    regionCode: 'ID-JK-JKT',
+    province: 'DKI Jakarta',
+    cityName: 'Jakarta (Seluruh Wilayah DKI)',
+    applyRegionalTax: true,
+    customRateOverride: '0.10',
+    customTaxName: 'PBJT Kos >10 Kamar / Perda',
+  };
+  const res = resolveEffectiveRegionalTax('KOST_KONTRAKAN', customKostRegional);
+  assert.equal(res.applies, true);
+  assert.equal(res.rateDecimal, '0.1000');
+  assert.match(res.taxLabel, /PBJT Kos >10 Kamar/);
+
+  const orderTax = calculateOrderTax({
+    vertical: 'KOST_KONTRAKAN',
+    isPkp: false,
+    items: [{ lineSubtotal: '2000000.0000', isLuxuryGoods: false, isTaxExempt: false }],
+    discountAmount: '0',
+    serviceCharge: '0',
+    regionalTax: customKostRegional,
+  });
+  assert.equal(orderTax.taxAmount, '200000.0000');
+});
+

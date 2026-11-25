@@ -237,15 +237,27 @@ export function createSaleJournalEntries(params: {
   }
 
   if (taxAmount.gt(0)) {
-    const taxAccountCode = order.taxType === 'PB1_RESTO_10' ? '2103' : '2102';
+    const isRegionalPbjt =
+      order.taxType === 'PB1_RESTO_10' ||
+      order.taxType === 'PBJT_HOTEL_10' ||
+      order.taxType === 'PBJT_SPA_HIBURAN' ||
+      order.taxType === 'PBJT_PARKIR';
+    const taxAccountCode = isRegionalPbjt ? '2103' : '2102';
+    const regionalMemo =
+      order.taxType === 'PB1_RESTO_10'
+        ? `PB1 / PBJT Makanan & Minuman #${order.orderNumber}`
+        : order.taxType === 'PBJT_HOTEL_10'
+        ? `PBJT Perhotelan / Properti Daerah #${order.orderNumber}`
+        : order.taxType === 'PBJT_SPA_HIBURAN'
+        ? `PBJT SPA / Hiburan / Daerah #${order.orderNumber}`
+        : `PBJT Jasa Parkir Daerah #${order.orderNumber}`;
     revLines.push({
       accountCode: taxAccountCode,
       debit: '0.0000',
       credit: taxAmount.toFixed(4),
-      memo:
-        order.taxType === 'PB1_RESTO_10'
-          ? `PB1 Restoran 10% #${order.orderNumber}`
-          : `PPN Keluaran (DPP Nilai Lain ${new Decimal(order.dppNilaiLain).toFixed(0)}) #${order.orderNumber}`,
+      memo: isRegionalPbjt
+        ? regionalMemo
+        : `PPN Keluaran (DPP Nilai Lain ${new Decimal(order.dppNilaiLain).toFixed(0)}) #${order.orderNumber}`,
     });
   }
 

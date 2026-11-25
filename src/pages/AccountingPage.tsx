@@ -141,8 +141,8 @@ export function AccountingPage() {
   if (!hasAccountingPro) {
     return (
       <AppShell
-        title="Laporan Keuangan Sederhana (Tier 1)"
-        subtitle="Pantau penjualan, modal barang, biaya usaha, dan untung bersih secara harian, mingguan, bulanan, triwulan, hingga YTD."
+        title="Laporan Laba & Kas"
+        subtitle="Pantau uang masuk, modal barang, biaya usaha, dan untung bersih dari harian hingga tahunan."
       >
         <Tier1SimpleFinancialReport />
       </AppShell>
@@ -151,13 +151,13 @@ export function AccountingPage() {
 
   return (
     <AppShell
-      title="Akuntansi & Laporan Keuangan"
-      subtitle="Buku besar double-entry immutable, biaya operasional PPh, aset tetap, dan laporan 3-Tier SAK EMKM / PSAK"
+      title="Laporan Keuangan & Pembukuan"
+      subtitle="Ringkasan laba rugi harian, catatan jurnal otomatis, biaya usaha, aset tetap, hingga laporan SAK EMKM / PSAK."
     >
       <div className="space-y-6">
         {bannerMsg && (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-xs font-medium text-emerald-900 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
             <span>{bannerMsg}</span>
           </div>
         )}
@@ -166,7 +166,7 @@ export function AccountingPage() {
         <div
           role="tablist"
           aria-label="Modul Akuntansi"
-          className="inline-flex flex-wrap gap-1.5 p-1 bg-white border border-slate-200 rounded-xl"
+          className="inline-flex flex-wrap gap-1.5 p-1 bg-white border border-stone-200 rounded-xl"
         >
           {(
             [
@@ -198,10 +198,10 @@ export function AccountingPage() {
                 aria-selected={active}
                 onClick={() => setTab(item.id)}
                 className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
-                  active ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+                  active ? 'bg-stone-900 text-white' : 'text-stone-600 hover:text-stone-900'
                 }`}
               >
-                <Icon className="w-4 h-4 shrink-0" />
+                <Icon className="w-4 h-4 shrink-0" strokeWidth={1.75} />
                 <span>{item.label}</span>
               </button>
             );
@@ -221,9 +221,9 @@ export function AccountingPage() {
               <div className="flex flex-wrap items-center gap-1.5">
                 {(
                   [
-                    { id: 'TIER_1', label: 'Tier 1: Simple Harian Toko' },
-                    { id: 'TIER_2', label: 'Tier 2: Standar SAK EMKM' },
-                    { id: 'TIER_3', label: 'Tier 3: Expert PSAK & Rasio' },
+                    { id: 'TIER_1', label: 'Ringkas Harian' },
+                    { id: 'TIER_2', label: 'Standar Usaha (SAK EMKM)' },
+                    { id: 'TIER_3', label: 'Lengkap & Rasio (PSAK)' },
                   ] as const
                 ).map((t) => (
                   <button

@@ -18,6 +18,7 @@ import { useApp } from '../context/AppContext';
 import { validateCoretaxIds } from '../lib/tax/indonesia-tax-engine';
 import {
   buildDefaultTenantRegionalTax,
+  describeNationalAndRegionalTaxSummary,
   resolveEffectiveRegionalTax,
 } from '../lib/tax/regional-tax-indonesia';
 import type { TaxEntityType } from '../types/domain';
@@ -102,6 +103,19 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
   const [applyRegionalTax, setApplyRegionalTax] = useState<boolean>(
     tenant.settings.regionalTax?.applyRegionalTax ?? false
   );
+  const [customTaxName, setCustomTaxName] = useState<string>(
+    tenant.settings.regionalTax?.customTaxName ?? ''
+  );
+  const [customRegionalRatePct, setCustomRegionalRatePct] = useState<string>(() => {
+    const raw = tenant.settings.regionalTax?.customRateOverride;
+    if (!raw) return '';
+    try {
+      const pct = new Decimal(raw).mul(100);
+      return pct.gt(0) ? pct.toDecimalPlaces(2).toString() : '';
+    } catch {
+      return '';
+    }
+  });
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -126,6 +140,18 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
     setBusinessWa(tenant.settings.businessWhatsappNumber ?? '');
     setRegionCode(tenant.settings.regionalTax?.regionCode ?? 'ID-NONE');
     setApplyRegionalTax(tenant.settings.regionalTax?.applyRegionalTax ?? false);
+    setCustomTaxName(tenant.settings.regionalTax?.customTaxName ?? '');
+    const savedOverride = tenant.settings.regionalTax?.customRateOverride;
+    if (savedOverride) {
+      try {
+        const pct = new Decimal(savedOverride).mul(100);
+        setCustomRegionalRatePct(pct.gt(0) ? pct.toDecimalPlaces(2).toString() : '');
+      } catch {
+        setCustomRegionalRatePct('');
+      }
+    } else {
+      setCustomRegionalRatePct('');
+    }
     setErrorMsg(null);
     if (prevTenantIdRef.current !== tenant.id) {
       setSavedNotice(null);
@@ -163,11 +189,23 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
     }
   }, [serviceChargePercent]);
 
+  const parsedCustomRegionalRateDecimal = useMemo(() => {
+    const num = Number(customRegionalRatePct.replace(',', '.'));
+    if (!Number.isFinite(num) || num <= 0 || num > 100) return null;
+    return (num / 100).toFixed(4);
+  }, [customRegionalRatePct]);
+
   const hasChanges = useMemo(() => {
     const savedServicePct = new Decimal(tenant.serviceChargeRate || '0')
       .mul(100)
       .toDecimalPlaces(2)
       .toString();
+    const savedCustomPct = tenant.settings.regionalTax?.customRateOverride
+      ? new Decimal(tenant.settings.regionalTax.customRateOverride)
+          .mul(100)
+          .toDecimalPlaces(2)
+          .toString()
+      : '';
     return (
       name.trim() !== tenant.name ||
       address.trim() !== tenant.address ||
@@ -182,7 +220,9 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
       autoPrintQrOrders !== tenant.settings.autoPrintQrOrders ||
       businessWa.trim() !== (tenant.settings.businessWhatsappNumber ?? '') ||
       regionCode !== (tenant.settings.regionalTax?.regionCode ?? 'ID-NONE') ||
-      applyRegionalTax !== (tenant.settings.regionalTax?.applyRegionalTax ?? false)
+      applyRegionalTax !== (tenant.settings.regionalTax?.applyRegionalTax ?? false) ||
+      customTaxName.trim() !== (tenant.settings.regionalTax?.customTaxName ?? '') ||
+      customRegionalRatePct.trim() !== (savedCustomPct === '0' ? '' : savedCustomPct)
     );
   }, [
     name,
@@ -199,16 +239,54 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
     businessWa,
     regionCode,
     applyRegionalTax,
+    customTaxName,
+    customRegionalRatePct,
     tenant,
   ]);
 
   const regionalPreview = useMemo(() => {
+    const hasCustomLevy = regionCode !== 'ID-NONE' && parsedCustomRegionalRateDecimal !== null;
     const draftRegional = {
       ...buildDefaultTenantRegionalTax(tenant.vertical, regionCode, regionalTaxRegistry),
-      applyRegionalTax: regionCode !== 'ID-NONE' && applyRegionalTax,
+      applyRegionalTax: regionCode !== 'ID-NONE' && (applyRegionalTax || hasCustomLevy),
+      customTaxName: customTaxName.trim() || null,
+      customRateOverride: parsedCustomRegionalRateDecimal,
     };
     return resolveEffectiveRegionalTax(tenant.vertical, draftRegional, regionalTaxRegistry);
-  }, [applyRegionalTax, regionCode, regionalTaxRegistry, tenant.vertical]);
+  }, [
+    applyRegionalTax,
+    customTaxName,
+    parsedCustomRegionalRateDecimal,
+    regionCode,
+    regionalTaxRegistry,
+    tenant.vertical,
+  ]);
+
+  const taxSummaryPreview = useMemo(() => {
+    const hasCustomLevy = regionCode !== 'ID-NONE' && parsedCustomRegionalRateDecimal !== null;
+    const draftRegional = {
+      ...buildDefaultTenantRegionalTax(tenant.vertical, regionCode, regionalTaxRegistry),
+      applyRegionalTax: regionCode !== 'ID-NONE' && (applyRegionalTax || hasCustomLevy),
+      customTaxName: customTaxName.trim() || null,
+      customRateOverride: parsedCustomRegionalRateDecimal,
+    };
+    return describeNationalAndRegionalTaxSummary({
+      vertical: tenant.vertical,
+      taxEntity,
+      isPkp,
+      regionalTax: draftRegional,
+      registry: regionalTaxRegistry,
+    });
+  }, [
+    applyRegionalTax,
+    customTaxName,
+    isPkp,
+    parsedCustomRegionalRateDecimal,
+    regionCode,
+    regionalTaxRegistry,
+    taxEntity,
+    tenant.vertical,
+  ]);
 
   const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMsg(null);
@@ -255,6 +333,14 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
     );
     setThermalPaperWidth(tenant.settings.thermalPaperWidth);
     setAutoPrintQrOrders(tenant.settings.autoPrintQrOrders);
+    setBusinessWa(tenant.settings.businessWhatsappNumber ?? '');
+    setRegionCode(tenant.settings.regionalTax?.regionCode ?? 'ID-NONE');
+    setApplyRegionalTax(tenant.settings.regionalTax?.applyRegionalTax ?? false);
+    setCustomTaxName(tenant.settings.regionalTax?.customTaxName ?? '');
+    const savedOverride = tenant.settings.regionalTax?.customRateOverride;
+    setCustomRegionalRatePct(
+      savedOverride ? new Decimal(savedOverride).mul(100).toDecimalPlaces(2).toString() : ''
+    );
     setErrorMsg(null);
     setSavedNotice(null);
   };
@@ -292,11 +378,14 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
 
     const cleanFooter = receiptFooter.trim() || 'Terima kasih atas kunjungan Anda!';
 
+    const hasCustomLevy = regionCode !== 'ID-NONE' && parsedCustomRegionalRateDecimal !== null;
     updateTenantRegionalAndWa({
       businessWhatsappNumber: businessWa.trim(),
       regionalTax: {
         ...buildDefaultTenantRegionalTax(tenant.vertical, regionCode, regionalTaxRegistry),
-        applyRegionalTax: regionCode !== 'ID-NONE' && applyRegionalTax,
+        applyRegionalTax: regionCode !== 'ID-NONE' && (applyRegionalTax || hasCustomLevy),
+        customTaxName: customTaxName.trim() || null,
+        customRateOverride: parsedCustomRegionalRateDecimal,
       },
     });
 
@@ -602,7 +691,7 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
               onChange={(e) => setIsPkp(e.target.checked)}
               className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
             />
-            <span>Pengusaha Kena Pajak (PKP — PPN 12% × DPP Nilai Lain 11/12 PMK 131/2024)</span>
+            <span>Pengusaha Kena Pajak (PKP: PPN 12% × DPP Nilai Lain 11/12 PMK 131/2024)</span>
           </label>
         </section>
 
@@ -666,18 +755,22 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
               </select>
             </div>
 
-            <div className="flex items-end pb-2">
-              <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
-                <input
-                  id="tenant-autoprint-qr"
-                  type="checkbox"
-                  checked={autoPrintQrOrders}
-                  onChange={(e) => setAutoPrintQrOrders(e.target.checked)}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
-                />
-                <span>Auto-cetak tiket dapur saat pesanan QR masuk</span>
-              </label>
-            </div>
+            {(tenant.vertical === 'KEDAI_MAKAN' ||
+              tenant.vertical === 'RESTORAN' ||
+              tenant.vertical === 'BAKERY_CATERING') && (
+              <div className="flex items-end pb-2">
+                <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    id="tenant-autoprint-qr"
+                    type="checkbox"
+                    checked={autoPrintQrOrders}
+                    onChange={(e) => setAutoPrintQrOrders(e.target.checked)}
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
+                  />
+                  <span>Auto-cetak tiket dapur saat pesanan QR masuk</span>
+                </label>
+              </div>
+            )}
           </div>
         </section>
 
@@ -758,6 +851,7 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
                 Kota / Kabupaten Domisili Usaha
               </label>
               <select
+                data-testid="settings-region-select"
                 value={regionCode}
                 onChange={(e) => {
                   const next = e.target.value;
@@ -781,12 +875,72 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
                   className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
                 />
                 <span>
-                  Terapkan Pajak Daerah (PBJT) sesuai domisili. Hapus centang jika usaha mikro Anda bebas pajak daerah setempat.
+                  Terapkan Pajak Daerah (PBJT / Perda) sesuai domisili. Hapus centang jika usaha mikro Anda bebas pajak daerah setempat.
                 </span>
               </label>
-              <p className="mt-1.5 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
-                <strong>{regionalPreview.taxLabel}:</strong> {regionalPreview.exemptionNote}
-              </p>
+
+              {regionCode !== 'ID-NONE' && (
+                <div
+                  data-testid="settings-custom-regional-tax"
+                  className="mt-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2"
+                >
+                  <p className="text-[11px] font-semibold text-slate-800">
+                    Pajak / Retribusi Daerah Tambahan Khusus Perda (Opsional)
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_92px] gap-2">
+                    <div>
+                      <label className="block text-[10px] font-medium text-slate-600 mb-0.5">
+                        Nama Pungutan Daerah
+                      </label>
+                      <input
+                        type="text"
+                        value={customTaxName}
+                        onChange={(e) => setCustomTaxName(e.target.value)}
+                        placeholder="PBJT Kost >10 Kamar / Retribusi"
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:border-emerald-600 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-medium text-slate-600 mb-0.5">
+                        Tarif (%)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                        value={customRegionalRatePct}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCustomRegionalRatePct(v);
+                          if (Number(v) > 0) setApplyRegionalTax(true);
+                        }}
+                        placeholder="10"
+                        className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-white border border-slate-200 rounded-md focus:border-emerald-600 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div
+                data-testid="settings-regional-tax-preview"
+                className="mt-2 text-[11px] text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2 space-y-1"
+              >
+                <p>
+                  <strong>Nasional:</strong> {taxSummaryPreview.nationalLabel}
+                </p>
+                <p>
+                  <strong>Daerah ({regionalPreview.regionName}):</strong>{' '}
+                  {regionalPreview.taxLabel}{' '}
+                  <span className="font-mono font-semibold tabular-nums">
+                    [{regionalPreview.ratePercentLabel}]
+                  </span>
+                </p>
+                <p className="text-emerald-800/90">
+                  {regionalPreview.perdaReference} · {regionalPreview.exemptionNote}
+                </p>
+              </div>
             </div>
 
             <div>

@@ -10,9 +10,13 @@ import path from 'node:path';
 import type express from 'express';
 import { z } from 'zod';
 import { decryptSecret, encryptSecret, maskSecretKey } from '../lib/payments/crypto.ts';
+import { resetBetterAuthCache } from '../lib/auth.ts';
+import { resetPrismaClientCache } from '../lib/prisma.ts';
+import { resetS3ClientCache } from '../lib/storage/s3-client.ts';
 import type { SignedSessionPayload } from '../lib/db/tenant-db.ts';
 
 export type EnvSecretCategory =
+  | 'AUTH_SSO'
   | 'DATABASE_STORAGE'
   | 'PAYMENT_GATEWAY'
   | 'WHATSAPP_AI'
@@ -64,46 +68,202 @@ export interface MasterEnvSecretSummary {
 
 export const STANDARD_ENV_CATALOG: EnvSecretCatalogItem[] = [
   {
+    key: 'BETTER_AUTH_SECRET',
+    label: 'Better Auth Secret Key (32-Byte Hex)',
+    category: 'AUTH_SSO',
+    serviceName: 'Better Auth',
+    isSecret: true,
+    placeholder: '64 karakter hex acak (contoh: openssl rand -hex 32)',
+    description: 'Kunci rahasia penandatanganan sesi dan cookie Better Auth untuk login Email/Kata Sandi serta Google OAuth.',
+    portalUrl: 'https://www.better-auth.com/docs/installation',
+    guideSteps: [
+      'Buat 64 karakter acak di terminal dengan perintah: openssl rand -hex 32.',
+      'Tempel hasilnya di kolom ini (atau pada Vercel Project Settings > Environment Variables) lalu klik Simpan & Sinkron.',
+    ],
+  },
+  {
+    key: 'BETTER_AUTH_URL',
+    label: 'URL Callback Better Auth (Domain Produksi)',
+    category: 'AUTH_SSO',
+    serviceName: 'Better Auth',
+    isSecret: false,
+    placeholder: 'https://kasirakun.id',
+    description: 'URL dasar aplikasi yang dipakai Better Auth untuk membangun tautan callback OAuth dan verifikasi origin.',
+    portalUrl: 'https://vercel.com/dashboard',
+    guideSteps: [
+      'Masukkan URL HTTPS produksi Anda tanpa garis miring akhir (contoh: https://kasirakun.id atau https://nama-app.vercel.app).',
+      'Pastikan nilai ini cocok dengan Authorized Redirect URI di Google Cloud Console: {BETTER_AUTH_URL}/api/auth/callback/google.',
+    ],
+  },
+  {
+    key: 'NEXT_PUBLIC_APP_URL',
+    label: 'URL Publik Aplikasi (Client & Vercel)',
+    category: 'AUTH_SSO',
+    serviceName: 'Vercel Deployment',
+    isSecret: false,
+    placeholder: 'https://kasirakun.id',
+    description: 'URL publik utama aplikasi untuk tautan landing page UMKM, nota digital, dan origin terpercaya.',
+    portalUrl: 'https://vercel.com/dashboard',
+    guideSteps: [
+      'Isi dengan domain publik utama aplikasi Anda (contoh: https://kasirakun.id).',
+      'Pada Vercel, tambahkan juga variabel ini di Environment Variables agar sinkron saat build.',
+    ],
+  },
+  {
+    key: 'GOOGLE_CLIENT_ID',
+    label: 'Google OAuth Client ID (Masuk dengan Google)',
+    category: 'AUTH_SSO',
+    serviceName: 'Google OAuth',
+    isSecret: false,
+    placeholder: '1234567890-xxxx.apps.googleusercontent.com',
+    description: 'Client ID dari Google Cloud Console agar pemilik UMKM dapat masuk atau daftar sekali klik menggunakan akun Google.',
+    portalUrl: 'https://console.cloud.google.com/apis/credentials',
+    guideSteps: [
+      'Buka Google Cloud Console > APIs & Services > Credentials > Create Credentials > OAuth client ID (Web application).',
+      'Pada Authorized redirect URIs tambahkan: {BETTER_AUTH_URL}/api/auth/callback/google.',
+      'Salin Client ID berakhiran .apps.googleusercontent.com lalu simpan di kolom ini.',
+    ],
+  },
+  {
+    key: 'GOOGLE_CLIENT_SECRET',
+    label: 'Google OAuth Client Secret',
+    category: 'AUTH_SSO',
+    serviceName: 'Google OAuth',
+    isSecret: true,
+    placeholder: 'GOCSPX-xxxxxxxxxxxxxxxxxxxx',
+    description: 'Pasangan Client Secret Google OAuth yang disimpan terenkripsi AES-256-GCM di server.',
+    portalUrl: 'https://console.cloud.google.com/apis/credentials',
+    guideSteps: [
+      'Salin Client Secret dari halaman detail OAuth 2.0 Client ID di Google Cloud Console.',
+      'Simpan di sini agar tombol Masuk dengan Google langsung aktif di halaman Login dan Daftar.',
+    ],
+  },
+  {
     key: 'DB_PROVIDER',
     label: 'Mode Provider Database Aktif',
     category: 'DATABASE_STORAGE',
     serviceName: 'Database Engine',
     isSecret: false,
-    placeholder: 'CURRENT_LOCAL_FIRESTORE | SUPABASE_POSTGRES | NEON_POSTGRES',
+    placeholder: 'CURRENT_LOCAL_FIRESTORE | NEON_POSTGRES | SUPABASE_POSTGRES',
     description: 'Menentukan engine database yang digunakan server. Default berjalan otomatis dengan penyimpanan lokal terenkripsi tanpa perlu konfigurasi awal.',
-    portalUrl: 'https://supabase.com/dashboard',
+    portalUrl: 'https://console.neon.tech',
     guideSteps: [
       'Biarkan kosong atau isi CURRENT_LOCAL_FIRESTORE saat tahap awal agar sistem berjalan instan tanpa setup server eksternal.',
-      'Ubah menjadi SUPABASE_POSTGRES atau NEON_POSTGRES saat Anda siap berpindah ke PostgreSQL produksi dan sudah mengisi DATABASE_URL serta DIRECT_URL.',
+      'Ubah menjadi NEON_POSTGRES atau SUPABASE_POSTGRES saat Anda siap berpindah ke PostgreSQL produksi dan sudah mengisi DATABASE_URL serta DIRECT_URL.',
     ],
   },
   {
     key: 'DATABASE_URL',
-    label: 'PostgreSQL Connection String (Supabase / Neon / Cloud SQL)',
+    label: 'PostgreSQL Pooled URL (Neon Serverless / Supabase / Cloud SQL)',
     category: 'DATABASE_STORAGE',
-    serviceName: 'PostgreSQL Database',
+    serviceName: 'Neon PostgreSQL',
     isSecret: true,
-    placeholder: 'postgresql://postgres.xxx:password@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true',
-    description: 'Koneksi database PostgreSQL produksi (pooled connection) untuk menyimpan seluruh transaksi, stok, dan jurnal double-entry secara permanen.',
-    portalUrl: 'https://supabase.com/dashboard',
+    placeholder: 'postgresql://neondb_owner:password@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+    description: 'Koneksi database PostgreSQL Pooled untuk runtime Vercel Serverless agar koneksi tetap hemat dan stabil.',
+    portalUrl: 'https://console.neon.tech',
     guideSteps: [
-      'Daftar / masuk ke Supabase (supabase.com) atau Neon (neon.tech), lalu klik New Project dan pilih region Singapore (ap-southeast-1).',
-      'Buka menu Project Settings > Database > Connection String > pilih mode Transaction Pooler (port 6543) atau Session Pooler.',
-      'Salin URI lengkap, ganti bagian [YOUR-PASSWORD] dengan kata sandi database Anda, lalu tempel di kolom ini dan klik Simpan & Sinkron.',
+      'Daftar / masuk ke Neon (console.neon.tech), klik New Project, lalu pilih region Asia Pacific (Singapore / ap-southeast-1).',
+      'Buka tab Connection Details > aktifkan opsi Pooled connection.',
+      'Salin URI lengkap dengan -pooler dan ?sslmode=require, lalu simpan di kolom ini.',
     ],
   },
   {
     key: 'DIRECT_URL',
-    label: 'PostgreSQL Direct URL (Untuk Migrasi Skema Prisma)',
+    label: 'PostgreSQL Direct URL (Non-Pooler untuk Prisma Migrate)',
     category: 'DATABASE_STORAGE',
-    serviceName: 'PostgreSQL Database',
+    serviceName: 'Neon PostgreSQL',
     isSecret: true,
-    placeholder: 'postgresql://postgres.xxx:password@db.xxx.supabase.co:5432/postgres?sslmode=require',
-    description: 'Koneksi langsung non-pooler (port 5432) yang dipakai Prisma Migrate saat memperbarui tabel database PostgreSQL.',
-    portalUrl: 'https://supabase.com/dashboard',
+    placeholder: 'postgresql://neondb_owner:password@ep-xxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+    description: 'Koneksi langsung non-pooler untuk menjalankan `npm run db:push` dan migrasi skema Prisma di Neon.',
+    portalUrl: 'https://console.neon.tech',
     guideSteps: [
-      'Di Supabase Project Settings > Database > Connection String, pilih tab Direct connection (port 5432).',
-      'Salin URI lengkap, ganti [YOUR-PASSWORD] dengan password database Anda, lalu simpan di sini.',
+      'Di Neon Console > Connection Details, matikan opsi Pooled connection untuk mendapatkan Direct URL (tanpa -pooler).',
+      'Salin URI lengkapnya lalu simpan di sini.',
+    ],
+  },
+  {
+    key: 'S3_ENDPOINT',
+    label: 'Universal S3 Endpoint (Neon Storage / Cloudflare R2 / Biznet Gio NEO)',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Universal S3 Storage',
+    isSecret: false,
+    placeholder: 'https://<ACCOUNT_ID>.r2.cloudflarestorage.com atau https://nos.wjv-1.neo.id',
+    description: 'Endpoint S3-compatible universal untuk unggah foto menu, struk kulakan, bukti bayar, dan logo landing page UMKM.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Cloudflare R2: salin S3 API endpoint (https://<ACCOUNT_ID>.r2.cloudflarestorage.com).',
+      'Biznet Gio NEO Object Storage: gunakan https://nos.wjv-1.neo.id atau endpoint region bucket Anda.',
+      'Neon Storage / S3 lainnya: tempel URL HTTPS endpoint S3 resmi penyedia Anda.',
+    ],
+  },
+  {
+    key: 'S3_REGION',
+    label: 'Universal S3 Region',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Universal S3 Storage',
+    isSecret: false,
+    placeholder: 'auto (untuk R2) atau idn / ap-southeast-1',
+    description: 'Region bucket S3. Gunakan "auto" untuk Cloudflare R2 atau kode region penyedia S3 Anda.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Untuk Cloudflare R2 cukup isi "auto".',
+      'Untuk Biznet Gio NEO atau AWS S3, isi kode region bucket (contoh: idn atau ap-southeast-1).',
+    ],
+  },
+  {
+    key: 'S3_BUCKET',
+    label: 'Universal S3 Bucket Name',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Universal S3 Storage',
+    isSecret: false,
+    placeholder: 'kasirakun-assets',
+    description: 'Nama bucket tujuan penyimpanan berkas gambar terpartisi per usaha (tenantId/folder/file).',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Buat bucket baru (contoh: kasirakun-assets) di dashboard Neon Storage, Cloudflare R2, atau Biznet Gio NEO.',
+      'Masukkan nama bucket persis huruf kecil ke kolom ini.',
+    ],
+  },
+  {
+    key: 'S3_ACCESS_KEY_ID',
+    label: 'Universal S3 Access Key ID',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Universal S3 Storage',
+    isSecret: true,
+    placeholder: 'AKIAxxxxxxxxxxxxxxxx atau r2_access_key_xxxx',
+    description: 'Access Key ID S3 untuk otentikasi unggah berkas dari server `/api/upload`.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Buat API Token / Access Key dengan izin Object Read & Write khusus pada bucket KasirAkun.',
+      'Salin Access Key ID lalu simpan terenkripsi di kolom ini.',
+    ],
+  },
+  {
+    key: 'S3_SECRET_ACCESS_KEY',
+    label: 'Universal S3 Secret Access Key',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Universal S3 Storage',
+    isSecret: true,
+    placeholder: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+    description: 'Secret Access Key S3 yang dienkripsi AES-256-GCM dan tidak pernah dikirim ke browser.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Salin Secret Access Key yang tampil saat pembuatan token S3/R2/Biznet Gio.',
+      'Simpan segera di sini agar unggah gambar produk dan landing page otomatis masuk ke Object Storage.',
+    ],
+  },
+  {
+    key: 'S3_PUBLIC_URL',
+    label: 'Universal S3 Public CDN URL',
+    category: 'DATABASE_STORAGE',
+    serviceName: 'Universal S3 Storage',
+    isSecret: false,
+    placeholder: 'https://cdn.kasirakun.id',
+    description: 'URL publik CDN atau Custom Domain bucket untuk menampilkan gambar menu dan logo UMKM secara cepat.',
+    portalUrl: 'https://dash.cloudflare.com',
+    guideSteps: [
+      'Aktifkan Public Access / Custom Domain pada bucket S3 Anda (misalnya https://cdn.kasirakun.id).',
+      'Tempel URL HTTPS lengkap tanpa garis miring di akhir.',
     ],
   },
   {
@@ -352,17 +512,31 @@ export const STANDARD_ENV_CATALOG: EnvSecretCatalogItem[] = [
     ],
   },
   {
-    key: 'PAYMENT_CREDENTIAL_ENCRYPTION_KEY',
-    label: 'Kunci Master Enkripsi AES-256 (64 Hex)',
+    key: 'PAYMENT_KEY_ENCRYPTION_SECRET',
+    label: 'Kunci Master Enkripsi Payment Gateway (AES-256)',
     category: 'SECURITY_CUSTOM',
     serviceName: 'Keamanan Vault Server',
     isSecret: true,
     placeholder: '64 karakter hex acak (contoh: openssl rand -hex 32)',
-    description: 'Kunci utama enkripsi AES-256-GCM untuk melindungi seluruh API Key payment gateway milik tenant di database.',
+    description: 'Kunci utama AES-256-GCM untuk mengenkripsi Server Key & API Key Midtrans/Duitku/Tripay milik setiap tenant.',
     portalUrl: '',
     guideSteps: [
-      'Buat 64 karakter hex acak melalui terminal: openssl rand -hex 32 (atau kombinasikan 32+ karakter acak kuat).',
-      'Catat kunci ini di password manager cadangan Anda sebelum menggantinya agar data terenkripsi selalu dapat dipulihkan.',
+      'Buat 64 karakter hex acak melalui terminal: openssl rand -hex 32.',
+      'Simpan salinan cadangan di password manager sebelum menggantinya.',
+    ],
+  },
+  {
+    key: 'PAYMENT_CREDENTIAL_ENCRYPTION_KEY',
+    label: 'Kunci Master Enkripsi AES-256 (Alias Legacy)',
+    category: 'SECURITY_CUSTOM',
+    serviceName: 'Keamanan Vault Server',
+    isSecret: true,
+    placeholder: '64 karakter hex acak (contoh: openssl rand -hex 32)',
+    description: 'Alias lama kunci enkripsi AES-256-GCM untuk kompatibilitas mundur. Prioritas utama membaca PAYMENT_KEY_ENCRYPTION_SECRET.',
+    portalUrl: '',
+    guideSteps: [
+      'Gunakan PAYMENT_KEY_ENCRYPTION_SECRET untuk instalasi baru di Vercel.',
+      'Kolom ini tetap didukung otomatis bila Anda sudah menyimpan kunci di sini sebelumnya.',
     ],
   },
   {
@@ -390,7 +564,7 @@ const saveEnvSecretSchema = z.object({
     .regex(/^[A-Z][A-Z0-9_]*$/, 'Nama key wajib HURUF KAPITAL, angka, dan garis bawah (contoh: MIDTRANS_CLIENT_KEY).'),
   value: z.string().trim().min(1, 'Nilai API / Secret Key tidak boleh kosong.').max(4000),
   label: z.string().trim().max(120).optional(),
-  category: z.enum(['DATABASE_STORAGE', 'PAYMENT_GATEWAY', 'WHATSAPP_AI', 'SECURITY_CUSTOM']).optional(),
+  category: z.enum(['AUTH_SSO', 'DATABASE_STORAGE', 'PAYMENT_GATEWAY', 'WHATSAPP_AI', 'SECURITY_CUSTOM']).optional(),
   serviceName: z.string().trim().max(80).optional(),
   description: z.string().trim().max(300).optional(),
   isSecret: z.boolean().optional(),
@@ -580,6 +754,11 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
     writeVault(vault);
     // Immediate live auto-sync to active Node.js runtime process.env
     process.env[key] = value;
+    resetBetterAuthCache();
+    resetS3ClientCache();
+    if (key === 'DATABASE_URL' || key === 'DIRECT_URL') {
+      resetPrismaClientCache();
+    }
 
     const items = buildSummaries();
     const savedItem = items.find((i) => i.key === key);
@@ -610,6 +789,11 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       writeVault(vault);
     }
     delete process.env[targetKey];
+    resetBetterAuthCache();
+    resetS3ClientCache();
+    if (targetKey === 'DATABASE_URL' || targetKey === 'DIRECT_URL') {
+      resetPrismaClientCache();
+    }
 
     const items = buildSummaries();
     return res.status(200).json({
@@ -632,6 +816,9 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       return res.status(403).json({ error: 'Hanya Master Admin yang berwenang menjalankan sinkronisasi.' });
     }
     const result = hydrateAllIntoRuntimeEnv();
+    resetBetterAuthCache();
+    resetS3ClientCache();
+    resetPrismaClientCache();
     const items = buildSummaries();
     return res.status(200).json({
       ok: true,

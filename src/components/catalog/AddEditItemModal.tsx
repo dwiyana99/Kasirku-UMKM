@@ -17,7 +17,7 @@ import {
   getVerticalCapabilities,
   isValidProductImageSource,
 } from '../../lib/catalog/recipe-bom-utils';
-import { processUploadedImageFile } from '../../lib/catalog/image-upload';
+import { uploadImageWithS3Fallback } from '../../lib/catalog/image-upload';
 import {
   buildSuggestedProductName,
   getBrandsForSelection,
@@ -62,6 +62,7 @@ export function AddEditItemModal({
 }: AddEditItemModalProps) {
   const {
     activeWorkspace,
+    session,
     addProduct,
     updateProduct,
     saveProductRecipes,
@@ -439,8 +440,13 @@ export function AddEditItemModal({
     setUploadingImage(true);
     setLocalError(null);
     try {
-      const dataUrl = await processUploadedImageFile(file);
-      setImageUrl(dataUrl);
+      const uploaded = await uploadImageWithS3Fallback(file, {
+        tenantId: activeWorkspace.tenant.id,
+        folder: 'products',
+        authToken: session.token,
+        maxDim: 640,
+      });
+      setImageUrl(uploaded.url);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Gagal memproses file gambar.');
     } finally {
@@ -455,8 +461,13 @@ export function AddEditItemModal({
     setUploadingReceipt(true);
     setLocalError(null);
     try {
-      const dataUrl = await processUploadedImageFile(file);
-      setPurchaseReceiptImageUrl(dataUrl);
+      const uploaded = await uploadImageWithS3Fallback(file, {
+        tenantId: activeWorkspace.tenant.id,
+        folder: 'receipts',
+        authToken: session.token,
+        maxDim: 800,
+      });
+      setPurchaseReceiptImageUrl(uploaded.url);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Gagal memproses foto bukti pembelian.');
     } finally {

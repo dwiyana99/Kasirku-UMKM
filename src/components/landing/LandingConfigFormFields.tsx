@@ -14,6 +14,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { uploadImageWithS3Fallback } from '../../lib/catalog/image-upload';
 import { LANDING_THEME_PRESETS } from '../../lib/landing/landing-presets';
 import {
   buildSubdomainPreviewAddress,
@@ -154,11 +155,17 @@ export function LandingConfigFormFields({
     setUploadError('');
     setUploadingField(field);
     try {
-      const dataUrl = await compressImageFileToDataUrl(file, field === 'logo' ? 400 : 1280, 0.82);
+      const uploaded = await uploadImageWithS3Fallback(file, {
+        tenantId,
+        folder: field === 'logo' ? 'logos' : 'landing',
+        authToken,
+        maxDim: field === 'logo' ? 400 : 1280,
+        quality: 0.82,
+      });
       if (field === 'logo') {
-        onChange({ ...draft, logoUrl: dataUrl });
+        onChange({ ...draft, logoUrl: uploaded.url });
       } else {
-        onChange({ ...draft, heroImageUrl: dataUrl });
+        onChange({ ...draft, heroImageUrl: uploaded.url });
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Gagal memproses gambar.');

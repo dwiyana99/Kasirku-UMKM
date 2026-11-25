@@ -160,9 +160,11 @@ function AppRouter() {
     case '/demo':
       return <DemoHubPage />;
     case '/login':
-      return <LoginPage initialTab="CUSTOMER" />;
+      return <LoginPage initialTab="CUSTOMER" initialMode="LOGIN" />;
+    case '/register':
+      return <LoginPage initialTab="CUSTOMER" initialMode="REGISTER" />;
     case '/master/login':
-      return <LoginPage initialTab="MASTER" />;
+      return <LoginPage initialTab="MASTER" initialMode="LOGIN" />;
     case '/master':
     case '/master-admin':
       return <MasterConsolePage />;
@@ -248,7 +250,7 @@ function AppRouter() {
       return (
         <AppShell
           title="Pembayaran & QRIS Dinamis"
-          subtitle="Integrasi Midtrans, Duitku, Tripay, Transfer Manual, Layar Pelanggan & Settlement H+1"
+          subtitle="Terima QRIS, E-Wallet, Transfer Manual, Layar Pelanggan, dan pencairan dana otomatis H+1 ke rekening usaha"
         >
           <PaymentSettingsPage />
         </AppShell>

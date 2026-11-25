@@ -334,3 +334,232 @@ export function downloadDashboardTrendPdf(params: {
   doc.save(fileName);
   return fileName;
 }
+
+export interface DailyClosingPdfInput {
+  tenantName: string;
+  dateLabel: string;
+  orderCount: number;
+  totalSales: string;
+  cashSales: string;
+  nonCashSales: string;
+  cashExpenses: string;
+  openingCash: string;
+  expectedCashInDrawer: string;
+  actualCashCounted: string;
+  cashVariance: string;
+  varianceStatus: 'MATCH' | 'SURPLUS' | 'SHORTAGE';
+  lowStockCount: number;
+  cashierName?: string;
+}
+
+/**
+ * Builds an A4 PDF document for 1-click Daily Cashier Closing & Drawer Reconciliation
+ * including physical handover signature blocks for Kasir & Pemilik Usaha.
+ */
+export function buildDailyClosingPdfDoc(
+  params: DailyClosingPdfInput,
+  generatedAt: Date = new Date()
+): jsPDF {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 16;
+  const contentWidth = pageWidth - margin * 2;
+  let y = 18;
+
+  // Header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(28, 25, 23);
+  doc.text(params.tenantName, margin, y);
+  y += 6.5;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(5, 150, 105);
+  doc.text(`Rekap Tutup Kasir Harian (${params.dateLabel})`, margin, y);
+  y += 5.5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(87, 83, 78);
+  const printedLabel = generatedAt.toLocaleString('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  doc.text(
+    `Dicetak: ${printedLabel}${params.cashierName ? `  |  Petugas: ${params.cashierName}` : ''}  |  ${params.orderCount} nota lunas`,
+    margin,
+    y
+  );
+  y += 4;
+
+  doc.setDrawColor(231, 229, 228);
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 8;
+
+  // 4-Box Summary
+  const boxW = (contentWidth - 9) / 4;
+  const boxH = 22;
+  const summaryBoxes = [
+    {
+      label: 'Total Omzet',
+      value: formatRupiahPdf(params.totalSales),
+      sub: `${params.orderCount} transaksi`,
+      accent: [28, 25, 23] as const,
+    },
+    {
+      label: 'Penjualan Tunai',
+      value: formatRupiahPdf(params.cashSales),
+      sub: 'Masuk laci kasir',
+      accent: [5, 150, 105] as const,
+    },
+    {
+      label: 'Non-Tunai',
+      value: formatRupiahPdf(params.nonCashSales),
+      sub: 'QRIS / Transfer',
+      accent: [28, 25, 23] as const,
+    },
+    {
+      label: 'Biaya Keluar',
+      value: formatRupiahPdf(params.cashExpenses),
+      sub: 'Pengeluaran kas',
+      accent: [190, 18, 60] as const,
+    },
+  ];
+
+  summaryBoxes.forEach((kpi, idx) => {
+    const x = margin + idx * (boxW + 3);
+    doc.setFillColor(250, 250, 249);
+    doc.setDrawColor(231, 229, 228);
+    doc.roundedRect(x, y, boxW, boxH, 2, 2, 'FD');
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(120, 113, 108);
+    doc.text(kpi.label, x + 3, y + 6);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(kpi.accent[0], kpi.accent[1], kpi.accent[2]);
+    doc.text(kpi.value, x + 3, y + 13);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(120, 113, 108);
+    doc.text(kpi.sub, x + 3, y + 18.5);
+  });
+  y += boxH + 10;
+
+  // Reconciliation Table
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(28, 25, 23);
+  doc.text('Rekonsiliasi Uang Fisik Laci Kasir', margin, y);
+  y += 7;
+
+  const statusText =
+    params.varianceStatus === 'MATCH'
+      ? 'Cocok 100% dengan catatan sistem'
+      : params.varianceStatus === 'SURPLUS'
+      ? `Selisih Lebih (${formatRupiahPdf(params.cashVariance)})`
+      : `Selisih Kurang (${formatRupiahPdf(params.cashVariance)})`;
+
+  const rows: Array<{ label: string; value: string; bold?: boolean; emerald?: boolean; rose?: boolean }> = [
+    { label: 'Modal Awal Laci Kasir', value: formatRupiahPdf(params.openingCash) },
+    { label: 'Penjualan Tunai Hari Ini', value: `+${formatRupiahPdf(params.cashSales)}`, emerald: true },
+    { label: 'Biaya Operasional Keluar (Tunai)', value: `-${formatRupiahPdf(params.cashExpenses)}`, rose: true },
+    { label: 'Uang Seharusnya di Laci', value: formatRupiahPdf(params.expectedCashInDrawer), bold: true },
+    { label: 'Uang Fisik Dihitung di Laci', value: formatRupiahPdf(params.actualCashCounted), bold: true },
+    {
+      label: 'Status Selisih Laci',
+      value: statusText,
+      bold: true,
+      emerald: params.varianceStatus === 'MATCH',
+      rose: params.varianceStatus === 'SHORTAGE',
+    },
+  ];
+
+  rows.forEach((row) => {
+    doc.setDrawColor(245, 245, 244);
+    doc.line(margin, y + 1.5, pageWidth - margin, y + 1.5);
+    doc.setFont('helvetica', row.bold ? 'bold' : 'normal');
+    doc.setFontSize(row.bold ? 10 : 9.5);
+    doc.setTextColor(28, 25, 23);
+    doc.text(row.label, margin, y);
+
+    if (row.emerald) {
+      doc.setTextColor(5, 150, 105);
+    } else if (row.rose) {
+      doc.setTextColor(190, 18, 60);
+    } else {
+      doc.setTextColor(28, 25, 23);
+    }
+    doc.text(row.value, pageWidth - margin, y, { align: 'right' });
+    y += 8;
+  });
+
+  y += 6;
+
+  // Low stock shopping reminder
+  doc.setFillColor(250, 250, 249);
+  doc.setDrawColor(231, 229, 228);
+  doc.roundedRect(margin, y, contentWidth, 16, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(28, 25, 23);
+  doc.text('Catatan Stok untuk Belanja Esok Hari', margin + 4, y + 6);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(87, 83, 78);
+  doc.text(
+    params.lowStockCount > 0
+      ? `Terdapat ${params.lowStockCount} barang yang stoknya menipis. Periksa menu Monitor Stok & Restok.`
+      : 'Semua stok barang utama masih dalam batas aman.',
+    margin + 4,
+    y + 12
+  );
+  y += 30;
+
+  // Handover Signature Blocks
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(87, 83, 78);
+  doc.text('Diserahkan oleh (Kasir Bertugas),', margin + 10, y);
+  doc.text('Diterima & Diperiksa oleh (Pemilik Usaha),', pageWidth - margin - 68, y);
+
+  y += 22;
+  doc.setDrawColor(168, 162, 158);
+  doc.line(margin + 8, y, margin + 62, y);
+  doc.line(pageWidth - margin - 68, y, pageWidth - margin - 10, y);
+
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(28, 25, 23);
+  doc.text(params.cashierName || 'Nama Kasir', margin + 10, y);
+  doc.text('Pemilik Usaha', pageWidth - margin - 68, y);
+
+  // Footer
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(168, 162, 158);
+  doc.text(
+    'Dokumen arsip rekap tutup kasir harian ini dibuat otomatis oleh KasirAkun UMKM.',
+    margin,
+    286
+  );
+
+  return doc;
+}
+
+export function downloadDailyClosingPdf(params: DailyClosingPdfInput): string {
+  const doc = buildDailyClosingPdfDoc(params);
+  const datePart = new Date().toISOString().slice(0, 10);
+  const fileName = `Rekap-Tutup-Kasir-${slugifyFilePart(params.tenantName)}-${datePart}.pdf`;
+  doc.save(fileName);
+  return fileName;
+}

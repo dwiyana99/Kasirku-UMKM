@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   CheckCircle2,
@@ -8,13 +8,25 @@ import {
   Printer,
   Receipt,
   Search,
+  Settings,
   Wallet,
 } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
 import { ModalShell } from '../components/ui/ModalShell';
+import { DirectWaCustomerModal } from '../components/whatsapp/DirectWaCustomerModal';
+import { FonnteSendModal } from '../components/whatsapp/FonnteSendModal';
+import {
+  isOwnerWaReminderDismissed,
+  OwnerWaReminderModal,
+} from '../components/whatsapp/OwnerWaReminderModal';
 import { useApp } from '../context/AppContext';
 import { formatRupiah } from '../lib/pos/checkout-service';
 import { tenantHasAddOn } from '../lib/saas/hybrid-pricing';
+import { canAccessRouteWithStaffPermissions } from '../lib/rbac/staff-rbac';
+import {
+  buildCustomerReceiptWaMessage,
+  evaluateWhatsappSendingPolicy,
+} from '../lib/messaging/whatsapp-policy';
 import type { Order, PaymentMethod } from '../types/domain';
 
 type MethodFilter = 'ALL' | 'CASH' | 'NON_CASH';
@@ -44,16 +56,40 @@ function formatDateTimeId(iso: string): string {
 }
 
 export function TransactionHistoryPage() {
-  const { activeWorkspace, navigate } = useApp();
+  const { activeWorkspace, navigate, session } = useApp();
   const hasThermalReceipt = tenantHasAddOn(activeWorkspace.tenant, 'ADDON_THERMAL_RECEIPT');
   const hasNonCash = tenantHasAddOn(activeWorkspace.tenant, 'ADDON_NON_CASH_PAYMENT');
   const hasWaFonnte = tenantHasAddOn(activeWorkspace.tenant, 'ADDON_WA_FONNTE');
+  const canOpenSettings = canAccessRouteWithStaffPermissions('/settings/custom-fields', session);
+  const waPolicy = useMemo(
+    () =>
+      evaluateWhatsappSendingPolicy({
+        businessWhatsappNumber: activeWorkspace.tenant.settings?.businessWhatsappNumber,
+        hasFonnte: hasWaFonnte,
+      }),
+    [activeWorkspace.tenant.settings?.businessWhatsappNumber, hasWaFonnte]
+  );
 
   const [search, setSearch] = useState('');
   const [methodFilter, setMethodFilter] = useState<MethodFilter>('ALL');
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('ALL');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [directWaOrder, setDirectWaOrder] = useState<Order | null>(null);
+  const [fonnteOrder, setFonnteOrder] = useState<Order | null>(null);
+  const [waReminderModalOpen, setWaReminderModalOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (
+      canOpenSettings &&
+      waPolicy.needsOwnerWaReminder &&
+      !isOwnerWaReminderDismissed(activeWorkspace.tenant.id)
+    ) {
+      setWaReminderModalOpen(true);
+    } else if (!waPolicy.needsOwnerWaReminder) {
+      setWaReminderModalOpen(false);
+    }
+  }, [canOpenSettings, waPolicy.needsOwnerWaReminder, activeWorkspace.tenant.id]);
 
   const sortedOrders = useMemo(() => {
     return [...activeWorkspace.orders].sort(
@@ -117,35 +153,6 @@ export function TransactionHistoryPage() {
     };
   }, [filteredOrders]);
 
-  const handleCopyWaReceipt = async (order: Order) => {
-    const lines = [
-      `*STRUK BELANJA*`,
-      `${activeWorkspace.tenant.name}`,
-      `No: ${order.orderNumber}`,
-      `Tanggal: ${formatDateTimeId(order.createdAt)}`,
-      `Pelanggan: ${order.customerName}`,
-      `--------------------------------`,
-      ...order.items.map(
-        (item) =>
-          `${item.itemNameSnapshot} x${Number(item.qty)} = ${formatRupiah(
-            new Decimal(item.unitPrice).times(new Decimal(item.qty))
-          )}`
-      ),
-      `--------------------------------`,
-      `Total: ${formatRupiah(order.grandTotal)}`,
-      `Metode: ${METHOD_LABELS[order.payment?.paymentMethod ?? 'CASH']}`,
-      `Terima kasih telah berbelanja.`,
-    ].join('\n');
-
-    try {
-      await navigator.clipboard.writeText(lines);
-      setNotice(`Ringkasan struk ${order.orderNumber} disalin ke clipboard dan siap dikirim via WA.`);
-      window.setTimeout(() => setNotice(null), 4000);
-    } catch {
-      setNotice(`Struk ${order.orderNumber} siap dibagikan.`);
-    }
-  };
-
   return (
     <AppShell
       title="Riwayat Transaksi"
@@ -153,11 +160,34 @@ export function TransactionHistoryPage() {
       primaryAction={
         <button
           type="button"
-          onClick={() => navigate('/pos')}
+          onClick={() => {
+            const v = activeWorkspace.tenant.vertical;
+            if (v === 'KOST_KONTRAKAN') navigate('/kost');
+            else if (v === 'PETERNAKAN_PERTANIAN') navigate('/agro');
+            else if (
+              v === 'RENTAL_KENDARAAN' ||
+              v === 'HOMESTAY_VILLA' ||
+              v === 'SEWA_GARASI' ||
+              v === 'BIMBEL_KURSUS_GYM'
+            ) {
+              navigate('/operations');
+            } else {
+              navigate('/pos');
+            }
+          }}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap"
         >
           <Receipt className="w-3.5 h-3.5" strokeWidth={1.75} />
-          <span>Transaksi Baru</span>
+          <span>
+            {activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+              ? 'Kamar & Tagihan Kost'
+              : activeWorkspace.tenant.vertical === 'RENTAL_KENDARAAN' ||
+                activeWorkspace.tenant.vertical === 'HOMESTAY_VILLA' ||
+                activeWorkspace.tenant.vertical === 'SEWA_GARASI' ||
+                activeWorkspace.tenant.vertical === 'BIMBEL_KURSUS_GYM'
+              ? 'Buka Operasional'
+              : 'Transaksi Baru'}
+          </span>
         </button>
       }
     >
@@ -167,9 +197,42 @@ export function TransactionHistoryPage() {
             role="status"
             className="flex items-center gap-2 px-4 py-3 text-xs font-medium text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-xl"
           >
-            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
             <span>{notice}</span>
           </div>
+        )}
+
+        {waPolicy.needsOwnerWaReminder && (
+          <section
+            data-testid="tx-history-owner-wa-reminder"
+            className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          >
+            <div className="flex items-start gap-2.5 text-xs text-amber-950">
+              <MessageCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" strokeWidth={1.75} />
+              <div>
+                <p className="font-semibold">Nomor WhatsApp Pemilik belum dikonfigurasi</p>
+                <p className="text-amber-900/90 mt-0.5 leading-relaxed">
+                  Tombol kirim rincian transaksi ke WhatsApp disembunyikan sementara. Lengkapi Nomor
+                  WA Pemilik untuk mengaktifkan kirim nota langsung ke pelanggan.
+                </p>
+              </div>
+            </div>
+            {canOpenSettings ? (
+              <button
+                type="button"
+                data-testid="tx-history-open-wa-reminder-btn"
+                onClick={() => setWaReminderModalOpen(true)}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-950 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg whitespace-nowrap shrink-0"
+              >
+                <Settings className="w-3.5 h-3.5" strokeWidth={1.75} />
+                <span>Atur WhatsApp</span>
+              </button>
+            ) : (
+              <span className="text-xs font-medium text-amber-900 shrink-0">
+                Hubungi Pemilik Usaha untuk mengisi
+              </span>
+            )}
+          </section>
         )}
 
         {/* Summary KPI Strip */}
@@ -359,6 +422,7 @@ export function TransactionHistoryPage() {
       <ModalShell
         open={Boolean(selectedOrder)}
         onClose={() => setSelectedOrder(null)}
+        closeOnEscape={true}
         headerId="tx-detail-modal-header"
         testId="tx-detail-modal"
         title={selectedOrder ? `Rincian Transaksi ${selectedOrder.orderNumber}` : 'Rincian'}
@@ -366,32 +430,57 @@ export function TransactionHistoryPage() {
         maxWidthClass="max-w-lg"
         footer={
           selectedOrder ? (
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => void handleCopyWaReceipt(selectedOrder)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg"
-              >
-                <MessageCircle className="w-3.5 h-3.5" />
-                <span>{hasWaFonnte ? 'Salin / Kirim WA' : 'Salin Ringkasan WA'}</span>
-              </button>
-              {hasThermalReceipt && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {!waPolicy.canSendCustomerMessage && canOpenSettings ? (
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg"
+                  data-testid="tx-detail-setup-wa-btn"
+                  onClick={() => setWaReminderModalOpen(true)}
+                  className="text-xs font-medium text-amber-800 hover:text-amber-950 hover:underline"
                 >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Cetak Ulang Struk</span>
+                  Aktifkan kirim rincian ke WA
                 </button>
+              ) : (
+                <span />
               )}
-              <button
-                type="button"
-                onClick={() => setSelectedOrder(null)}
-                className="px-3.5 py-2 text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg"
-              >
-                Tutup
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {waPolicy.canSendCustomerMessage && (
+                  <button
+                    type="button"
+                    data-testid="tx-detail-send-wa-btn"
+                    onClick={() => {
+                      if (waPolicy.channel === 'FONNTE') {
+                        setFonnteOrder(selectedOrder);
+                      } else {
+                        setDirectWaOrder(selectedOrder);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.75} />
+                    <span>
+                      {waPolicy.channel === 'FONNTE' ? 'Kirim WA (Fonnte)' : 'Kirim WA ke Pelanggan'}
+                    </span>
+                  </button>
+                )}
+                {hasThermalReceipt && (
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg"
+                  >
+                    <Printer className="w-3.5 h-3.5" strokeWidth={1.75} />
+                    <span>Cetak Ulang Struk</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrder(null)}
+                  className="px-3.5 py-2 text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg"
+                >
+                  Tutup
+                </button>
+              </div>
             </div>
           ) : null
         }
@@ -476,6 +565,55 @@ export function TransactionHistoryPage() {
           </div>
         )}
       </ModalShell>
+
+      <DirectWaCustomerModal
+        open={Boolean(directWaOrder)}
+        onClose={() => setDirectWaOrder(null)}
+        title={
+          directWaOrder
+            ? `Kirim Rincian Transaksi ${directWaOrder.orderNumber}`
+            : 'Kirim Rincian ke Pelanggan'
+        }
+        subtitle="Rincian transaksi akan dibuka di WhatsApp Anda agar siap dikirim ke pelanggan."
+        businessWhatsappNumber={activeWorkspace.tenant.settings?.businessWhatsappNumber}
+        defaultCustomerPhone={directWaOrder?.customerPhoneWa ?? ''}
+        defaultCustomerName={directWaOrder?.customerName}
+        defaultMessage={
+          directWaOrder
+            ? buildCustomerReceiptWaMessage({
+                tenant: activeWorkspace.tenant,
+                order: directWaOrder,
+              })
+            : ''
+        }
+      />
+
+      <FonnteSendModal
+        open={Boolean(fonnteOrder)}
+        onClose={() => setFonnteOrder(null)}
+        title={fonnteOrder ? `Kirim Struk ${fonnteOrder.orderNumber} via Fonnte` : 'Kirim Struk WA'}
+        defaultPhone={fonnteOrder?.customerPhoneWa ?? ''}
+        defaultMessage={
+          fonnteOrder
+            ? buildCustomerReceiptWaMessage({
+                tenant: activeWorkspace.tenant,
+                order: fonnteOrder,
+              })
+            : ''
+        }
+        documentType="RECEIPT"
+        referenceNo={fonnteOrder?.orderNumber}
+      />
+
+      <OwnerWaReminderModal
+        open={waReminderModalOpen}
+        onClose={() => setWaReminderModalOpen(false)}
+        contextLabel="ringkasan transaksi"
+        onSaved={(num) => {
+          setNotice(`Nomor WhatsApp Pemilik (${num}) berhasil disimpan. Tombol kirim WhatsApp kini aktif.`);
+          window.setTimeout(() => setNotice(null), 5000);
+        }}
+      />
     </AppShell>
   );
 }

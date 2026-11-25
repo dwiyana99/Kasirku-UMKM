@@ -172,7 +172,7 @@ export function AiAssistantPage() {
       <FeatureGuard
         moduleCode="ADDON_AI_ASSISTANT"
         title="Asisten Bisnis AI (+Rp35.000/bulan · Terpisah dari Paket Inti)"
-        description="Paket BASIC, PRO, dan EXPERT dirancang 100% bebas biaya token AI agar harga langganan tetap terjangkau mulai Rp100rb/bln. Aktifkan Add-On ini hanya jika Anda membutuhkan konsultasi AI berbasis Gemini 2.5 Flash."
+        description="Paket LITE, BASIC, PRO, dan EXPERT dirancang 100% bebas biaya token AI agar harga langganan tetap terjangkau mulai Rp49rb/bln. Aktifkan Add-On ini hanya jika Anda membutuhkan konsultasi AI."
       >
         <div className="max-w-4xl mx-auto space-y-6">
           {/* Quota & Privacy Summary */}

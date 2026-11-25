@@ -18,6 +18,7 @@ import type {
   ManagedCustomerAccount,
   TenantWorkspaceData,
 } from '../../types/domain.ts';
+import type { MasterAdminAccountRecord } from '../auth/account-management.ts';
 
 export interface SignedSessionPayload {
   role: 'MASTER_ADMIN' | 'CUSTOMER' | 'STAFF';
@@ -384,5 +385,110 @@ export class PartitionedTenantDatabase {
 
   public findWorkspaceBySlug(slug: string): TenantWorkspaceData | null {
     return this.listAllWorkspaces().find((w) => w.tenant.slug === slug) ?? null;
+  }
+
+  public deleteCustomer(customerId: string): boolean {
+    let deleted = false;
+    for (const sc of ['DEMO', 'REAL'] as const) {
+      const existing = this.listCustomers(sc);
+      const target = existing.find((c) => c.id === customerId);
+      if (!target) continue;
+      const next = existing.filter((c) => c.id !== customerId);
+      this.writeJsonAtomic(this.getCustomersIndexPath(sc), {
+        version: 1,
+        customers: next,
+      });
+      const safeOwner = normalizeIdSegment(customerId);
+      const ownerDir = path.join(this.rootDir, sc.toLowerCase(), safeOwner);
+      if (fs.existsSync(ownerDir)) {
+        fs.rmSync(ownerDir, { recursive: true, force: true });
+      }
+      deleted = true;
+    }
+    return deleted;
+  }
+
+  public deleteWorkspace(scope: AccountScope, ownerAccountId: string, tenantId: string): boolean {
+    const filePath = this.getTenantFilePath(scope, ownerAccountId, tenantId);
+    if (!fs.existsSync(filePath)) return false;
+    fs.unlinkSync(filePath);
+    return true;
+  }
+
+  public findStaffByEmail(email: string): {
+    scope: AccountScope;
+    ownerAccountId: string;
+    workspace: TenantWorkspaceData;
+    staff: NonNullable<TenantWorkspaceData['staffAccounts']>[number];
+    ownerAccount: ManagedCustomerAccount | null;
+  } | null {
+    const norm = email.trim().toLowerCase();
+    for (const sc of ['DEMO', 'REAL'] as const) {
+      const scopeDir = path.join(this.rootDir, sc.toLowerCase());
+      if (!fs.existsSync(scopeDir)) continue;
+      for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const ownerWorkspaces = this.listWorkspacesForOwner(sc, entry.name);
+        for (const ws of ownerWorkspaces) {
+          const staff = (ws.staffAccounts ?? []).find(
+            (s) => s.email.trim().toLowerCase() === norm
+          );
+          if (staff) {
+            const ownerAccount = this.findCustomerById(entry.name);
+            return {
+              scope: sc,
+              ownerAccountId: entry.name,
+              workspace: ws,
+              staff,
+              ownerAccount,
+            };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private getMasterAccountsPath(): string {
+    return path.join(this.rootDir, '_master_accounts.json');
+  }
+
+  public listMasterAccounts(): MasterAdminAccountRecord[] {
+    const data = this.readJsonSafe<{ version: number; accounts: MasterAdminAccountRecord[] }>(
+      this.getMasterAccountsPath()
+    );
+    return data?.accounts ?? [];
+  }
+
+  public saveMasterAccounts(accounts: MasterAdminAccountRecord[]): void {
+    this.writeJsonAtomic(this.getMasterAccountsPath(), {
+      version: 1,
+      accounts,
+    });
+  }
+
+  public findMasterAccountByEmail(email: string): MasterAdminAccountRecord | null {
+    const norm = email.trim().toLowerCase();
+    return this.listMasterAccounts().find((m) => m.email.trim().toLowerCase() === norm) ?? null;
+  }
+
+  public findMasterAccountById(id: string): MasterAdminAccountRecord | null {
+    return this.listMasterAccounts().find((m) => m.id === id) ?? null;
+  }
+
+  public upsertMasterAccount(account: MasterAdminAccountRecord): MasterAdminAccountRecord {
+    const existing = this.listMasterAccounts();
+    const idx = existing.findIndex((m) => m.id === account.id);
+    const next = idx >= 0 ? existing.map((m) => (m.id === account.id ? account : m)) : [account, ...existing];
+    this.saveMasterAccounts(next);
+    return account;
+  }
+
+  public deleteMasterAccount(id: string): boolean {
+    const existing = this.listMasterAccounts();
+    const next = existing.filter((m) => m.id !== id);
+    if (next.length === existing.length) return false;
+    this.saveMasterAccounts(next);
+    return true;
   }
 }

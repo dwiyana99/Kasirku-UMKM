@@ -27,8 +27,8 @@ import {
   X,
 } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
+import { uploadImageWithS3Fallback } from '../lib/catalog/image-upload';
 import {
-  compressImageFileToDataUrl,
   LandingConfigFormFields,
   type CatalogVisibilityItem,
   type RoomVisibilityItem,
@@ -354,11 +354,17 @@ export function TenantLandingEditorPage() {
     setAssistError('');
     setAssistUploading(String(target));
     try {
-      const dataUrl = await compressImageFileToDataUrl(file, target === 'logo' ? 400 : 1200, 0.82);
-      if (target === 'logo') setAssistLogoUrl(dataUrl);
-      else if (target === 'hero') setAssistHeroUrl(dataUrl);
+      const uploaded = await uploadImageWithS3Fallback(file, {
+        tenantId,
+        folder: target === 'logo' ? 'logos' : 'landing',
+        authToken: session.token,
+        maxDim: target === 'logo' ? 400 : 1200,
+        quality: 0.82,
+      });
+      if (target === 'logo') setAssistLogoUrl(uploaded.url);
+      else if (target === 'hero') setAssistHeroUrl(uploaded.url);
       else {
-        setAssistGalleryUrls((prev) => prev.map((v, i) => (i === target ? dataUrl : v)));
+        setAssistGalleryUrls((prev) => prev.map((v, i) => (i === target ? uploaded.url : v)));
       }
     } catch (err) {
       setAssistError(err instanceof Error ? err.message : 'Gagal membaca file gambar.');

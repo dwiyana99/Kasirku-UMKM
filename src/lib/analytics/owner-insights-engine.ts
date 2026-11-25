@@ -326,7 +326,7 @@ export function computeDueReminders(workspace: TenantWorkspaceData): DueReminder
     }
   }
 
-  // 3. Kost Rent Bills (ONLY for KOST_KONTRAKAN vertical)
+  // 3. Kost Rent Bills & Upcoming Due Dates (ONLY for KOST_KONTRAKAN vertical)
   if (tenant.vertical === 'KOST_KONTRAKAN') {
     const unpaidInvoices = (workspace.boardingInvoices ?? []).filter(
       (inv) => inv.paymentStatus === 'UNPAID' || inv.paymentStatus === 'OVERDUE'
@@ -336,14 +336,92 @@ export function computeDueReminders(workspace: TenantWorkspaceData): DueReminder
         (acc, inv) => acc.plus(new Decimal(inv.totalAmount || '0')),
         new Decimal(0)
       );
+      const overdueCount = unpaidInvoices.filter((inv) => inv.paymentStatus === 'OVERDUE').length;
       reminders.push({
         id: 'rem-kost-bills',
         kind: 'KOST_BILL',
-        title: `${unpaidInvoices.length} tagihan sewa kamar belum lunas`,
-        detail: `Total tagihan berjalan ${formatRpSimple(totalRent)}. Tagih cepat via menu Kost & Kamar.`,
+        title:
+          overdueCount > 0
+            ? `${unpaidInvoices.length} tagihan sewa kamar belum lunas (${overdueCount} terlambat)`
+            : `${unpaidInvoices.length} tagihan sewa kamar menunggu pembayaran`,
+        detail: `Total tagihan berjalan ${formatRpSimple(totalRent)}. Kirim pengingat WhatsApp langsung dari menu Kamar & Tagihan Kost.`,
         amount: totalRent.toFixed(4),
         route: '/kost',
         ctaLabel: 'Lihat Tagihan',
+        tone: overdueCount > 0 ? 'rose' : 'amber',
+      });
+    }
+
+    // Also alert if any active Kost tenant has nextDueDate <= 7 days ahead (even before invoice generated)
+    const todayStart = new Date();
+    const todayUtc = Date.UTC(
+      todayStart.getFullYear(),
+      todayStart.getMonth(),
+      todayStart.getDate()
+    );
+    const dueSoonTenants = (workspace.boardingTenants ?? []).filter((t) => {
+      if (!t.isActive || !t.nextDueDate) return false;
+      const m = t.nextDueDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (!m) return false;
+      const dueUtc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      const diffDays = Math.round((dueUtc - todayUtc) / 86_400_000);
+      return diffDays >= 0 && diffDays <= 7;
+    });
+    if (dueSoonTenants.length > 0) {
+      reminders.push({
+        id: 'rem-kost-upcoming',
+        kind: 'KOST_BILL',
+        title: `${dueSoonTenants.length} penghuni kost jatuh tempo dalam 7 hari`,
+        detail: `Segera siapkan tagihan atau kirim pengingat WhatsApp ke penghuni sebelum tanggal jatuh tempo.`,
+        amount: '0.0000',
+        route: '/kost',
+        ctaLabel: 'Cek Jatuh Tempo',
+        tone: 'amber',
+      });
+    }
+  }
+
+  // 4. Sewa Garasi Due Slots (ONLY for SEWA_GARASI vertical)
+  if (tenant.vertical === 'SEWA_GARASI') {
+    const dueSlots = (workspace.verticalOps?.garageSlots ?? []).filter(
+      (s) => s.status === 'TERISI' && s.paymentStatus !== 'LUNAS'
+    );
+    if (dueSlots.length > 0) {
+      const totalGarage = dueSlots.reduce(
+        (acc, s) => acc.plus(new Decimal(s.monthlyRate || '0')),
+        new Decimal(0)
+      );
+      reminders.push({
+        id: 'rem-garasi-due',
+        kind: 'KOST_BILL',
+        title: `${dueSlots.length} slot garasi jatuh tempo bulan ini`,
+        detail: `Total sewa belum lunas ${formatRpSimple(totalGarage)}. Kirim pengingat WhatsApp dari menu Slot Garasi.`,
+        amount: totalGarage.toFixed(4),
+        route: '/operations',
+        ctaLabel: 'Buka Slot Garasi',
+        tone: 'amber',
+      });
+    }
+  }
+
+  // 5. Bimbel / Kursus / Gym Unpaid SPP Bills (ONLY for BIMBEL_KURSUS_GYM vertical)
+  if (tenant.vertical === 'BIMBEL_KURSUS_GYM') {
+    const unpaidSpp = (workspace.verticalOps?.academyInvoices ?? []).filter(
+      (b) => b.status !== 'PAID'
+    );
+    if (unpaidSpp.length > 0) {
+      const totalSpp = unpaidSpp.reduce(
+        (acc, b) => acc.plus(new Decimal(b.amount || '0')),
+        new Decimal(0)
+      );
+      reminders.push({
+        id: 'rem-bimbel-spp',
+        kind: 'KOST_BILL',
+        title: `${unpaidSpp.length} tagihan SPP / iuran member belum lunas`,
+        detail: `Total iuran tertunda ${formatRpSimple(totalSpp)}. Kirim pengingat ke orang tua/member dari menu SPP & Kelas.`,
+        amount: totalSpp.toFixed(4),
+        route: '/operations',
+        ctaLabel: 'Lihat Tagihan SPP',
         tone: 'amber',
       });
     }

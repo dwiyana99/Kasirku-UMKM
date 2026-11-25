@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Decimal from 'decimal.js';
 import { QRCodeSVG } from 'qrcode.react';
-import { Printer, Bluetooth, Check, Lock, MessageCircle } from 'lucide-react';
+import { Printer, Bluetooth, Check, MessageCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import type { Order, Tenant } from '../types/domain';
 import { buildEscPosReceiptCommands, formatRupiah } from '../lib/pos/checkout-service';
@@ -9,8 +9,14 @@ import {
   getDividerBorderClass,
   getEffectiveReceiptDesign,
 } from '../lib/pos/receipt-design';
+import {
+  buildCustomerReceiptWaMessage,
+  evaluateWhatsappSendingPolicy,
+  formatPaymentMethodIndonesian,
+} from '../lib/messaging/whatsapp-policy';
 import { ModalShell } from './ui/ModalShell';
 import { FonnteSendModal } from './whatsapp/FonnteSendModal';
+import { DirectWaCustomerModal } from './whatsapp/DirectWaCustomerModal';
 
 interface ThermalReceiptModalProps {
   order: Order;
@@ -26,30 +32,18 @@ export function ThermalReceiptModal({
   onPrinted,
 }: ThermalReceiptModalProps) {
   const { hasAddOn } = useApp();
-  const hasFonnteWa = hasAddOn('ADDON_WA_FONNTE');
+  const waPolicy = evaluateWhatsappSendingPolicy({
+    businessWhatsappNumber: tenant.settings.businessWhatsappNumber,
+    hasFonnte: hasAddOn('ADDON_WA_FONNTE'),
+  });
   const [paperWidth, setPaperWidth] = useState<'58mm' | '80mm'>(
     tenant.settings.thermalPaperWidth || '80mm'
   );
   const [btStatus, setBtStatus] = useState<string | null>(null);
   const [fonnteOpen, setFonnteOpen] = useState(false);
+  const [directWaOpen, setDirectWaOpen] = useState(false);
 
-  const waReceiptMessage = [
-    `*${tenant.name.toUpperCase()}*`,
-    tenant.address ? tenant.address : null,
-    `No. Struk: ${order.orderNumber}`,
-    `Pelanggan: ${order.customerName}`,
-    '---',
-    ...order.items.map((it) => {
-      const sub = new Decimal(it.qty).times(new Decimal(it.unitPrice));
-      return `${Number(it.qty)}x ${it.itemNameSnapshot} = ${formatRupiah(sub)}`;
-    }),
-    '---',
-    `*TOTAL: ${formatRupiah(order.grandTotal)}*`,
-    order.payment ? `Metode: ${order.payment.paymentMethod} (LUNAS)` : null,
-    tenant.receiptFooter || 'Terima kasih!',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const waReceiptMessage = buildCustomerReceiptWaMessage({ tenant, order });
 
   const design = getEffectiveReceiptDesign(tenant);
   const dividerClass = getDividerBorderClass(design.dividerStyle);
@@ -135,6 +129,7 @@ export function ThermalReceiptModal({
     <ModalShell
       open={true}
       onClose={onClose}
+      closeOnEscape={true}
       headerId="thermal-receipt-modal-header"
       testId="thermal-receipt-modal"
       title="Struk Thermal POS"
@@ -142,36 +137,34 @@ export function ThermalReceiptModal({
       maxWidthClass="max-w-lg"
       footer={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => setFonnteOpen(true)}
-            data-testid="receipt-send-whatsapp-btn"
-            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border rounded-lg transition-colors whitespace-nowrap ${
-              hasFonnteWa
-                ? 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border-emerald-200'
-                : 'text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-200'
-            }`}
-          >
-            {hasFonnteWa ? (
-              <MessageCircle className="w-3.5 h-3.5" />
-            ) : (
-              <Lock className="w-3.5 h-3.5" />
-            )}
-            <span>{hasFonnteWa ? 'Kirim WA (Fonnte)' : 'Kirim WA (Add-On)'}</span>
-          </button>
+          {waPolicy.canSendCustomerMessage && (
+            <button
+              type="button"
+              onClick={() =>
+                waPolicy.channel === 'FONNTE' ? setFonnteOpen(true) : setDirectWaOpen(true)
+              }
+              data-testid="receipt-send-whatsapp-btn"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.75} />
+              <span>
+                {waPolicy.channel === 'FONNTE' ? 'Kirim WA (Fonnte)' : 'Kirim WA ke Pelanggan'}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void handleBluetoothEscPos()}
-            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium text-stone-700 bg-white border border-stone-200 hover:bg-stone-50 rounded-lg transition-colors whitespace-nowrap"
           >
-            <Bluetooth className="w-3.5 h-3.5" />
+            <Bluetooth className="w-3.5 h-3.5" strokeWidth={1.75} />
             <span>Bluetooth</span>
           </button>
           <button
             type="button"
             data-testid="receipt-skip-print-btn"
             onClick={onClose}
-            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
           >
             <span>Selesai Tanpa Cetak</span>
           </button>
@@ -180,22 +173,22 @@ export function ThermalReceiptModal({
             onClick={handleBrowserPrint}
             className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap"
           >
-            <Printer className="w-3.5 h-3.5" />
+            <Printer className="w-3.5 h-3.5" strokeWidth={1.75} />
             <span>Cetak ({paperWidth})</span>
           </button>
         </div>
       }
     >
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex flex-col items-center gap-4 p-5">
         {/* Paper Width Segmented Control */}
-        <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg">
+        <div className="flex items-center gap-1 p-1 bg-stone-200/70 rounded-lg">
           {(['58mm', '80mm'] as const).map((w) => (
             <button
               key={w}
               type="button"
               onClick={() => setPaperWidth(w)}
               className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                paperWidth === w ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                paperWidth === w ? 'bg-white text-stone-900 shadow-xs' : 'text-stone-600'
               }`}
             >
               Kertas {w}
@@ -206,7 +199,7 @@ export function ThermalReceiptModal({
         {/* Printable Thermal Receipt Surface */}
         <div
           id="thermal-receipt-printable"
-          className={`bg-white border border-slate-200 p-5 font-mono text-xs text-slate-900 tabular-nums transition-all ${
+          className={`bg-white border border-stone-200 p-5 font-mono text-xs text-stone-900 tabular-nums transition-all ${
             paperWidth === '58mm' ? 'w-[252px]' : 'w-[332px]'
           }`}
         >
@@ -346,9 +339,9 @@ export function ThermalReceiptModal({
               <span>{formatRupiah(order.grandTotal)}</span>
             </div>
             {order.payment && (
-              <div className="flex justify-between text-[11px] text-slate-600">
-                <span>Metode: {order.payment.paymentMethod}</span>
-                <span>LUNAS</span>
+              <div className="flex justify-between text-[11px] text-stone-600">
+                <span>Metode: {formatPaymentMethodIndonesian(order.payment.paymentMethod)}</span>
+                <span>Lunas</span>
               </div>
             )}
           </div>
@@ -382,15 +375,29 @@ export function ThermalReceiptModal({
         )}
       </div>
 
-      <FonnteSendModal
-        open={fonnteOpen}
-        onClose={() => setFonnteOpen(false)}
-        title={`Kirim Struk ${order.orderNumber} via WhatsApp (Fonnte)`}
-        defaultPhone={order.customerPhoneWa ?? ''}
-        defaultMessage={waReceiptMessage}
-        documentType="RECEIPT"
-        referenceNo={order.orderNumber}
-      />
+      {waPolicy.channel === 'FONNTE' && (
+        <FonnteSendModal
+          open={fonnteOpen}
+          onClose={() => setFonnteOpen(false)}
+          title={`Kirim Struk ${order.orderNumber} via WhatsApp (Fonnte)`}
+          defaultPhone={order.customerPhoneWa ?? ''}
+          defaultMessage={waReceiptMessage}
+          documentType="RECEIPT"
+          referenceNo={order.orderNumber}
+        />
+      )}
+
+      {waPolicy.channel === 'WA_ME_DIRECT' && (
+        <DirectWaCustomerModal
+          open={directWaOpen}
+          onClose={() => setDirectWaOpen(false)}
+          title={`Kirim Rincian Nota ${order.orderNumber} ke WA Pelanggan`}
+          businessWhatsappNumber={tenant.settings.businessWhatsappNumber}
+          defaultCustomerPhone={order.customerPhoneWa ?? ''}
+          defaultCustomerName={order.customerName}
+          defaultMessage={waReceiptMessage}
+        />
+      )}
     </ModalShell>
   );
 }

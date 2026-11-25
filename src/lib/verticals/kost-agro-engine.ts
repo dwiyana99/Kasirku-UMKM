@@ -76,24 +76,37 @@ export function createBoardingDepositJournal(params: {
 }
 
 /**
- * Computes Boarding Invoice totals & 10% PPh Final Pasal 4(2) Sewa Bangunan.
+ * Computes Boarding Invoice totals, optional Regional Perda Tax (e.g., PBJT Kos >10 kamar),
+ * and 10% PPh Final Pasal 4(2) Sewa Bangunan.
  */
 export function calculateBoardingInvoice(params: {
   rentAmount: string;
   utilityFee: string;
   lateFee: string;
+  regionalTaxRate?: string; // Decimal rate e.g. '0.1000' when Kost >10 kamar PBJT Perda is enabled
 }): {
+  subtotalRentAndAddOns: string;
+  regionalTaxAmount: string;
   totalAmount: string;
   pph42Amount: string;
 } {
   const rent = Decimal.max(new Decimal(0), new Decimal(params.rentAmount || '0'));
-  const utility = Decimal.max(new Decimal(0), new Decimal(params.utilityFee || '0'));
+  const addOns = Decimal.max(new Decimal(0), new Decimal(params.utilityFee || '0'));
   const late = Decimal.max(new Decimal(0), new Decimal(params.lateFee || '0'));
-  const totalAmount = rent.plus(utility).plus(late);
-  // PPh Final Pasal 4(2) 10% applies to gross building/room rental component (including service/utility bundled in rent)
-  const pph42Amount = totalAmount.times(PPH_4_2_RENT_RATE).toDecimalPlaces(0, Decimal.ROUND_FLOOR);
+  const subtotalRentAndAddOns = rent.plus(addOns).plus(late);
+  const regionalRate = Decimal.max(new Decimal(0), new Decimal(params.regionalTaxRate || '0'));
+  const regionalTaxAmount = subtotalRentAndAddOns
+    .times(regionalRate)
+    .toDecimalPlaces(0, Decimal.ROUND_FLOOR);
+  const totalAmount = subtotalRentAndAddOns.plus(regionalTaxAmount);
+  // PPh Final Pasal 4(2) 10% applies strictly to gross rent + add-ons (never double-taxing PBJT daerah)
+  const pph42Amount = subtotalRentAndAddOns
+    .times(PPH_4_2_RENT_RATE)
+    .toDecimalPlaces(0, Decimal.ROUND_FLOOR);
 
   return {
+    subtotalRentAndAddOns: subtotalRentAndAddOns.toFixed(4),
+    regionalTaxAmount: regionalTaxAmount.toFixed(4),
     totalAmount: totalAmount.toFixed(4),
     pph42Amount: pph42Amount.toFixed(4),
   };
@@ -118,6 +131,8 @@ export function createBoardingRentPaymentJournal(params: {
   entryDate?: string;
 }): JournalEntry {
   const total = new Decimal(params.invoice.totalAmount || '0');
+  const regionalTax = Decimal.max(new Decimal(0), new Decimal(params.invoice.regionalTaxAmount || '0'));
+  const netRentRevenue = Decimal.max(new Decimal(0), total.minus(regionalTax));
   const pph42 = new Decimal(params.invoice.pph42Amount || '0');
   const entryDate = params.entryDate ?? new Date().toISOString().slice(0, 10);
   const id = `je-kost-rent-${Date.now()}-${params.entrySeq}`;
@@ -132,10 +147,19 @@ export function createBoardingRentPaymentJournal(params: {
     {
       accountCode: '4104',
       debit: '0.0000',
-      credit: total.toFixed(4),
+      credit: netRentRevenue.toFixed(4),
       memo: `Pendapatan Sewa Kamar ${params.roomNumber} (${params.invoice.periodMonth})`,
     },
   ];
+
+  if (regionalTax.gt(0)) {
+    draftLines.push({
+      accountCode: '2103',
+      debit: '0.0000',
+      credit: regionalTax.toFixed(4),
+      memo: `${params.invoice.regionalTaxLabel || 'PBJT Pajak Daerah Kost'} - Kamar ${params.roomNumber}`,
+    });
+  }
 
   if (pph42.gt(0)) {
     draftLines.push(
@@ -143,13 +167,13 @@ export function createBoardingRentPaymentJournal(params: {
         accountCode: '6201',
         debit: pph42.toFixed(4),
         credit: '0.0000',
-        memo: `Akrual PPh Final Sewa Bangunan Pasal 4(2) 10% — Kamar ${params.roomNumber}`,
+        memo: `Akrual PPh Final Sewa Bangunan Pasal 4(2) 10% - Kamar ${params.roomNumber}`,
       },
       {
         accountCode: '2105',
         debit: '0.0000',
         credit: pph42.toFixed(4),
-        memo: `Utang PPh Final Pasal 4(2) 10% — periode ${params.invoice.periodMonth}`,
+        memo: `Utang PPh Final Pasal 4(2) 10% - periode ${params.invoice.periodMonth}`,
       }
     );
   }
@@ -179,15 +203,31 @@ export function buildBoardingWhatsAppLink(params: {
   const fmt = (val: string) =>
     `Rp${new Decimal(val || '0').toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber().toLocaleString('id-ID')}`;
 
+  const addOnNames = (params.invoice.facilityAddOns ?? [])
+    .map((a) => a.name)
+    .filter(Boolean)
+    .join(', ');
+  const hasAddOnFee = new Decimal(params.invoice.utilityFee || '0').gt(0);
+  const hasRegionalTax = new Decimal(params.invoice.regionalTaxAmount || '0').gt(0);
+
   const text = [
     `Halo Kak *${params.boardingTenant.fullName}*,`,
     `Berikut rincian tagihan kost *${params.businessName}* untuk periode *${params.invoice.periodMonth}*:`,
     ``,
     `• Kamar: ${params.room.roomNumber} (${params.room.roomType})`,
     `• Sewa Kamar: ${fmt(params.invoice.rentAmount)}`,
-    `• Listrik/Air/WiFi: ${fmt(params.invoice.utilityFee)}`,
+    ...(hasAddOnFee
+      ? [
+          `• Add-On Fasilitas${addOnNames ? ` (${addOnNames})` : ''}: ${fmt(params.invoice.utilityFee)}`,
+        ]
+      : []),
     ...(new Decimal(params.invoice.lateFee || '0').gt(0)
       ? [`• Denda Keterlambatan: ${fmt(params.invoice.lateFee)}`]
+      : []),
+    ...(hasRegionalTax
+      ? [
+          `• ${params.invoice.regionalTaxLabel || 'Pajak Daerah (PBJT)'}: ${fmt(params.invoice.regionalTaxAmount || '0')}`,
+        ]
       : []),
     `• *Total Tagihan: ${fmt(params.invoice.totalAmount)}*`,
     `• Status: ${params.invoice.paymentStatus === 'PAID' ? 'LUNAS' : 'BELUM LUNAS'}`,

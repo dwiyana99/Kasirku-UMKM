@@ -113,7 +113,7 @@ export const ALL_VERTICAL_DEFINITIONS: VerticalDefinition[] = [
     keyBenefitTitle: 'Manfaat Langsung untuk Toko Retail',
     keyBenefits: [
       'Pisah kategori, merek, dan barcode ribuan SKU secara terstruktur.',
-      'Stock Opname buta (blind count) untuk mencegah barang hilang oleh oknum.',
+      'Cek fisik stok berkala untuk mencegah selisih dan kehilangan barang.',
       'Pantau barang paling laris dan barang yang lama tidak terjual.',
     ],
     features: [
@@ -501,7 +501,7 @@ export const ALL_VERTICAL_DEFINITIONS: VerticalDefinition[] = [
       'Khusus salon kecantikan wanita dengan beragam treatment durasi panjang (rebounding, smoothing, hair coloring, creambath, nail art, manicure/pedicure, eyelash) serta komisi stylist.',
     keyBenefitTitle: 'Manfaat Langsung untuk Salon Kecantikan',
     keyBenefits: [
-      'Booking jam treatment panjang (60–180 menit) per kursi/stylist agar jadwal tidak bentrok.',
+      'Booking jam treatment panjang (60-180 menit) per kursi/stylist agar jadwal tidak tumpang tindih.',
       'Dukung multi-treatment dalam satu kunjungan (misal Hair Spa + Nail Art + Manicure).',
       'Pantau stok obat smoothing, cat rambut, kuteks gel, dan serum retail.',
     ],
@@ -708,17 +708,17 @@ export const ALL_VERTICAL_DEFINITIONS: VerticalDefinition[] = [
     demoOwnerName: 'Coach Arif Wibowo',
     demoEmail: 'demo.lapangan@kasirakun.id',
     demoRegionCode: 'ID-JK-JKT',
-    headline: 'Jadwal Booking per Jam Anti-Bentrok, Bayar DP & Sewa Raket/Shuttlecock',
+    headline: 'Jadwal Booking per Jam Teratur, Bayar DP & Sewa Raket/Shuttlecock',
     summary:
       'Khusus pengelola GOR badminton, lapangan futsal, mini soccer, dan lapangan padel. Atur slot jam main, terima DP booking, lunasi di lokasi, plus jual minuman/alat olahraga.',
     keyBenefitTitle: 'Manfaat Langsung untuk Pengelola Lapangan',
     keyBenefits: [
-      'Sistem otomatis mencegah jadwal bentrok pada lapangan dan jam yang sama.',
+      'Sistem otomatis mencegah jadwal ganda pada lapangan dan jam yang sama.',
       'Catat uang muka (DP) saat booking dan sisa pelunasan saat pemain datang bermain.',
       'Tambahkan sewa raket/padel, beli shuttlecock, atau minuman dingin dalam satu catatan.',
     ],
     features: [
-      { title: 'Jadwal Slot Lapangan Anti-Bentrok', detail: 'Pilih lapangan Badminton/Futsal/Padel, tanggal, jam mulai, dan durasi.' },
+      { title: 'Jadwal Slot Lapangan Bebas Ganda', detail: 'Pilih lapangan Badminton/Futsal/Padel, tanggal, jam mulai, dan durasi.' },
       { title: 'Kelola DP & Pelunasan Cepat', detail: 'Pantau booking berstatus DP vs Lunas + kirim konfirmasi jadwal via WA.' },
       { title: 'Kantin & Sewa Alat Olahraga', detail: 'Jual minuman, shuttlecock, dan sewa perlengkapan di kasir kantin.' },
     ],

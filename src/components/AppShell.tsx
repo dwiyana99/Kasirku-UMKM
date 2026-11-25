@@ -30,6 +30,7 @@ import {
   RotateCcw,
   FileSignature,
   Globe,
+  Menu,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { AccountModal } from './AccountModal';
@@ -44,9 +45,14 @@ import {
   type SidebarIconKey,
 } from '../lib/navigation/sidebar-config';
 import {
+  buildMobileBottomNavItems,
+  type QuickActionIconKey,
+} from '../lib/navigation/quick-actions';
+import {
   canAccessRouteWithStaffPermissions,
   getDefaultHomeRouteForSession,
 } from '../lib/rbac/staff-rbac';
+import { isCashierKioskFocusSession } from '../lib/messaging/whatsapp-policy';
 import { VERTICAL_LABELS_MAP } from '../lib/verticals/vertical-registry';
 import type { SubscriptionPlanCode } from '../types/domain';
 
@@ -81,6 +87,21 @@ const SIDEBAR_ICON_MAP: Record<
   returns: RotateCcw,
   contracts: FileSignature,
   globe: Globe,
+};
+
+const MOBILE_BOTTOM_ICON_MAP: Record<
+  QuickActionIconKey,
+  React.ComponentType<{ className?: string; strokeWidth?: number }>
+> = {
+  dashboard: LayoutDashboard,
+  pos: ShoppingBag,
+  catalog: Package,
+  accounting: BookOpen,
+  kost: BedDouble,
+  agro: Sprout,
+  operations: ClipboardList,
+  history: History,
+  contracts: FileSignature,
 };
 
 export function AppShell({
@@ -142,22 +163,42 @@ export function AppShell({
     [vertical, currentPlan, hasAddOn, session, notifBadgeCount]
   );
 
+  const mobileBottomItems = useMemo(
+    () =>
+      buildMobileBottomNavItems({
+        vertical,
+        plan: currentPlan,
+        hasAddOn,
+        session,
+      }),
+    [vertical, currentPlan, hasAddOn, session]
+  );
+
+  const mobileBottomColsClass =
+    mobileBottomItems.length + 1 === 2
+      ? 'grid-cols-2'
+      : mobileBottomItems.length + 1 === 3
+        ? 'grid-cols-3'
+        : mobileBottomItems.length + 1 === 4
+          ? 'grid-cols-4'
+          : 'grid-cols-5';
+
   // Strict Auth Guard: Guests cannot enter any workspace without signing in or picking demo
   if (session.role === 'GUEST') {
     return (
       <div
         data-testid="auth-required-gate"
-        className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-6"
+        className="min-h-screen bg-[#FAFAF9] text-stone-900 flex items-center justify-center p-6"
       >
-        <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-5">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700">
-            <Lock className="w-6 h-6" />
+        <div className="max-w-md w-full bg-white border border-stone-200 rounded-xl p-8 text-center space-y-5">
+          <div className="w-12 h-12 mx-auto rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700">
+            <Lock className="w-6 h-6" strokeWidth={1.75} />
           </div>
           <div className="space-y-1.5">
-            <h1 className="text-xl font-bold text-slate-900">
+            <h1 className="text-xl font-bold text-stone-900">
               Silakan Login untuk Membuka Workspace
             </h1>
-            <p className="text-sm text-slate-500 leading-relaxed">
+            <p className="text-sm text-stone-500 leading-relaxed">
               Demi privasi dan isolasi data setiap usaha, akses workspace UMKM maupun akun demo
               hanya tersedia setelah Anda masuk ke akun Anda.
             </p>
@@ -180,14 +221,14 @@ export function AppShell({
             <button
               type="button"
               onClick={() => navigate('/master/login')}
-              className="w-full py-2.5 px-4 text-sm font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              className="w-full py-2.5 px-4 text-sm font-medium text-stone-800 bg-stone-100 hover:bg-stone-200 rounded-lg transition-colors"
             >
               Masuk Portal Master Admin
             </button>
             <button
               type="button"
               onClick={() => navigate('/')}
-              className="w-full py-2 px-4 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors"
+              className="w-full py-2 px-4 text-xs font-medium text-stone-500 hover:text-stone-900 transition-colors"
             >
               Kembali ke Beranda
             </button>
@@ -205,6 +246,7 @@ export function AppShell({
       ? activeWorkspace.tables[0]
       : null;
   const routeAllowedForStaff = canAccessRouteWithStaffPermissions(route, session);
+  const isKioskFocus = isCashierKioskFocusSession(session, route);
 
   const handleLogout = async () => {
     const dest = isMaster ? '/master/login' : '/login';
@@ -364,13 +406,14 @@ export function AppShell({
 
   return (
     <div className="min-h-screen bg-[#FAFAF9] text-stone-900 flex overflow-x-hidden">
-      {/* Desktop Sidebar */}
+      {/* Desktop Sidebar (Hidden in Cashier Kiosk Focus Mode so cashier gets full POS screen) */}
+      {!isKioskFocus && (
       <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-stone-200 z-30">
-        <div className="h-16 px-6 flex items-center justify-between border-b border-slate-200">
+        <div className="h-16 px-6 flex items-center justify-between border-b border-stone-200">
           <button
             type="button"
             onClick={() => navigate(isMaster ? '/master-admin' : '/dashboard')}
-            className="text-lg font-bold tracking-tight text-slate-900 hover:text-emerald-700 transition-colors whitespace-nowrap"
+            className="text-lg font-bold tracking-tight text-stone-900 hover:text-emerald-700 transition-colors whitespace-nowrap"
           >
             KasirAkun
           </button>
@@ -378,16 +421,16 @@ export function AppShell({
             type="button"
             onClick={() => navigate('/')}
             aria-label="Kembali ke Beranda Publik"
-            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-md transition-colors"
+            className="p-1.5 text-stone-400 hover:text-stone-700 rounded-md transition-colors"
             title="Beranda Publik"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4" strokeWidth={1.75} />
           </button>
         </div>
 
         {/* Isolated Active Tenant Card */}
-        <div className="p-4 border-b border-slate-100 relative">
-          <p className="text-xs text-slate-500 mb-1.5">
+        <div className="p-4 border-b border-stone-100 relative">
+          <p className="text-xs text-stone-500 mb-1.5">
             {isMaster ? 'Workspace Diperiksa' : 'Usaha Aktif Anda'}
           </p>
           {canSwitchMultipleTenants ? (
@@ -397,23 +440,23 @@ export function AppShell({
                 onClick={() => setSwitcherOpen((o) => !o)}
                 aria-expanded={switcherOpen}
                 aria-label="Ganti Usaha UMKM"
-                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-left transition-colors"
+                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg text-left transition-colors"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900 truncate">
+                  <p className="text-sm font-semibold text-stone-900 truncate">
                     {activeWorkspace.tenant.name}
                   </p>
-                  <p className="text-xs text-slate-500 truncate">
+                  <p className="text-xs text-stone-500 truncate">
                     {VERTICAL_LABELS[activeWorkspace.tenant.vertical]} · {currentPlan}
                   </p>
                 </div>
-                <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                <ChevronDown className="w-4 h-4 text-stone-400 shrink-0" strokeWidth={1.75} />
               </button>
 
               {switcherOpen && (
                 <div
                   role="menu"
-                  className="absolute left-4 right-4 top-[88px] bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-50 max-h-72 overflow-y-auto"
+                  className="absolute left-4 right-4 top-[88px] bg-white border border-stone-200 rounded-xl shadow-lg py-1.5 z-50 max-h-72 overflow-y-auto"
                 >
                   {visibleWorkspaces.map((ws) => {
                     const isSelected = ws.tenant.id === activeWorkspace.tenant.id;
@@ -429,12 +472,12 @@ export function AppShell({
                         className={`w-full px-3 py-2 text-left transition-colors flex items-start justify-between gap-2 ${
                           isSelected
                             ? 'bg-emerald-50 text-emerald-900'
-                            : 'hover:bg-slate-50 text-slate-700'
+                            : 'hover:bg-stone-50 text-stone-700'
                         }`}
                       >
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{ws.tenant.name}</p>
-                          <p className="text-xs text-slate-500">
+                          <p className="text-xs text-stone-500">
                             {VERTICAL_LABELS[ws.tenant.vertical]} · {ws.tenant.taxEntity}
                           </p>
                         </div>
@@ -450,30 +493,30 @@ export function AppShell({
               )}
             </>
           ) : (
-            <div className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg">
-              <p className="text-sm font-semibold text-slate-900 truncate">
+            <div className="px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg">
+              <p className="text-sm font-semibold text-stone-900 truncate">
                 {activeWorkspace.tenant.name}
               </p>
-              <p className="text-xs text-slate-500 truncate">
+              <p className="text-xs text-stone-500 truncate">
                 {VERTICAL_LABELS[activeWorkspace.tenant.vertical]} · Paket {currentPlan}
               </p>
             </div>
           )}
         </div>
 
-        {/* 4-Group Vertical-Adaptive Navigation */}
+        {/* 5-Group Vertical-Adaptive Navigation */}
         {renderSidebarNav()}
 
         {/* Account Management & Logout Footer */}
-        <div className="p-4 border-t border-slate-200 space-y-2">
+        <div className="p-4 border-t border-stone-200 space-y-2">
           <PWAInstallButton compact />
           {isMaster && (
             <button
               type="button"
               onClick={exitImpersonation}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-stone-900 hover:bg-stone-800 rounded-lg transition-colors whitespace-nowrap"
             >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />
               <span>Kembali ke Konsol Master</span>
             </button>
           )}
@@ -481,12 +524,12 @@ export function AppShell({
           <button
             type="button"
             onClick={() => setAccountModalOpen(true)}
-            className="w-full flex items-center gap-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-left transition-colors"
+            className="w-full flex items-center gap-2.5 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg px-3 py-2 text-left transition-colors"
           >
-            <UserCog className="w-4 h-4 text-emerald-700 shrink-0" />
+            <UserCog className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-slate-900 truncate">{session.fullName}</p>
-              <p className="text-[11px] text-slate-500 truncate">Kelola Akun · {session.email}</p>
+              <p className="text-xs font-semibold text-stone-900 truncate">{session.fullName}</p>
+              <p className="text-[11px] text-stone-500 truncate">Kelola Akun · {session.email}</p>
             </div>
           </button>
 
@@ -495,39 +538,124 @@ export function AppShell({
             onClick={() => void handleLogout()}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors whitespace-nowrap"
           >
-            <LogOut className="w-3.5 h-3.5" />
+            <LogOut className="w-3.5 h-3.5" strokeWidth={1.75} />
             <span>Keluar (Logout)</span>
           </button>
         </div>
       </aside>
+      )}
 
       {/* Main Content Area */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-        {/* Demo Mode Top Simulator Banner */}
+      <div className={`flex-1 ${isKioskFocus ? '' : 'lg:pl-64'} flex flex-col min-w-0`}>
+        {/* Cashier Kiosk Focus Top Bar (Compact distraction-free header for cashier-only staff on /pos) */}
+        {isKioskFocus && (
+          <div
+            data-testid="cashier-kiosk-header"
+            className="bg-white border-b border-stone-200 px-4 sm:px-6 h-14 flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="w-8 h-8 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
+                KA
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-stone-900 truncate">
+                  {activeWorkspace.tenant.name}
+                </p>
+                <p className="text-[11px] text-stone-500 truncate">
+                  Mode Fokus Kasir · {session.fullName}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {primaryAction}
+              <button
+                type="button"
+                onClick={() => navigate('/transactions')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg whitespace-nowrap"
+              >
+                <History className="w-3.5 h-3.5" strokeWidth={1.75} />
+                <span className="hidden sm:inline">Riwayat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-700 bg-white hover:bg-stone-100 border border-stone-200 rounded-lg whitespace-nowrap"
+              >
+                <Menu className="w-3.5 h-3.5" strokeWidth={1.75} />
+                <span className="hidden sm:inline">Menu</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleLogout()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg whitespace-nowrap"
+              >
+                <LogOut className="w-3.5 h-3.5" strokeWidth={1.75} />
+                <span className="hidden sm:inline">Keluar</span>
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Demo Mode Top Simulator Banner (Compact dropdown on mobile, full quick-switch on md+) */}
         {isDemoWorkspace && (
           <div
             data-testid="demo-mode-plan-banner"
-            className="bg-emerald-950 text-white px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
+            className="bg-emerald-950 text-white px-4 sm:px-6 lg:px-8 py-2 flex items-center justify-between gap-2 text-xs"
           >
             <div className="flex items-center gap-2 min-w-0">
               <span className="font-semibold text-emerald-300 whitespace-nowrap">
-                Mode Demo: Coba Semua Fitur
+                Mode Demo
               </span>
-              <span className="text-slate-300 hidden md:inline">
+              <span className="text-stone-300 hidden lg:inline truncate">
                 Simulasikan paket langganan secara langsung:
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
+
+            {/* Mobile compact selector */}
+            <div className="flex md:hidden items-center gap-1.5 shrink-0">
+              <select
+                aria-label="Pilih Simulasi Paket"
+                data-testid="demo-sim-plan-select-mobile"
+                value={currentPlan}
+                onChange={(e) => switchHybridPlan(e.target.value as SubscriptionPlanCode, [])}
+                className="px-2 py-1 rounded-md text-[11px] font-semibold bg-emerald-900 text-white border border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              >
+                <option value="LITE">LITE (49rb)</option>
+                <option value="BASIC">BASIC (95rb)</option>
+                <option value="PRO">PRO (175rb)</option>
+                <option value="EXPERT">EXPERT (279rb)</option>
+              </select>
+              <button
+                type="button"
+                data-testid="demo-banner-subscribe-btn-mobile"
+                onClick={() => {
+                  const params = new URLSearchParams({
+                    mode: 'real',
+                    from: 'demo',
+                    plan: currentPlan,
+                    vertical: activeWorkspace.tenant.vertical,
+                  });
+                  const extras = (activeWorkspace.tenant.activeAddOns ?? []).filter(Boolean);
+                  if (extras.length > 0) params.set('addons', extras.join(','));
+                  navigate(`/onboarding?${params.toString()}`);
+                }}
+                className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-amber-400 hover:bg-amber-300 text-stone-950 transition-colors whitespace-nowrap"
+              >
+                Langganan
+              </button>
+            </div>
+
+            {/* Desktop / Tablet quick switch pills */}
+            <div className="hidden md:flex flex-wrap items-center gap-1.5">
               {(['LITE', 'BASIC', 'PRO', 'EXPERT'] as SubscriptionPlanCode[]).map((planCode) => {
                 const isSelected = currentPlan === planCode;
                 const priceShort =
                   planCode === 'LITE'
                     ? '49rb'
                     : planCode === 'BASIC'
-                      ? '100rb'
+                      ? '95rb'
                       : planCode === 'PRO'
-                        ? '199rb'
-                        : '349rb';
+                        ? '175rb'
+                        : '279rb';
                 return (
                   <button
                     key={planCode}
@@ -536,8 +664,8 @@ export function AppShell({
                     onClick={() => switchHybridPlan(planCode, [])}
                     className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
                       isSelected
-                        ? 'bg-emerald-500 text-slate-950'
-                        : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                        ? 'bg-emerald-500 text-stone-950'
+                        : 'bg-white/10 text-stone-200 hover:bg-white/20'
                     }`}
                   >
                     {planCode} ({priceShort})
@@ -558,7 +686,7 @@ export function AppShell({
                   if (extras.length > 0) params.set('addons', extras.join(','));
                   navigate(`/onboarding?${params.toString()}`);
                 }}
-                className="ml-1 px-3 py-1 rounded-md text-[11px] font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors whitespace-nowrap"
+                className="ml-1 px-3 py-1 rounded-md text-[11px] font-bold bg-amber-400 hover:bg-amber-300 text-stone-950 transition-colors whitespace-nowrap"
               >
                 Berlangganan Akun Asli →
               </button>
@@ -566,33 +694,39 @@ export function AppShell({
           </div>
         )}
 
-        {/* Unified Dashboard Navbar */}
-        <Navbar
-          title={title}
-          subtitle={subtitle}
-          primaryAction={primaryAction}
-          onOpenMobileMenu={() => setMobileMenuOpen(true)}
-          onOpenAccountModal={() => setAccountModalOpen(true)}
-          onOpenAiDrawer={hasAiActive ? () => setAiDrawerOpen(true) : undefined}
-          onLogout={handleLogout}
-        />
+        {/* Unified Dashboard Navbar (Replaced by compact Kiosk Bar when cashier is in Focus Mode) */}
+        {!isKioskFocus && (
+          <Navbar
+            title={title}
+            subtitle={subtitle}
+            primaryAction={primaryAction}
+            onOpenMobileMenu={() => setMobileMenuOpen(true)}
+            onOpenAccountModal={() => setAccountModalOpen(true)}
+            onOpenAiDrawer={hasAiActive ? () => setAiDrawerOpen(true) : undefined}
+            onLogout={handleLogout}
+          />
+        )}
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1320px] w-full mx-auto">
+        <main
+          className={`flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 w-full mx-auto ${
+            isKioskFocus ? 'max-w-[1440px]' : 'max-w-[1320px]'
+          }`}
+        >
           {routeAllowedForStaff ? (
             children
           ) : (
             <div
               data-testid="staff-permission-denied"
-              className="max-w-lg mx-auto my-12 bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-4"
+              className="max-w-lg mx-auto my-12 bg-white border border-stone-200 rounded-xl p-8 text-center space-y-4"
             >
-              <div className="w-12 h-12 mx-auto rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700">
-                <Lock className="w-6 h-6" />
+              <div className="w-12 h-12 mx-auto rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700">
+                <Lock className="w-6 h-6" strokeWidth={1.75} />
               </div>
               <div className="space-y-1">
-                <h2 className="text-lg font-bold text-slate-900">
+                <h2 className="text-lg font-bold text-stone-900">
                   Akses Menu Dibatasi untuk Akun Pegawai
                 </h2>
-                <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                <p className="text-xs sm:text-sm text-stone-600 leading-relaxed">
                   Akun Anda ({session.staffRoleTitle || 'Pegawai'}) belum diberikan wewenang untuk
                   membuka halaman ini. Hubungi Pemilik Usaha jika memerlukan akses tambahan.
                 </p>
@@ -609,11 +743,57 @@ export function AppShell({
         </main>
       </div>
 
-      {/* Mobile Drawer */}
+      {/* Consistent Mobile Bottom Navigation Bar (1-Tap Primary Actions: Ringkasan, Kasir, Stok, Laporan, Menu) */}
+      <nav
+        data-testid="mobile-bottom-nav"
+        aria-label="Navigasi Utama Mobile"
+        className={`lg:hidden fixed bottom-0 inset-x-0 z-40 h-16 bg-white border-t border-stone-200 grid ${mobileBottomColsClass}`}
+      >
+        {mobileBottomItems.map((item) => {
+          const Icon = MOBILE_BOTTOM_ICON_MAP[item.iconKey];
+          const isActive =
+            route === item.path ||
+            (item.path === '/catalog/products' && route.startsWith('/catalog')) ||
+            (item.path === '/accounting' && route.startsWith('/accounting'));
+          return (
+            <button
+              key={item.id}
+              type="button"
+              data-testid={`mobile-nav-${item.id}`}
+              onClick={() => navigate(item.path)}
+              aria-current={isActive ? 'page' : undefined}
+              className={`flex flex-col items-center justify-center gap-1 px-1 text-[11px] leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-600 ${
+                isActive
+                  ? 'text-emerald-700 font-semibold'
+                  : 'text-stone-500 hover:text-stone-900 font-medium'
+              }`}
+            >
+              <Icon
+                className={`w-5 h-5 shrink-0 ${
+                  isActive ? 'text-emerald-700' : 'text-stone-400'
+                }`}
+                strokeWidth={1.75}
+              />
+              <span className="truncate max-w-full">{item.shortLabel}</span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          data-testid="mobile-nav-menu"
+          onClick={() => setMobileMenuOpen(true)}
+          className="flex flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium leading-tight text-stone-500 hover:text-stone-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-600"
+        >
+          <Menu className="w-5 h-5 text-stone-400 shrink-0" strokeWidth={1.75} />
+          <span className="truncate">Menu</span>
+        </button>
+      </nav>
+
+      {/* Mobile Drawer (Also available from Kiosk Focus Mode "Menu" button) */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
+        <div className={`fixed inset-0 z-50 flex ${isKioskFocus ? '' : 'lg:hidden'}`}>
           <div
-            className="fixed inset-0 bg-slate-900/40"
+            className="fixed inset-0 bg-stone-900/40"
             onClick={() => setMobileMenuOpen(false)}
           />
           <div
@@ -673,9 +853,9 @@ export function AppShell({
                     setMobileMenuOpen(false);
                     exitImpersonation();
                   }}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-white bg-stone-900 rounded-lg"
                 >
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />
                   <span>Kembali ke Konsol Master</span>
                 </button>
               )}
@@ -685,9 +865,9 @@ export function AppShell({
                   setMobileMenuOpen(false);
                   setAccountModalOpen(true);
                 }}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-stone-700 bg-stone-50 border border-stone-200 rounded-lg"
               >
-                <UserCog className="w-3.5 h-3.5" />
+                <UserCog className="w-3.5 h-3.5" strokeWidth={1.75} />
                 <span>Kelola Akun ({session.fullName})</span>
               </button>
               <button
@@ -698,7 +878,7 @@ export function AppShell({
                 }}
                 className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-3.5 h-3.5" strokeWidth={1.75} />
                 <span>Keluar (Logout)</span>
               </button>
             </div>

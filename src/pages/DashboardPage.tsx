@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   AlertTriangle,
@@ -18,6 +18,11 @@ import {
   ClipboardList,
   TrendingUp,
   Bell,
+  History,
+  FileSignature,
+  LayoutDashboard,
+  MessageCircle,
+  Receipt,
 } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
 import { ThermalReceiptModal } from '../components/ThermalReceiptModal';
@@ -25,6 +30,7 @@ import { D3RevenueTrendChart } from '../components/dashboard/D3RevenueTrendChart
 import { LowStockAlertWidget } from '../components/inventory/LowStockAlertWidget';
 import { StockForecastingPanel } from '../components/inventory/StockForecastingPanel';
 import { DailyClosingModal } from '../components/pos/DailyClosingModal';
+import { OwnerWaReminderModal } from '../components/whatsapp/OwnerWaReminderModal';
 import { useApp } from '../context/AppContext';
 import { generateThreeTierFinancialReport } from '../lib/accounting/journal-engine';
 import { calculatePPhCompliance } from '../lib/tax/indonesia-tax-engine';
@@ -39,16 +45,67 @@ import { buildDailyRevenueSeries } from '../lib/analytics/dashboard-analytics';
 import { downloadDashboardTrendPdf } from '../lib/pdf/tier1-report-pdf';
 import { tenantHasAddOn } from '../lib/saas/hybrid-pricing';
 import { getVerticalMeta, VERTICAL_LABELS_MAP } from '../lib/verticals/vertical-registry';
+import {
+  buildAdaptiveQuickStartSteps,
+  buildDashboardQuickActions,
+  type QuickActionIconKey,
+} from '../lib/navigation/quick-actions';
+import { evaluateWhatsappSendingPolicy } from '../lib/messaging/whatsapp-policy';
+import { canAccessRouteWithStaffPermissions } from '../lib/rbac/staff-rbac';
 import type { Order } from '../types/domain';
 
 const VERTICAL_FRIENDLY_LABELS = VERTICAL_LABELS_MAP;
 
+const QUICK_ACTION_ICON_MAP: Record<
+  QuickActionIconKey,
+  React.ComponentType<{ className?: string; strokeWidth?: number }>
+> = {
+  dashboard: LayoutDashboard,
+  pos: ShoppingBag,
+  catalog: Package,
+  accounting: BookOpen,
+  kost: BedDouble,
+  agro: Sprout,
+  operations: ClipboardList,
+  history: History,
+  contracts: FileSignature,
+};
+
 export function DashboardPage() {
-  const { activeWorkspace, activeBranchId, navigate, markReceiptPrinted } = useApp();
+  const { activeWorkspace, activeBranchId, navigate, markReceiptPrinted, session, hasAddOn } = useApp();
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [closingModalOpen, setClosingModalOpen] = useState(false);
+  const [waReminderModalOpen, setWaReminderModalOpen] = useState(false);
   const [pdfDownloadNotice, setPdfDownloadNotice] = useState<string | null>(null);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const dismissKey = `kasirakun_quickstart_dismissed_${activeWorkspace.tenant.id}`;
+  const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(() => {
+    try {
+      return typeof window !== 'undefined' && window.localStorage.getItem(dismissKey) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setOnboardingDismissed(
+        typeof window !== 'undefined' && window.localStorage.getItem(dismissKey) === '1'
+      );
+    } catch {
+      setOnboardingDismissed(false);
+    }
+  }, [dismissKey]);
+
+  const handleDismissOnboarding = () => {
+    setOnboardingDismissed(true);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(dismissKey, '1');
+      }
+    } catch {
+      // Ignore storage quota errors in private mode
+    }
+  };
 
   const branches = activeWorkspace.branches ?? [];
   const activeBranch = branches.find((b) => b.id === activeBranchId) ?? null;
@@ -117,11 +174,22 @@ export function DashboardPage() {
     if (activeWorkspace.tenant.vertical !== 'KOST_KONTRAKAN') return null;
     const rooms = activeWorkspace.boardingRooms ?? [];
     const occupied = rooms.filter((r) => r.status === 'OCCUPIED').length;
-    const depositTotal = (activeWorkspace.boardingTenants ?? [])
-      .filter((t) => t.isActive)
-      .reduce((s, t) => s.plus(new Decimal(t.depositAmount || '0')), new Decimal(0));
+    const activeTenants = (activeWorkspace.boardingTenants ?? []).filter((t) => t.isActive);
+    const depositTotal = activeTenants.reduce(
+      (s, t) => s.plus(new Decimal(t.depositAmount || '0')),
+      new Decimal(0)
+    );
     const unpaid = (activeWorkspace.boardingInvoices ?? []).filter((i) => i.paymentStatus !== 'PAID').length;
-    return { total: rooms.length, occupied, depositTotal: depositTotal.toFixed(4), unpaid };
+    const todayStart = new Date();
+    const todayUtc = Date.UTC(todayStart.getFullYear(), todayStart.getMonth(), todayStart.getDate());
+    const dueSoonCount = activeTenants.filter((t) => {
+      if (!t.nextDueDate) return false;
+      const m = t.nextDueDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (!m) return false;
+      const diff = Math.round((Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - todayUtc) / 86_400_000);
+      return diff <= 7;
+    }).length;
+    return { total: rooms.length, occupied, depositTotal: depositTotal.toFixed(4), unpaid, dueSoonCount };
   }, [activeWorkspace]);
 
   const agroSummary = useMemo(() => {
@@ -197,6 +265,41 @@ export function DashboardPage() {
     [activeWorkspace]
   );
 
+  const currentPlan = activeWorkspace.tenant.subscriptionPlan ?? 'BASIC';
+  const waPolicy = useMemo(
+    () =>
+      evaluateWhatsappSendingPolicy({
+        businessWhatsappNumber: activeWorkspace.tenant.settings?.businessWhatsappNumber,
+        hasFonnte: hasAddOn('ADDON_WA_FONNTE'),
+      }),
+    [activeWorkspace.tenant.settings?.businessWhatsappNumber, hasAddOn]
+  );
+  const canOpenSettings = canAccessRouteWithStaffPermissions('/settings/custom-fields', session);
+
+  const dashboardQuickActions = useMemo(
+    () =>
+      buildDashboardQuickActions({
+        vertical: activeWorkspace.tenant.vertical,
+        plan: currentPlan,
+        hasAddOn,
+        session,
+      }),
+    [activeWorkspace.tenant.vertical, currentPlan, hasAddOn, session]
+  );
+
+  const quickStartSteps = useMemo(
+    () =>
+      buildAdaptiveQuickStartSteps({
+        workspace: activeWorkspace,
+        plan: currentPlan,
+        hasAddOn,
+        orderCount: filteredOrders.length,
+      }),
+    [activeWorkspace, currentPlan, hasAddOn, filteredOrders.length]
+  );
+  const quickStartDoneCount = quickStartSteps.filter((s) => s.done).length;
+  const allQuickStartDone = quickStartDoneCount >= quickStartSteps.length;
+
   const handlePrintManagementReport = () => {
     const series = buildDailyRevenueSeries(filteredOrders);
     const fileName = downloadDashboardTrendPdf({
@@ -239,14 +342,16 @@ export function DashboardPage() {
           <ClipboardList className="w-4 h-4" strokeWidth={1.75} />
           <span>{activeVerticalMeta.dedicatedMenuLabel || 'Operasional Usaha'}</span>
         </button>
-        <button
-          type="button"
-          onClick={() => navigate('/pos')}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-medium text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 rounded-lg transition-colors whitespace-nowrap"
-        >
-          <ShoppingBag className="w-4 h-4" strokeWidth={1.75} />
-          <span>Kasir</span>
-        </button>
+        {activeVerticalMeta.supportsPos && (
+          <button
+            type="button"
+            onClick={() => navigate('/pos')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-medium text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 rounded-lg transition-colors whitespace-nowrap"
+          >
+            <ShoppingBag className="w-4 h-4" strokeWidth={1.75} />
+            <span>Kasir</span>
+          </button>
+        )}
       </div>
     ) : (
       <div className="flex items-center gap-2">
@@ -297,135 +402,170 @@ export function DashboardPage() {
           </div>
         )}
 
-        {/* Panduan 3 Langkah Pertama (tampil otomatis hanya saat usaha baru belum ada transaksi) */}
-        {filteredOrders.length === 0 && !onboardingDismissed && (
+        {/* Pengingat Wajib Nomor WhatsApp Pemilik (Muncul jika nomor WA belum diisi & belum pakai Add-On Fonnte) */}
+        {waPolicy.needsOwnerWaReminder && (
+          <section
+            data-testid="dashboard-owner-wa-reminder"
+            aria-label="Pengingat Nomor WhatsApp Pemilik"
+            className="bg-amber-50/80 border border-amber-200 rounded-xl px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          >
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-lg bg-amber-100 border border-amber-200 text-amber-800 flex items-center justify-center shrink-0 mt-0.5">
+                <MessageCircle className="w-4 h-4" strokeWidth={1.75} />
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <p className="text-sm font-semibold text-stone-900">
+                  Lengkapi Nomor WhatsApp Pemilik Usaha
+                </p>
+                <p className="text-xs text-stone-600 leading-relaxed max-w-[65ch]">
+                  Tambahkan nomor WhatsApp pemilik terlebih dahulu di Pengaturan agar fitur kirim rekap tutup kasir dan kirim rincian transaksi ke pelanggan langsung aktif.
+                </p>
+              </div>
+            </div>
+            {canOpenSettings ? (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  data-testid="dashboard-wa-quick-modal-btn"
+                  onClick={() => setWaReminderModalOpen(true)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+                >
+                  <span>Isi Cepat di Sini</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="dashboard-wa-reminder-cta"
+                  onClick={() => navigate('/settings/custom-fields?tab=payments_wa')}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-950 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600"
+                >
+                  <span>Pengaturan</span>
+                  <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.75} />
+                </button>
+              </div>
+            ) : (
+              <span className="text-xs font-medium text-amber-900 whitespace-nowrap shrink-0">
+                Hubungi Pemilik Usaha untuk mengisi
+              </span>
+            )}
+          </section>
+        )}
+
+        {/* 3 Aksi Utama Konsisten (Kasir/Operasional, Stok/Katalog, Laporan) Adaptif Paket & Jenis UMKM */}
+        {dashboardQuickActions.length > 0 && (
+          <section
+            data-testid="dashboard-primary-actions"
+            aria-label="Menu Aksi Utama"
+            className="grid grid-cols-3 gap-2 md:gap-3"
+          >
+            {dashboardQuickActions.map((action) => {
+              const Icon = QUICK_ACTION_ICON_MAP[action.iconKey];
+              const isPrimary = action.emphasis === 'primary';
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  data-testid={`dashboard-action-${action.id}`}
+                  onClick={() => navigate(action.path)}
+                  className={`group p-3 md:p-4 rounded-xl border text-center md:text-left flex flex-col md:flex-row items-center justify-center md:justify-between gap-2 md:gap-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
+                    isPrimary
+                      ? 'bg-emerald-50/60 border-emerald-300 hover:bg-emerald-50 hover:border-emerald-500'
+                      : 'bg-white border-stone-200 hover:bg-stone-50 hover:border-stone-300'
+                  }`}
+                >
+                  <div className="flex flex-col md:flex-row items-center md:items-start gap-1.5 md:gap-3 min-w-0 w-full md:w-auto">
+                    <div
+                      className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 md:mt-0.5 ${
+                        isPrimary
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-stone-100 text-stone-700 group-hover:bg-stone-200/80'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" strokeWidth={1.75} />
+                    </div>
+                    <div className="min-w-0 w-full">
+                      <p className="text-xs md:text-sm font-semibold text-stone-900 truncate md:hidden">
+                        {action.shortLabel}
+                      </p>
+                      <p className="hidden md:block text-sm font-semibold text-stone-900 truncate">
+                        {action.label}
+                      </p>
+                      <p className="hidden md:block text-xs text-stone-500 mt-0.5 line-clamp-2 leading-relaxed">
+                        {action.description}
+                      </p>
+                    </div>
+                  </div>
+                  <ArrowRight
+                    className={`hidden md:block w-4 h-4 shrink-0 ${
+                      isPrimary
+                        ? 'text-emerald-700'
+                        : 'text-stone-400 group-hover:text-stone-700'
+                    }`}
+                    strokeWidth={1.75}
+                  />
+                </button>
+              );
+            })}
+          </section>
+        )}
+
+        {/* Panduan 3 Langkah Pertama (Adaptif Paket & Jenis UMKM, hilang otomatis bila selesai atau ditutup) */}
+        {filteredOrders.length === 0 && !allQuickStartDone && !onboardingDismissed && (
           <section
             data-testid="dashboard-onboarding-checklist"
             className="bg-white border border-stone-200 rounded-xl p-5 space-y-4"
           >
-            {(() => {
-              const step1Done = activeWorkspace.products.length >= 3;
-              const step2Done = filteredOrders.length > 0;
-              const step3Done = Boolean(
-                activeWorkspace.tenant.settings?.businessWhatsappNumber?.trim()
-              );
-              const doneCount = [step1Done, step2Done, step3Done].filter(Boolean).length;
-              const posRoute = activeVerticalMeta.dedicatedRoute || '/pos';
-              return (
-                <>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold text-emerald-700">
-                        Mulai Cepat · {doneCount} dari 3 langkah selesai
-                      </p>
-                      <h2 className="text-base font-bold text-stone-900 mt-0.5">
-                        3 Langkah Siap Pakai untuk {activeWorkspace.tenant.name}
-                      </h2>
-                      <p className="text-xs text-stone-500 mt-0.5">
-                        Ikuti urutan singkat ini agar kasir dan laporan langsung berjalan rapi.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setOnboardingDismissed(true)}
-                      className="text-xs font-medium text-stone-500 hover:text-stone-800"
-                    >
-                      Sembunyikan
-                    </button>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-emerald-700">
+                  Mulai Cepat · {quickStartDoneCount} dari {quickStartSteps.length} langkah selesai
+                </p>
+                <h2 className="text-base font-bold text-stone-900 mt-0.5">
+                  3 Langkah Siap Pakai untuk {activeWorkspace.tenant.name}
+                </h2>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Ikuti urutan singkat ini agar operasional {friendlyVertical} dan laporan langsung berjalan rapi.
+                </p>
+              </div>
+              <button
+                type="button"
+                data-testid="dashboard-onboarding-dismiss"
+                onClick={handleDismissOnboarding}
+                className="text-xs font-medium text-stone-500 hover:text-stone-800"
+              >
+                Sembunyikan
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {quickStartSteps.map((step) => (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() => navigate(step.path)}
+                  className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
+                    step.done
+                      ? 'border-emerald-200 bg-emerald-50/40'
+                      : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
+                  }`}
+                >
+                  <span
+                    className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
+                      step.done
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-stone-200 text-stone-700'
+                    }`}
+                  >
+                    {step.stepNumber}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-stone-900">{step.title}</p>
+                    <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">
+                      {step.description}
+                    </p>
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => navigate('/catalog/products')}
-                      className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
-                        step1Done
-                          ? 'border-emerald-200 bg-emerald-50/40'
-                          : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
-                      }`}
-                    >
-                      <span
-                        className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
-                          step1Done
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-stone-200 text-stone-700'
-                        }`}
-                      >
-                        1
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-stone-900">
-                          Isi Daftar Barang / Layanan
-                        </p>
-                        <p className="text-[11px] text-stone-500 mt-0.5">
-                          {step1Done
-                            ? `${activeWorkspace.products.length} item sudah tersimpan`
-                            : 'Tambahkan minimal 3 item atau import file CSV'}
-                        </p>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => navigate(posRoute)}
-                      className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
-                        step2Done
-                          ? 'border-emerald-200 bg-emerald-50/40'
-                          : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
-                      }`}
-                    >
-                      <span
-                        className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
-                          step2Done
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-stone-200 text-stone-700'
-                        }`}
-                      >
-                        2
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-stone-900">
-                          Coba 1 Transaksi Pertama
-                        </p>
-                        <p className="text-[11px] text-stone-500 mt-0.5">
-                          Buka Kasir dan catat penjualan tunai pertama Anda
-                        </p>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => navigate('/settings/custom-fields')}
-                      className={`p-3.5 rounded-lg border text-left transition-colors flex items-start gap-3 ${
-                        step3Done
-                          ? 'border-emerald-200 bg-emerald-50/40'
-                          : 'border-stone-200 bg-stone-50/60 hover:border-emerald-400'
-                      }`}
-                    >
-                      <span
-                        className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
-                          step3Done
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-stone-200 text-stone-700'
-                        }`}
-                      >
-                        3
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-stone-900">
-                          Isi Nomor WhatsApp Usaha
-                        </p>
-                        <p className="text-[11px] text-stone-500 mt-0.5">
-                          {step3Done
-                            ? 'Nomor WA aktif untuk rekap tutup kasir & struk'
-                            : 'Agar rekap tutup kasir & struk WA langsung terkirim'}
-                        </p>
-                      </div>
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
+                </button>
+              ))}
+            </div>
           </section>
         )}
 
@@ -450,10 +590,20 @@ export function DashboardPage() {
               </div>
               <button
                 type="button"
-                onClick={() => navigate('/pos')}
+                onClick={() =>
+                  navigate(
+                    activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+                      ? '/kost'
+                      : activeWorkspace.tenant.vertical === 'PETERNAKAN_PERTANIAN'
+                      ? '/agro'
+                      : activeVerticalMeta.supportsPos
+                      ? '/pos'
+                      : '/transactions'
+                  )
+                }
                 className="text-xs font-semibold text-rose-800 hover:text-rose-950 underline whitespace-nowrap"
               >
-                Cek Shift Kasir
+                {activeVerticalMeta.supportsPos ? 'Cek Shift Kasir' : 'Cek Riwayat Transaksi'}
               </button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -500,6 +650,14 @@ export function DashboardPage() {
                   {kostSummary.unpaid} Tagihan
                 </p>
               </div>
+              {kostSummary.dueSoonCount > 0 && (
+                <div>
+                  <p className="text-xs text-stone-500">Jatuh Tempo ≤ 7 Hari</p>
+                  <p className="text-lg font-bold font-mono tabular-nums text-rose-700">
+                    {kostSummary.dueSoonCount} Penghuni
+                  </p>
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -610,7 +768,11 @@ export function DashboardPage() {
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-stone-700">
               {activeWorkspace.tenant.vertical !== 'KOST_KONTRAKAN' &&
                 activeWorkspace.tenant.vertical !== 'PETERNAKAN_PERTANIAN' &&
-                activeWorkspace.tenant.vertical !== 'FREELANCE' && (
+                activeWorkspace.tenant.vertical !== 'FREELANCE' &&
+                activeWorkspace.tenant.vertical !== 'RENTAL_KENDARAAN' &&
+                activeWorkspace.tenant.vertical !== 'HOMESTAY_VILLA' &&
+                activeWorkspace.tenant.vertical !== 'SEWA_GARASI' &&
+                activeWorkspace.tenant.vertical !== 'BIMBEL_KURSUS_GYM' && (
                   <span className="inline-flex items-center gap-1.5">
                     {lowStockCount > 0 ? (
                       <>
@@ -829,24 +991,85 @@ export function DashboardPage() {
           <div className="lg:col-span-5 bg-white border border-stone-200 rounded-xl p-6 space-y-4">
             <h2 className="text-base font-semibold text-stone-900">Aksi Cepat</h2>
             <div className="grid grid-cols-1 gap-2.5">
-              <button
-                type="button"
-                onClick={() => navigate('/pos')}
-                className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
-              >
-                <div className="flex items-center gap-3">
-                  <ShoppingBag className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
-                  <div>
-                    <p className="text-sm font-medium text-stone-900">Buka Kasir</p>
-                    <p className="text-xs text-stone-500">
-                      {activeWorkspace.tenant.vertical === 'WARUNG_SEMBAKO'
-                        ? 'Catat jualan harian dan cetak struk bila perlu'
-                        : 'Catat transaksi pelanggan dan potong stok otomatis'}
-                    </p>
+              {activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN' ? (
+                <button
+                  type="button"
+                  data-testid="dashboard-quick-primary-work"
+                  onClick={() => navigate('/kost')}
+                  className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <BedDouble className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
+                    <div>
+                      <p className="text-sm font-medium text-stone-900">Kamar &amp; Tagihan Kost</p>
+                      <p className="text-xs text-stone-500">
+                        Kelola kamar, check-in penghuni, dan catat pembayaran sewa
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <ArrowRight className="w-4 h-4 text-stone-400" strokeWidth={1.75} />
-              </button>
+                  <ArrowRight className="w-4 h-4 text-stone-400" strokeWidth={1.75} />
+                </button>
+              ) : activeWorkspace.tenant.vertical === 'PETERNAKAN_PERTANIAN' ? (
+                <button
+                  type="button"
+                  data-testid="dashboard-quick-primary-work"
+                  onClick={() => navigate('/agro')}
+                  className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <Sprout className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
+                    <div>
+                      <p className="text-sm font-medium text-stone-900">Siklus Ternak &amp; Panen</p>
+                      <p className="text-xs text-stone-500">
+                        Catat pakan, bibit, biaya siklus, dan hasil panen per batch
+                      </p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-stone-400" strokeWidth={1.75} />
+                </button>
+              ) : !activeVerticalMeta.supportsPos ? (
+                <button
+                  type="button"
+                  data-testid="dashboard-quick-primary-work"
+                  onClick={() => navigate('/operations')}
+                  className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <ClipboardList className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
+                    <div>
+                      <p className="text-sm font-medium text-stone-900">
+                        {activeVerticalMeta.dedicatedMenuLabel || 'Operasional Usaha'}
+                      </p>
+                      <p className="text-xs text-stone-500">
+                        Kelola jadwal, unit sewa, dan pembayaran harian pelanggan
+                      </p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-stone-400" strokeWidth={1.75} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="dashboard-quick-primary-work"
+                  onClick={() => navigate('/pos')}
+                  className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <ShoppingBag className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
+                    <div>
+                      <p className="text-sm font-medium text-stone-900">
+                        {activeVerticalMeta.primarySalesLabel || 'Buka Kasir'}
+                      </p>
+                      <p className="text-xs text-stone-500">
+                        {activeWorkspace.tenant.vertical === 'WARUNG_SEMBAKO'
+                          ? 'Catat jualan harian dan cetak struk bila perlu'
+                          : 'Catat transaksi pelanggan dan potong stok otomatis'}
+                      </p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-stone-400" strokeWidth={1.75} />
+                </button>
+              )}
 
               {firstTable && (
                 <button
@@ -893,6 +1116,23 @@ export function DashboardPage() {
 
               <button
                 type="button"
+                onClick={() => navigate('/expenses')}
+                className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <Receipt className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
+                  <div>
+                    <p className="text-sm font-medium text-stone-900">Biaya Operasional</p>
+                    <p className="text-xs text-stone-500">
+                      Catat listrik, air, Wi-Fi, gaji pegawai &amp; pengeluaran rutin
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-stone-400" strokeWidth={1.75} />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => navigate('/accounting')}
                 className="flex items-center justify-between p-3 rounded-lg border border-stone-200 hover:bg-stone-50 transition-colors text-left"
               >
@@ -913,8 +1153,15 @@ export function DashboardPage() {
           </div>
         </section>
 
-        {/* Proactive Low-Stock Monitoring & Quick Restock Widget */}
-        <LowStockAlertWidget />
+        {/* Proactive Low-Stock Monitoring & Quick Restock Widget (only for stock-bearing verticals) */}
+        {![
+          'KOST_KONTRAKAN',
+          'RENTAL_KENDARAAN',
+          'HOMESTAY_VILLA',
+          'SEWA_GARASI',
+          'FREELANCE',
+          'BIMBEL_KURSUS_GYM',
+        ].includes(activeWorkspace.tenant.vertical) && <LowStockAlertWidget />}
 
         {/* Zero-AI-Token Shopping Note (LITE/BASIC) or PO Generator (PRO/EXPERT) */}
         {(activeWorkspace.tenant.vertical === 'WARUNG_SEMBAKO' ||
@@ -926,9 +1173,15 @@ export function DashboardPage() {
         <section className="bg-white border border-stone-200 rounded-xl overflow-hidden">
           <div className="px-6 py-4 border-b border-stone-200 flex items-center justify-between gap-4">
             <div>
-              <h2 className="text-base font-semibold text-stone-900">Transaksi Terbaru</h2>
+              <h2 className="text-base font-semibold text-stone-900">
+                {activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+                  ? 'Riwayat Pembayaran Terbaru'
+                  : 'Transaksi Terbaru'}
+              </h2>
               <p className="text-xs text-stone-500">
-                Setiap transaksi lunas otomatis masuk ke laporan keuangan dan mengurangi stok barang
+                {activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+                  ? 'Setiap pembayaran sewa yang lunas otomatis tercatat di laporan keuangan usaha'
+                  : 'Setiap transaksi lunas otomatis masuk ke laporan keuangan'}
               </p>
             </div>
             <button
@@ -944,14 +1197,32 @@ export function DashboardPage() {
           {activeWorkspace.orders.length === 0 ? (
             <div className="p-10 text-center space-y-3">
               <p className="text-sm text-stone-600">
-                Belum ada transaksi tercatat pada periode ini.
+                {activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+                  ? 'Belum ada nota transaksi tambahan tercatat pada periode ini. Pembayaran kamar dikelola di menu Kamar & Tagihan Kost.'
+                  : 'Belum ada transaksi tercatat pada periode ini.'}
               </p>
               <button
                 type="button"
-                onClick={() => navigate('/pos')}
+                onClick={() =>
+                  navigate(
+                    activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+                      ? '/kost'
+                      : activeWorkspace.tenant.vertical === 'PETERNAKAN_PERTANIAN'
+                      ? '/agro'
+                      : !activeVerticalMeta.supportsPos
+                      ? '/operations'
+                      : '/pos'
+                  )
+                }
                 className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg"
               >
-                Catat Transaksi Pertama
+                {activeWorkspace.tenant.vertical === 'KOST_KONTRAKAN'
+                  ? 'Buka Kamar & Tagihan Kost'
+                  : activeWorkspace.tenant.vertical === 'PETERNAKAN_PERTANIAN'
+                  ? 'Buka Siklus Ternak & Panen'
+                  : !activeVerticalMeta.supportsPos
+                  ? `Buka ${activeVerticalMeta.dedicatedMenuLabel || 'Operasional Usaha'}`
+                  : 'Catat Transaksi Pertama'}
               </button>
             </div>
           ) : (
@@ -1044,6 +1315,18 @@ export function DashboardPage() {
       <DailyClosingModal
         open={closingModalOpen}
         onClose={() => setClosingModalOpen(false)}
+      />
+
+      <OwnerWaReminderModal
+        open={waReminderModalOpen}
+        onClose={() => setWaReminderModalOpen(false)}
+        contextLabel="ringkasan usaha & transaksi"
+        onSaved={(num) => {
+          setPdfDownloadNotice(
+            `Nomor WhatsApp Pemilik (${num}) tersimpan. Tombol kirim WhatsApp kini aktif.`
+          );
+          window.setTimeout(() => setPdfDownloadNotice(null), 5000);
+        }}
       />
     </AppShell>
   );

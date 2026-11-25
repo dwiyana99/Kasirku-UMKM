@@ -2,10 +2,10 @@ import React, { useMemo, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   AlertTriangle,
+  CalendarClock,
   Download,
   FileText,
   Fuel,
-  MessageCircle,
   Plus,
   Printer,
   ShieldCheck,
@@ -13,7 +13,17 @@ import {
   X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { UnifiedWaActionButton } from '../whatsapp/UnifiedWaActionButton';
 import { formatRupiah } from '../../lib/pos/checkout-service';
+import {
+  addDaysIsoDate,
+  addMonthsIsoDate,
+  computeDueCountdown,
+  formatDateIndo,
+  formatDateTimeIndo,
+  formatVerticalStatusLabel,
+  getTodayIsoDate,
+} from '../../lib/date/indonesia-date';
 import {
   buildRentalContractPrintHtml,
   calculateCourtBookingAmounts,
@@ -22,10 +32,8 @@ import {
   hasCourtSlotConflict,
 } from '../../lib/verticals/vertical-operations-engine';
 import {
-  buildDirectWaLink,
   buildDueReminderWaMessage,
   buildGenericBookingWaMessage,
-  checkDirectWaReadiness,
 } from '../../lib/messaging/whatsapp-direct';
 import { resolveEffectiveRegionalTax } from '../../lib/tax/regional-tax-indonesia';
 import type {
@@ -47,12 +55,25 @@ export function RentalKendaraanModule() {
   const ops = activeWorkspace.verticalOps ?? {};
   const vehicles = ops.rentalVehicles ?? [];
   const contracts = ops.rentalContracts ?? [];
-  const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
+  const todayIso = getTodayIsoDate();
+  const tomorrowIso = addDaysIsoDate(todayIso, 1);
 
+  const [contractFilter, setContractFilter] = useState<'ALL' | 'ACTIVE' | 'OVERDUE' | 'RETURNED'>('ALL');
   const [showNewForm, setShowNewForm] = useState(false);
   const [returnTarget, setReturnTarget] = useState<RentalContract | null>(null);
   const [printContract, setPrintContract] = useState<RentalContract | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const filteredContracts = useMemo(() => {
+    if (contractFilter === 'ALL') return contracts;
+    return contracts.filter((c) => {
+      if (contractFilter === 'RETURNED') return c.status === 'RETURNED';
+      if (c.status === 'RETURNED') return false;
+      const isOverdue =
+        c.status === 'OVERDUE' || computeDueCountdown(c.plannedReturnDateTime).status === 'OVERDUE';
+      return contractFilter === 'OVERDUE' ? isOverdue : !isOverdue;
+    });
+  }, [contracts, contractFilter]);
 
   // New contract form state
   const availableVehicles = vehicles.filter((v) => v.status === 'TERSEDIA');
@@ -61,8 +82,8 @@ export function RentalKendaraanModule() {
   const [renterPhone, setRenterPhone] = useState('');
   const [renterNik, setRenterNik] = useState('');
   const [renterAddress, setRenterAddress] = useState('');
-  const [startDateTime, setStartDateTime] = useState('2026-11-22T09:00');
-  const [plannedReturnDateTime, setPlannedReturnDateTime] = useState('2026-11-23T09:00');
+  const [startDateTime, setStartDateTime] = useState(`${todayIso}T09:00`);
+  const [plannedReturnDateTime, setPlannedReturnDateTime] = useState(`${tomorrowIso}T09:00`);
   const [daysCount, setDaysCount] = useState('1');
   const [depositAmount, setDepositAmount] = useState('300000');
   const [fuelStartPct, setFuelStartPct] = useState('100');
@@ -72,7 +93,7 @@ export function RentalKendaraanModule() {
   const [handoverFileName, setHandoverFileName] = useState('');
 
   // Return calculator state
-  const [actualReturnTime, setActualReturnTime] = useState('2026-11-23T12:00');
+  const [actualReturnTime, setActualReturnTime] = useState(`${tomorrowIso}T12:00`);
   const [fuelEndPct, setFuelEndPct] = useState('70');
   const [kmEnd, setKmEnd] = useState('25320');
 
@@ -302,29 +323,79 @@ export function RentalKendaraanModule() {
 
       {/* Contracts List */}
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-        <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-4 py-3">
           <h3 className="text-sm font-bold text-stone-900">
             Daftar Kontrak Peminjaman &amp; Pengembalian ({contracts.length})
           </h3>
+          <div className="flex flex-wrap items-center gap-1.5" data-testid="rental-contract-filter-bar">
+            {(
+              [
+                { id: 'ALL', label: 'Semua', count: contracts.length },
+                {
+                  id: 'ACTIVE',
+                  label: 'Sedang Dipinjam',
+                  count: contracts.filter(
+                    (c) =>
+                      c.status !== 'RETURNED' &&
+                      c.status !== 'OVERDUE' &&
+                      computeDueCountdown(c.plannedReturnDateTime).status !== 'OVERDUE'
+                  ).length,
+                },
+                {
+                  id: 'OVERDUE',
+                  label: 'Terlambat',
+                  count: contracts.filter(
+                    (c) =>
+                      c.status !== 'RETURNED' &&
+                      (c.status === 'OVERDUE' ||
+                        computeDueCountdown(c.plannedReturnDateTime).status === 'OVERDUE')
+                  ).length,
+                },
+                {
+                  id: 'RETURNED',
+                  label: 'Selesai',
+                  count: contracts.filter((c) => c.status === 'RETURNED').length,
+                },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setContractFilter(f.id)}
+                className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                  contractFilter === f.id
+                    ? 'bg-stone-900 text-white'
+                    : 'border border-stone-200 bg-white text-stone-700 hover:bg-stone-100'
+                }`}
+              >
+                <span>{f.label}</span>
+                <span className="font-mono text-[10px] opacity-80">{f.count}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="divide-y divide-stone-100">
-          {contracts.map((c) => {
+          {filteredContracts.length === 0 ? (
+            <div className="p-8 text-center text-xs text-stone-500">
+              Tidak ada kontrak peminjaman pada filter status ini.
+            </div>
+          ) : (
+            filteredContracts.map((c) => {
             const kycBadges = [
               c.kycIdPhotoUrl ? { label: 'e-KTP', value: c.kycIdPhotoUrl } : null,
               c.kycSimPhotoUrl ? { label: 'SIM', value: c.kycSimPhotoUrl } : null,
               c.handoverPhotoUrl ? { label: 'Serah Terima', value: c.handoverPhotoUrl } : null,
             ].filter(Boolean) as Array<{ label: string; value: string }>;
 
-            const waUrl = buildDirectWaLink(
-              c.renterPhone,
-              buildGenericBookingWaMessage({
-                businessName: tenant.name,
-                customerName: c.renterName,
-                bookingRef: c.contractNumber,
-                summaryLine: `Unit ${c.vehicleName} (${c.plateNumber}), jadwal kembali ${c.plannedReturnDateTime}.`,
-                totalAmount: c.totalFinalAmount,
-              })
-            );
+            const waMessage = buildGenericBookingWaMessage({
+              businessName: tenant.name,
+              customerName: c.renterName,
+              bookingRef: c.contractNumber,
+              summaryLine: `Unit ${c.vehicleName} (${c.plateNumber}), jadwal kembali ${formatDateTimeIndo(c.plannedReturnDateTime)}.`,
+              totalAmount: c.totalFinalAmount,
+            });
+            const returnCountdown =
+              c.status !== 'RETURNED' ? computeDueCountdown(c.plannedReturnDateTime) : null;
             return (
               <div
                 key={c.id}
@@ -340,26 +411,40 @@ export function RentalKendaraanModule() {
                         c.status === 'RETURNED'
                           ? 'bg-emerald-50 text-emerald-700'
                           : c.status === 'OVERDUE'
-                          ? 'bg-red-50 text-red-700'
+                          ? 'bg-rose-50 text-rose-700'
                           : 'bg-amber-50 text-amber-800'
                       }`}
                     >
                       {c.status === 'RETURNED'
                         ? 'Selesai Kembali'
                         : c.status === 'OVERDUE'
-                        ? 'Overtime / Terlambat'
+                        ? 'Terlambat Kembali'
                         : 'Sedang Dipinjam'}
                     </span>
+                    {returnCountdown && returnCountdown.status !== 'UNKNOWN' && (
+                      <span
+                        className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          returnCountdown.tone === 'rose'
+                            ? 'bg-rose-50 text-rose-700'
+                            : returnCountdown.tone === 'amber'
+                            ? 'bg-amber-50 text-amber-800'
+                            : 'bg-stone-100 text-stone-700'
+                        }`}
+                      >
+                        <CalendarClock className="h-3 w-3" strokeWidth={1.75} />
+                        {returnCountdown.label}
+                      </span>
+                    )}
                     <span className="text-xs text-stone-500">
-                      Syarat KYC: {kycBadges.length} berkas
+                      Berkas KTP/SIM: {kycBadges.length} lampiran
                     </span>
                   </div>
                   <div className="text-sm font-semibold text-stone-900">
                     {c.renterName} · {c.vehicleName} ({c.plateNumber})
                   </div>
                   <div className="text-xs text-stone-600">
-                    Mulai: <span className="font-mono">{c.startDateTime}</span> · Rencana Kembali:{' '}
-                    <span className="font-mono">{c.plannedReturnDateTime}</span> · BBM Awal:{' '}
+                    Mulai: <strong>{formatDateTimeIndo(c.startDateTime)}</strong> · Rencana Kembali:{' '}
+                    <strong>{formatDateTimeIndo(c.plannedReturnDateTime)}</strong> · BBM Awal:{' '}
                     <span className="font-mono font-semibold tabular-nums">{c.fuelStartPct}%</span> · KM Awal:{' '}
                     <span className="font-mono tabular-nums">{c.kmStart.toLocaleString('id-ID')}</span>
                   </div>
@@ -413,21 +498,21 @@ export function RentalKendaraanModule() {
                       Cek Kembali &amp; Overtime
                     </button>
                   )}
-                  {waStatus.ready && waUrl && (
-                    <a
-                      href={waUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
-                    >
-                      <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      WA Penyewa
-                    </a>
-                  )}
+                  <UnifiedWaActionButton
+                    customerPhone={c.renterPhone}
+                    customerName={c.renterName}
+                    message={waMessage}
+                    modalTitle={`Kirim Info Sewa - ${c.contractNumber}`}
+                    documentType="INVOICE"
+                    referenceNo={c.contractNumber}
+                    label="WA Penyewa"
+                    variant="emerald"
+                  />
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
 
@@ -857,21 +942,26 @@ export function HomestayVillaModule() {
   const ops = activeWorkspace.verticalOps ?? {};
   const units = ops.homestayUnits ?? [];
   const bookings = ops.homestayBookings ?? [];
-  const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
-
   const regionalTaxInfo = resolveEffectiveRegionalTax(
     'HOMESTAY_VILLA',
     tenant.settings.regionalTax,
     regionalTaxRegistry
   );
+  const hsTodayIso = getTodayIsoDate();
 
+  const [bookingFilter, setBookingFilter] = useState<'ALL' | 'BOOKED' | 'CHECK_IN' | 'CLEANING' | 'CHECK_OUT'>('ALL');
   const [showBookingForm, setShowBookingForm] = useState(false);
   const [unitId, setUnitId] = useState(units[0]?.id ?? '');
   const [guestName, setGuestName] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
   const [bookingMode, setBookingMode] = useState<'PER_MALAM' | 'PER_SLOT_JAM'>('PER_MALAM');
-  const [checkInDate, setCheckInDate] = useState('2026-11-23');
-  const [checkOutDate, setCheckOutDate] = useState('2026-11-25');
+  const [checkInDate, setCheckInDate] = useState(hsTodayIso);
+  const [checkOutDate, setCheckOutDate] = useState(addDaysIsoDate(hsTodayIso, 2));
+
+  const filteredBookings = useMemo(
+    () => (bookingFilter === 'ALL' ? bookings : bookings.filter((b) => b.status === bookingFilter)),
+    [bookings, bookingFilter]
+  );
   const [durationCount, setDurationCount] = useState('2');
   const [otaChannel, setOtaChannel] = useState<HomestayBooking['otaChannel']>('TRAVELOKA');
   const [otaRatePct, setOtaRatePct] = useState('15');
@@ -1034,7 +1124,7 @@ export function HomestayVillaModule() {
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="text-sm font-bold text-stone-900">{u.name}</div>
-                <div className="text-xs text-stone-500">{u.unitType.replace(/_/g, ' ')}</div>
+                <div className="text-xs text-stone-500">{formatVerticalStatusLabel(u.unitType)}</div>
               </div>
               <span
                 className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
@@ -1048,8 +1138,8 @@ export function HomestayVillaModule() {
                 {u.status === 'TERSEDIA'
                   ? 'Siap Huni'
                   : u.status === 'TERISI'
-                  ? 'Check-In'
-                  : 'Cleaning'}
+                  ? 'Sedang Menginap'
+                  : 'Sedang Dibersihkan'}
               </span>
             </div>
             <div className="mt-3 flex justify-between border-t border-stone-100 pt-2.5 text-xs">
@@ -1072,25 +1162,54 @@ export function HomestayVillaModule() {
 
       {/* Bookings Table */}
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-        <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-4 py-3">
           <h3 className="text-sm font-bold text-stone-900">
             Jadwal Reservasi Tamu, OTA &amp; Pemisahan PBJT Perhotelan ({bookings.length})
           </h3>
+          <div className="flex flex-wrap items-center gap-1.5" data-testid="homestay-status-filter-bar">
+            {(
+              [
+                { id: 'ALL', label: 'Semua', count: bookings.length },
+                { id: 'BOOKED', label: 'Booking', count: bookings.filter((b) => b.status === 'BOOKED').length },
+                { id: 'CHECK_IN', label: 'Check-In', count: bookings.filter((b) => b.status === 'CHECK_IN').length },
+                { id: 'CLEANING', label: 'Cleaning', count: bookings.filter((b) => b.status === 'CLEANING').length },
+                { id: 'CHECK_OUT', label: 'Check-Out', count: bookings.filter((b) => b.status === 'CHECK_OUT').length },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setBookingFilter(f.id)}
+                className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                  bookingFilter === f.id
+                    ? 'bg-stone-900 text-white'
+                    : 'border border-stone-200 bg-white text-stone-700 hover:bg-stone-100'
+                }`}
+              >
+                <span>{f.label}</span>
+                <span className="font-mono text-[10px] opacity-80">{f.count}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="divide-y divide-stone-100">
-          {bookings.map((b) => {
-            const waUrl = buildDirectWaLink(
-              b.guestPhone,
-              buildGenericBookingWaMessage({
-                businessName: tenant.name,
-                customerName: b.guestName,
-                bookingRef: b.bookingCode,
-                summaryLine: `${b.unitName} (${b.checkInDate} s/d ${b.checkOutDate}, ${b.durationCount} ${
-                  b.bookingMode === 'PER_MALAM' ? 'malam' : 'slot jam'
-                }).`,
-                totalAmount: b.guestTotalPaid,
-              })
-            );
+          {filteredBookings.length === 0 ? (
+            <div className="p-8 text-center text-xs text-stone-500">
+              Tidak ada reservasi tamu pada filter status ini.
+            </div>
+          ) : (
+            filteredBookings.map((b) => {
+            const checkInReadable = formatDateIndo(b.checkInDate);
+            const checkOutReadable = formatDateIndo(b.checkOutDate);
+            const waMessage = buildGenericBookingWaMessage({
+              businessName: tenant.name,
+              customerName: b.guestName,
+              bookingRef: b.bookingCode,
+              summaryLine: `${b.unitName} (${checkInReadable} s/d ${checkOutReadable}, ${b.durationCount} ${
+                b.bookingMode === 'PER_MALAM' ? 'malam' : 'slot jam'
+              }).`,
+              totalAmount: b.guestTotalPaid,
+            });
             return (
               <div
                 key={b.id}
@@ -1100,17 +1219,25 @@ export function HomestayVillaModule() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-xs font-bold text-stone-900">{b.bookingCode}</span>
                     <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-700">
-                      {b.otaChannel}
+                      {b.otaChannel === 'DIRECT' ? 'Pesan Langsung' : b.otaChannel}
                     </span>
-                    <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                      {b.status}
+                    <span
+                      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                        b.status === 'CHECK_OUT'
+                          ? 'bg-stone-100 text-stone-700'
+                          : b.status === 'CLEANING'
+                          ? 'bg-sky-50 text-sky-700'
+                          : 'bg-emerald-50 text-emerald-700'
+                      }`}
+                    >
+                      {formatVerticalStatusLabel(b.status)}
                     </span>
                   </div>
                   <div className="text-sm font-semibold text-stone-900">
                     {b.guestName} · {b.unitName}
                   </div>
                   <div className="text-xs text-stone-600">
-                    {b.checkInDate} s/d {b.checkOutDate} ({b.durationCount}{' '}
+                    {checkInReadable} s/d {checkOutReadable} ({b.durationCount}{' '}
                     {b.bookingMode === 'PER_MALAM' ? 'malam' : 'slot jam'})
                   </div>
                   <div className="flex flex-wrap gap-3 pt-1 text-xs">
@@ -1147,7 +1274,7 @@ export function HomestayVillaModule() {
                       onClick={() => advanceBookingStatus(b, 'CHECK_IN')}
                       className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                     >
-                      Check-In
+                      Check-In Tamu
                     </button>
                   )}
                   {b.status === 'CHECK_IN' && (
@@ -1156,7 +1283,7 @@ export function HomestayVillaModule() {
                       onClick={() => advanceBookingStatus(b, 'CLEANING')}
                       className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
                     >
-                      Check-Out &amp; Cleaning
+                      Check-Out &amp; Bersihkan
                     </button>
                   )}
                   {b.status === 'CLEANING' && (
@@ -1168,21 +1295,21 @@ export function HomestayVillaModule() {
                       Selesai Bersih (Siap Huni)
                     </button>
                   )}
-                  {waStatus.ready && waUrl && (
-                    <a
-                      href={waUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-50"
-                    >
-                      <MessageCircle className="h-3.5 w-3.5 text-emerald-600" strokeWidth={1.75} />
-                      WA Tamu
-                    </a>
-                  )}
+                  <UnifiedWaActionButton
+                    customerPhone={b.guestPhone}
+                    customerName={b.guestName}
+                    message={waMessage}
+                    modalTitle={`Kirim Info Booking - ${b.bookingCode}`}
+                    documentType="ORDER"
+                    referenceNo={b.bookingCode}
+                    label="WA Tamu"
+                    variant="outline"
+                  />
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
 
@@ -1361,29 +1488,36 @@ export function HomestayVillaModule() {
 }
 
 export function SewaLapanganModule() {
-  const { activeWorkspace, updateVerticalOps } = useApp();
+  const { activeWorkspace, updateVerticalOps, regionalTaxRegistry } = useApp();
   const tenant = activeWorkspace.tenant;
   const ops = activeWorkspace.verticalOps ?? {};
   const courts = ops.sportsCourts ?? [];
   const bookings = ops.courtBookings ?? [];
-  const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
+  const regionalTaxInfo = resolveEffectiveRegionalTax(
+    'SEWA_LAPANGAN',
+    tenant.settings.regionalTax,
+    regionalTaxRegistry
+  );
 
   const [sportFilter, setSportFilter] = useState<'ALL' | 'BADMINTON' | 'FUTSAL' | 'PADEL'>('ALL');
+  const [payFilter, setPayFilter] = useState<'ALL' | 'DP' | 'LUNAS'>('ALL');
   const [showForm, setShowForm] = useState(false);
   const [conflictMsg, setConflictMsg] = useState<string | null>(null);
 
   const [courtId, setCourtId] = useState(courts[0]?.id ?? '');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [bookingDate, setBookingDate] = useState('2026-11-22');
+  const [bookingDate, setBookingDate] = useState(() => getTodayIsoDate());
   const [startHourNum, setStartHourNum] = useState('19');
   const [durationHours, setDurationHours] = useState('2');
   const [equipmentFee, setEquipmentFee] = useState('45000');
   const [dpAmount, setDpAmount] = useState('100000');
 
   const filteredBookings = bookings.filter((b) => {
-    if (sportFilter === 'ALL') return true;
-    return b.sportType === sportFilter;
+    if (sportFilter !== 'ALL' && b.sportType !== sportFilter) return false;
+    if (payFilter === 'LUNAS') return b.status === 'LUNAS' || b.status === 'SELESAI';
+    if (payFilter === 'DP') return b.status !== 'LUNAS' && b.status !== 'SELESAI';
+    return true;
   });
 
   const handleAddBooking = (e: React.FormEvent) => {
@@ -1404,7 +1538,7 @@ export function SewaLapanganModule() {
       })
     ) {
       setConflictMsg(
-        `Jadwal bentrok! ${chosenCourt.name} pada ${bookingDate} jam ${formatHourRange(
+        `Jadwal sudah terisi (ganda)! ${chosenCourt.name} pada ${formatDateIndo(bookingDate)} jam ${formatHourRange(
           startH,
           durH
         )} sudah dipesan.`
@@ -1531,26 +1665,53 @@ export function SewaLapanganModule() {
         ))}
       </div>
 
+      {regionalTaxInfo.applies && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-xs text-emerald-950">
+          <strong>Pajak Daerah Aktif ({regionalTaxInfo.regionName}):</strong>{' '}
+          {regionalTaxInfo.taxLabel} ({regionalTaxInfo.ratePercentLabel}) sesuai {regionalTaxInfo.perdaReference}.
+        </div>
+      )}
+
       {/* Bookings List */}
       <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-        <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-4 py-3">
           <h3 className="text-sm font-bold text-stone-900">
             Jadwal Main &amp; Pembayaran DP / Pelunasan ({filteredBookings.length})
           </h3>
+          <div className="flex flex-wrap items-center gap-1.5" data-testid="court-pay-filter-bar">
+            {(
+              [
+                { id: 'ALL', label: 'Semua Status' },
+                { id: 'DP', label: 'DP Masuk' },
+                { id: 'LUNAS', label: 'Lunas' },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setPayFilter(f.id)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                  payFilter === f.id
+                    ? 'bg-stone-900 text-white'
+                    : 'border border-stone-200 bg-white text-stone-700 hover:bg-stone-100'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="divide-y divide-stone-100">
           {filteredBookings.map((b) => {
             const slotRange = formatHourRange(b.startHour, b.durationHours);
-            const waUrl = buildDirectWaLink(
-              b.customerPhone,
-              buildGenericBookingWaMessage({
-                businessName: tenant.name,
-                customerName: b.customerName,
-                bookingRef: `${b.courtName} (${b.bookingDate})`,
-                summaryLine: `Jam main ${slotRange}. Sisa bayar: ${formatRupiah(b.remainingAmount)}.`,
-                totalAmount: b.totalAmount,
-              })
-            );
+            const dateReadable = formatDateIndo(b.bookingDate);
+            const waMessage = buildGenericBookingWaMessage({
+              businessName: tenant.name,
+              customerName: b.customerName,
+              bookingRef: `${b.courtName} (${dateReadable})`,
+              summaryLine: `Jam main ${slotRange}. Sisa bayar: ${formatRupiah(b.remainingAmount)}.`,
+              totalAmount: b.totalAmount,
+            });
             return (
               <div
                 key={b.id}
@@ -1559,8 +1720,8 @@ export function SewaLapanganModule() {
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-bold text-stone-900">{b.courtName}</span>
-                    <span className="font-mono text-xs font-semibold text-stone-700">
-                      {b.bookingDate} · {slotRange}
+                    <span className="text-xs font-semibold text-stone-700">
+                      {dateReadable} · <span className="font-mono">{slotRange}</span>
                     </span>
                     <span
                       className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
@@ -1594,17 +1755,16 @@ export function SewaLapanganModule() {
                       Tandai Lunas
                     </button>
                   )}
-                  {waStatus.ready && waUrl && (
-                    <a
-                      href={waUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-50"
-                    >
-                      <MessageCircle className="h-3.5 w-3.5 text-emerald-600" strokeWidth={1.75} />
-                      WA
-                    </a>
-                  )}
+                  <UnifiedWaActionButton
+                    customerPhone={b.customerPhone}
+                    customerName={b.customerName}
+                    message={waMessage}
+                    modalTitle={`Kirim Info Jadwal - ${b.courtName}`}
+                    documentType="ORDER"
+                    referenceNo={b.bookingCode}
+                    label="WA"
+                    variant="outline"
+                  />
                 </div>
               </div>
             );
@@ -1621,7 +1781,7 @@ export function SewaLapanganModule() {
           >
             <div className="flex items-center justify-between border-b border-stone-200 pb-3">
               <h3 className="text-base font-bold text-stone-900">
-                Booking Lapangan (Cek Bentrok Otomatis)
+                Booking Lapangan (Cek Jadwal Ganda Otomatis)
               </h3>
               <button
                 type="button"
@@ -1751,18 +1911,35 @@ export function SewaLapanganModule() {
 }
 
 export function SewaGarasiModule() {
-  const { activeWorkspace, updateVerticalOps } = useApp();
+  const { activeWorkspace, updateVerticalOps, regionalTaxRegistry } = useApp();
   const tenant = activeWorkspace.tenant;
   const ops = activeWorkspace.verticalOps ?? {};
   const slots = ops.garageSlots ?? [];
-  const waStatus = checkDirectWaReadiness(tenant.settings.businessWhatsappNumber);
+  const regionalTaxInfo = resolveEffectiveRegionalTax(
+    'SEWA_GARASI',
+    tenant.settings.regionalTax,
+    regionalTaxRegistry
+  );
 
+  const [slotFilter, setSlotFilter] = useState<'ALL' | 'DUE' | 'TERISI' | 'KOSONG'>('ALL');
   const [assignSlot, setAssignSlot] = useState<GarageSlot | null>(null);
   const [tenantName, setTenantName] = useState('');
   const [tenantPhone, setTenantPhone] = useState('');
   const [plateNumber, setPlateNumber] = useState('');
   const [carModel, setCarModel] = useState('');
-  const [dueDate, setDueDate] = useState('2026-12-01');
+  const [dueDate, setDueDate] = useState(addMonthsIsoDate(getTodayIsoDate(), 1));
+
+  const isSlotDue = (s: GarageSlot) =>
+    s.status === 'TERISI' &&
+    (s.paymentStatus === 'JATUH_TEMPO' ||
+      computeDueCountdown(s.nextDueDate).status === 'OVERDUE' ||
+      computeDueCountdown(s.nextDueDate).status === 'DUE_TODAY');
+
+  const filteredSlots = useMemo(() => {
+    if (slotFilter === 'ALL') return slots;
+    if (slotFilter === 'DUE') return slots.filter(isSlotDue);
+    return slots.filter((s) => s.status === slotFilter);
+  }, [slots, slotFilter]);
 
   const handleAssignSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1841,21 +2018,52 @@ export function SewaGarasiModule() {
         </p>
       </div>
 
+      {regionalTaxInfo.applies && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-xs text-emerald-950">
+          <strong>Pajak Daerah Aktif ({regionalTaxInfo.regionName}):</strong>{' '}
+          {regionalTaxInfo.taxLabel} ({regionalTaxInfo.ratePercentLabel}) sesuai {regionalTaxInfo.perdaReference}.
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5" data-testid="garage-slot-filter-bar">
+        {(
+          [
+            { id: 'ALL', label: 'Semua Slot', count: slots.length },
+            { id: 'DUE', label: 'Jatuh Tempo', count: slots.filter(isSlotDue).length },
+            { id: 'TERISI', label: 'Terisi', count: slots.filter((s) => s.status === 'TERISI').length },
+            { id: 'KOSONG', label: 'Kosong', count: slots.filter((s) => s.status === 'KOSONG').length },
+          ] as const
+        ).map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => setSlotFilter(f.id)}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold ${
+              slotFilter === f.id
+                ? 'bg-stone-900 text-white'
+                : 'border border-stone-200 bg-white text-stone-700 hover:bg-stone-50'
+            }`}
+          >
+            <span>{f.label}</span>
+            <span className="font-mono text-[10px] opacity-80">{f.count}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {slots.map((s) => {
-          const waUrl =
-            s.tenantPhone && s.tenantName
-              ? buildDirectWaLink(
-                  s.tenantPhone,
-                  buildDueReminderWaMessage({
-                    businessName: tenant.name,
-                    customerName: s.tenantName,
-                    itemLabel: `Sewa Garasi Slot ${s.slotCode} (${s.plateNumber ?? ''})`,
-                    dueDate: s.nextDueDate ?? 'Bulan ini',
-                    amountDue: s.monthlyRate,
-                  })
-                )
-              : null;
+        {filteredSlots.map((s) => {
+          const dueReadable = s.nextDueDate ? formatDateIndo(s.nextDueDate) : 'Bulan ini';
+          const dueCountdown = s.status === 'TERISI' ? computeDueCountdown(s.nextDueDate) : null;
+          const waMessage =
+            s.tenantName
+              ? buildDueReminderWaMessage({
+                  businessName: tenant.name,
+                  customerName: s.tenantName,
+                  itemLabel: `Sewa Garasi Slot ${s.slotCode} (${s.plateNumber ?? ''})`,
+                  dueDate: dueReadable,
+                  amountDue: s.monthlyRate,
+                })
+              : '';
 
           return (
             <div key={s.id} className="flex flex-col justify-between rounded-xl border border-stone-200 bg-white p-4">
@@ -1865,14 +2073,16 @@ export function SewaGarasiModule() {
                     <div className="font-mono text-sm font-bold text-stone-900">
                       Slot {s.slotCode}
                     </div>
-                    <div className="text-xs text-stone-500">{s.slotType.replace(/_/g, ' ')}</div>
+                    <div className="text-xs text-stone-500">
+                      {formatVerticalStatusLabel(s.slotType)}
+                    </div>
                   </div>
                   <span
                     className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
                       s.status === 'KOSONG'
                         ? 'bg-emerald-50 text-emerald-700'
-                        : s.paymentStatus === 'JATUH_TEMPO'
-                        ? 'bg-red-50 text-red-700'
+                        : s.paymentStatus === 'JATUH_TEMPO' || dueCountdown?.status === 'OVERDUE'
+                        ? 'bg-rose-50 text-rose-700'
                         : 'bg-stone-100 text-stone-800'
                     }`}
                   >
@@ -1885,12 +2095,28 @@ export function SewaGarasiModule() {
                 </div>
 
                 {s.status === 'TERISI' ? (
-                  <div className="mt-3 space-y-1 border-t border-stone-100 pt-3 text-xs">
+                  <div className="mt-3 space-y-1.5 border-t border-stone-100 pt-3 text-xs">
                     <div className="font-semibold text-stone-900">{s.tenantName}</div>
                     <div className="font-mono text-stone-700">
                       {s.plateNumber} · {s.carModel}
                     </div>
-                    <div className="text-stone-500">Jatuh tempo: {s.nextDueDate}</div>
+                    <div className="text-stone-600">
+                      Jatuh tempo: <strong className="text-stone-900">{dueReadable}</strong>
+                    </div>
+                    {dueCountdown && dueCountdown.status !== 'UNKNOWN' && (
+                      <span
+                        className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          dueCountdown.tone === 'rose'
+                            ? 'bg-rose-50 text-rose-700'
+                            : dueCountdown.tone === 'amber'
+                            ? 'bg-amber-50 text-amber-800'
+                            : 'bg-emerald-50 text-emerald-700'
+                        }`}
+                      >
+                        <CalendarClock className="h-3 w-3" strokeWidth={1.75} />
+                        {dueCountdown.label}
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <div className="mt-3 border-t border-stone-100 pt-3 text-xs text-stone-500">
@@ -1920,19 +2146,20 @@ export function SewaGarasiModule() {
                           onClick={() => handleMarkPaid(s)}
                           className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                         >
-                          Lunas
+                          Tandai Lunas
                         </button>
                       )}
-                      {waStatus.ready && waUrl && (
-                        <a
-                          href={waUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800"
-                        >
-                          <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-                          WA
-                        </a>
+                      {s.tenantName && (
+                        <UnifiedWaActionButton
+                          customerPhone={s.tenantPhone}
+                          customerName={s.tenantName}
+                          message={waMessage}
+                          modalTitle={`Ingatkan Sewa Garasi - Slot ${s.slotCode}`}
+                          documentType="INVOICE"
+                          referenceNo={`GRS-${s.slotCode}`}
+                          label="Ingatkan WA"
+                          variant="emerald"
+                        />
                       )}
                       <button
                         type="button"

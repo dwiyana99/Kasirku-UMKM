@@ -9,8 +9,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum BusinessVertical {
@@ -175,15 +176,21 @@ enum FeeBearer {
 model User {
   id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                String                @unique @db.VarChar(255)
-  passwordHash         String                @map("password_hash")
-  fullName             String                @map("full_name") @db.VarChar(150)
+  passwordHash         String?               @map("password_hash")
+  name                 String                @default("") @db.VarChar(150)
+  fullName             String                @default("") @map("full_name") @db.VarChar(150)
+  emailVerified        Boolean               @default(false) @map("email_verified")
+  image                String?               @db.Text
   phone                String?               @db.VarChar(30)
   isSuperAdmin         Boolean               @default(false) @map("is_super_admin")
   accountStatus        String                @default("ACTIVE") @map("account_status") @db.VarChar(20)
   maxTenantsAllowed    Int                   @default(3) @map("max_tenants_allowed")
   createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
   memberships          TenantMembership[]
   subscriptionInvoices SubscriptionInvoice[]
+  sessions             Session[]
+  authAccounts         AuthAccount[]
 
   @@map("users")
 }
@@ -296,29 +303,34 @@ model Branch {
   operationalExpenses OperationalExpense[]
   journalEntries      JournalEntry[]
   paymentTransactions PaymentTransaction[]
+  landingPages        TenantLandingPage[]
 
   @@unique([tenantId, code])
   @@index([tenantId], map: "idx_branches_tenant")
+  @@index([tenantId, isActive], map: "idx_branches_tenant_active")
   @@map("branches")
 }
 
 model BranchStock {
-  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId            String   @map("tenant_id") @db.Uuid
-  branchId            String   @map("branch_id") @db.Uuid
-  productId           String   @map("product_id") @db.Uuid
-  stockQty            Decimal  @default(0) @map("stock_qty") @db.Decimal(19, 4)
-  minStockAlert       Decimal  @default(0) @map("min_stock_alert") @db.Decimal(19, 4)
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  branchId             String   @map("branch_id") @db.Uuid
+  productId            String   @map("product_id") @db.Uuid
+  stockQty             Decimal  @default(0) @map("stock_qty") @db.Decimal(19, 4)
+  minStockAlert        Decimal  @default(0) @map("min_stock_alert") @db.Decimal(19, 4)
   sellingPriceOverride Decimal? @map("selling_price_override") @db.Decimal(19, 4)
-  movingAvgCost       Decimal  @default(0) @map("moving_avg_cost") @db.Decimal(19, 4)
-  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  movingAvgCost        Decimal  @default(0) @map("moving_avg_cost") @db.Decimal(19, 4)
+  version              Int      @default(1)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch              Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  product             Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch               Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product              Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([branchId, productId])
   @@index([tenantId, branchId], map: "idx_branch_stocks_tenant_branch")
+  @@index([tenantId, productId], map: "idx_branch_stocks_tenant_product")
+  @@index([tenantId, branchId, updatedAt(sort: Desc)], map: "idx_branch_stocks_tenant_branch_sync")
   @@map("branch_stocks")
 }
 
@@ -342,6 +354,9 @@ model StockTransfer {
 
   @@unique([tenantId, transferNumber])
   @@index([tenantId, status], map: "idx_stock_transfers_tenant_status")
+  @@index([tenantId, sourceBranchId, status], map: "idx_stock_transfers_source_status")
+  @@index([tenantId, destinationBranchId, status], map: "idx_stock_transfers_dest_status")
+  @@index([tenantId, createdAt(sort: Desc)], map: "idx_stock_transfers_tenant_date")
   @@map("stock_transfers")
 }
 
@@ -358,6 +373,8 @@ model StockTransferItem {
   transfer        StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
   product         Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  @@index([stockTransferId], map: "idx_stock_transfer_items_transfer")
+  @@index([productId], map: "idx_stock_transfer_items_product")
   @@map("stock_transfer_items")
 }
 
@@ -475,6 +492,7 @@ model BoardingRoom {
   invoices     BoardingInvoice[]
 
   @@unique([tenantId, roomNumber])
+  @@index([tenantId, showOnLanding, status], map: "idx_boarding_rooms_tenant_landing_status")
   @@map("boarding_rooms")
 }
 
@@ -810,6 +828,7 @@ model Product {
   showOnLanding      Boolean             @default(true) @map("show_on_landing")
   customAttributes   Json                @default("{}") @map("custom_attributes") @db.JsonB
   createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   category           Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
@@ -824,6 +843,8 @@ model Product {
   priceTiers         PriceTier[]
 
   @@index([tenantId, barcodeQr], map: "idx_products_tenant_barcode")
+  @@index([tenantId, showOnLanding, isAvailable], map: "idx_products_tenant_landing_avail")
+  @@index([tenantId, categoryId, isAvailable], map: "idx_products_tenant_category_avail")
   @@index([customAttributes], type: Gin, map: "idx_products_custom_attr")
   @@map("products")
 }
@@ -857,6 +878,8 @@ model InventoryMovement {
   tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  @@index([tenantId, branchId, createdAt(sort: Desc)], map: "idx_inv_moves_tenant_branch_date")
+  @@index([tenantId, productId, createdAt(sort: Desc)], map: "idx_inv_moves_tenant_product_date")
   @@map("inventory_movements")
 }
 
@@ -909,6 +932,8 @@ model Order {
 
   @@index([tenantId, createdAt(sort: Desc)], map: "idx_orders_tenant_date")
   @@index([tenantId, branchId], map: "idx_orders_tenant_branch")
+  @@index([tenantId, branchId, createdAt(sort: Desc)], map: "idx_orders_tenant_branch_date")
+  @@index([tenantId, paymentStatus, kitchenStatus], map: "idx_orders_tenant_status_kds")
   @@map("orders")
 }
 
@@ -925,6 +950,8 @@ model OrderItem {
   order            Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product          Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  @@index([orderId], map: "idx_order_items_order")
+  @@index([productId], map: "idx_order_items_product")
   @@map("order_items")
 }
 
@@ -1216,13 +1243,17 @@ model TenantLandingPage {
   ogImageUrl               String?            @map("og_image_url") @db.Text
   updatedByAdminId         String?            @map("updated_by_admin_id") @db.VarChar(120)
   lastCustomizedAt         DateTime?          @map("last_customized_at") @db.Timestamptz()
+  defaultBranchId          String?            @map("default_branch_id") @db.Uuid
+  catalogSyncedAt          DateTime?          @map("catalog_synced_at") @db.Timestamptz()
   createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
 
   tenant                   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultBranch            Branch?            @relation(fields: [defaultBranchId], references: [id], onDelete: SetNull)
 
   @@index([isPublished, slug], map: "idx_tenant_landing_pages_published_slug")
   @@index([customDomain], map: "idx_tenant_landing_pages_custom_domain")
+  @@index([defaultBranchId], map: "idx_tenant_landing_pages_default_branch")
   @@map("tenant_landing_pages")
 }
 
@@ -1365,6 +1396,64 @@ model RegionalTaxRule {
   @@unique([province, regencyOrCity], map: "uq_regional_tax_rules_region")
   @@map("regional_tax_rules")
 }
+
+// ==============================================================================
+// BETTER AUTH MODELS (Email/Password + Google OAuth — Neon PostgreSQL Compatible)
+// Note: OAuth Account model is named `AuthAccount` (table `auth_accounts`) to
+// avoid collision with the double-entry Chart of Accounts `Account` (`accounts`).
+// ==============================================================================
+
+model Session {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz()
+  token     String   @unique @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  ipAddress String?  @map("ip_address") @db.VarChar(100)
+  userAgent String?  @map("user_agent") @db.Text
+  userId    String   @map("user_id") @db.Uuid
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_sessions_user_id")
+  @@index([token], map: "idx_sessions_token")
+  @@map("sessions")
+}
+
+model AuthAccount {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId             String    @map("account_id") @db.VarChar(255)
+  providerId            String    @map("provider_id") @db.VarChar(100)
+  userId                String    @map("user_id") @db.Uuid
+  accessToken           String?   @map("access_token") @db.Text
+  refreshToken          String?   @map("refresh_token") @db.Text
+  idToken               String?   @map("id_token") @db.Text
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz()
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz()
+  scope                 String?   @db.Text
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_auth_accounts_user_id")
+  @@unique([providerId, accountId], map: "uq_auth_accounts_provider_account")
+  @@map("auth_accounts")
+}
+
+model Verification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier String   @db.VarChar(255)
+  value      String   @db.Text
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz()
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([identifier], map: "idx_verifications_identifier")
+  @@map("verifications")
+}
+
 
 
 

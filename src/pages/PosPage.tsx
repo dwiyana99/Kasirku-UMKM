@@ -25,12 +25,21 @@ import {
   RotateCcw,
   WifiOff,
   X,
+  ClipboardCheck,
 } from 'lucide-react';
 import { AppShell } from '../components/AppShell';
 import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
 import { ThermalReceiptModal } from '../components/ThermalReceiptModal';
+import { DailyClosingModal } from '../components/pos/DailyClosingModal';
+import { DirectWaCustomerModal } from '../components/whatsapp/DirectWaCustomerModal';
 import { FonnteSendModal } from '../components/whatsapp/FonnteSendModal';
+import { OwnerWaReminderModal } from '../components/whatsapp/OwnerWaReminderModal';
 import { ModalShell } from '../components/ui/ModalShell';
+import {
+  buildCustomerReceiptWaMessage,
+  evaluateWhatsappSendingPolicy,
+} from '../lib/messaging/whatsapp-policy';
+import { canAccessRouteWithStaffPermissions } from '../lib/rbac/staff-rbac';
 import { useApp } from '../context/AppContext';
 import { useOnlineStatus } from '../hooks/usePWAInstall';
 import { calculateOrderTax } from '../lib/tax/indonesia-tax-engine';
@@ -152,8 +161,20 @@ export function PosPage() {
   const [autoPrintReceipt, setAutoPrintReceipt] = useState<boolean>(
     tenant.vertical !== 'WARUNG_SEMBAKO' && canUseThermalPrint
   );
+  const waPolicy = useMemo(
+    () =>
+      evaluateWhatsappSendingPolicy({
+        businessWhatsappNumber: tenant.settings?.businessWhatsappNumber,
+        hasFonnte: hasAddOn('ADDON_WA_FONNTE'),
+      }),
+    [tenant.settings?.businessWhatsappNumber, hasAddOn]
+  );
+  const canOpenSettings = canAccessRouteWithStaffPermissions('/settings/custom-fields', session);
   const [lastCompletedOrder, setLastCompletedOrder] = useState<Order | null>(null);
   const [fonnteOrder, setFonnteOrder] = useState<Order | null>(null);
+  const [directWaOrder, setDirectWaOrder] = useState<Order | null>(null);
+  const [closingModalOpen, setClosingModalOpen] = useState(false);
+  const [waReminderModalOpen, setWaReminderModalOpen] = useState(false);
   const [orderCustomAttrs, setOrderCustomAttrs] = useState<Record<string, string>>({});
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanToast, setScanToast] = useState<string | null>(null);
@@ -756,6 +777,17 @@ export function PosPage() {
           ? 'Mode F&B Visual · Resep otomatis & cetak struk dapur'
           : 'Mode Invoice Jasa Profesional'
       }
+      primaryAction={
+        <button
+          type="button"
+          data-testid="pos-daily-closing-btn"
+          onClick={() => setClosingModalOpen(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium text-stone-700 bg-white hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
+        >
+          <ClipboardCheck className="w-4 h-4 text-emerald-700" strokeWidth={1.75} />
+          <span>Tutup Kasir</span>
+        </button>
+      }
     >
       <div className="space-y-4">
         {/* Offline Mode Notice in POS */}
@@ -892,15 +924,36 @@ export function PosPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                type="button"
-                data-testid="pos-banner-send-wa-btn"
-                onClick={() => setFonnteOrder(lastCompletedOrder)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-900 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-lg whitespace-nowrap"
-              >
-                <MessageCircle className="w-3.5 h-3.5" />
-                <span>{hasAddOn('ADDON_WA_FONNTE') ? 'Kirim WA (Fonnte)' : 'Kirim WA (Add-On)'}</span>
-              </button>
+              {waPolicy.canSendCustomerMessage && (
+                <button
+                  type="button"
+                  data-testid="pos-banner-send-wa-btn"
+                  onClick={() => {
+                    if (waPolicy.channel === 'FONNTE') {
+                      setFonnteOrder(lastCompletedOrder);
+                    } else {
+                      setDirectWaOrder(lastCompletedOrder);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-900 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-lg whitespace-nowrap"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  <span>
+                    {waPolicy.channel === 'FONNTE' ? 'Kirim WA (Fonnte)' : 'Kirim WA ke Pelanggan'}
+                  </span>
+                </button>
+              )}
+              {!waPolicy.canSendCustomerMessage && canOpenSettings && (
+                <button
+                  type="button"
+                  data-testid="pos-banner-setup-wa-btn"
+                  onClick={() => setWaReminderModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg whitespace-nowrap"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  <span>Atur WA untuk Kirim Nota</span>
+                </button>
+              )}
               {canUseThermalPrint && (
                 <button
                   type="button"
@@ -1282,10 +1335,13 @@ export function PosPage() {
           </div>
 
           {/* Right 4 Columns: Active Cart & Payment */}
-          <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-5 space-y-4 lg:sticky lg:top-24">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h2 className="text-base font-semibold text-slate-900">Keranjang Transaksi</h2>
-              <span className="text-xs font-mono text-slate-500 tabular-nums">
+          <div
+            id="pos-cart-panel"
+            className="lg:col-span-4 bg-white border border-stone-200 rounded-xl p-5 space-y-4 lg:sticky lg:top-24"
+          >
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <h2 className="text-base font-semibold text-stone-900">Keranjang Transaksi</h2>
+              <span className="text-xs font-mono text-stone-500 tabular-nums">
                 {cart.reduce((s, i) => s + i.qty, 0)} item
               </span>
             </div>
@@ -1795,7 +1851,7 @@ export function PosPage() {
                   data-testid="pos-checkout-btn"
                   disabled={cart.length === 0}
                   onClick={() => void handleCheckout()}
-                  className="w-full py-3 px-4 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 rounded-lg transition-colors whitespace-nowrap"
+                  className="w-full py-3 px-4 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-200 disabled:text-stone-400 rounded-lg transition-colors whitespace-nowrap"
                 >
                   {paymentMethod === 'CASH' || !canUseNonCash
                     ? canUseThermalPrint && autoPrintReceipt
@@ -1808,7 +1864,7 @@ export function PosPage() {
                     type="button"
                     disabled={cart.length === 0}
                     onClick={handleHoldOpenBill}
-                    className="w-full py-2 px-4 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
+                    className="w-full py-2 px-4 text-xs font-semibold text-stone-800 bg-stone-100 hover:bg-stone-200 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
                   >
                     Simpan ke Open Bill / Tahan Pesanan
                   </button>
@@ -1817,7 +1873,47 @@ export function PosPage() {
             </div>
           </div>
         </div>
+
+        {/* Spacer on mobile when sticky checkout bar is visible so cart content stays unobstructed */}
+        {cart.length > 0 && <div className="h-20 lg:hidden" aria-hidden="true" />}
       </div>
+
+      {/* Sticky Mobile Checkout Bar (positioned cleanly above Mobile Bottom Navigation) */}
+      {cart.length > 0 && (
+        <div
+          data-testid="pos-mobile-checkout-bar"
+          className="lg:hidden fixed bottom-16 inset-x-0 z-30 bg-white border-t border-stone-200 px-4 py-2.5 flex items-center justify-between gap-3 shadow-sm"
+        >
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium text-stone-500">
+              {cart.reduce((s, i) => s + i.qty, 0)} item di keranjang
+            </p>
+            <p className="text-base font-bold font-mono tabular-nums text-emerald-700 truncate">
+              {formatRupiah(totals.grandTotal)}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById('pos-cart-panel');
+                el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="px-3 py-2 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg whitespace-nowrap"
+            >
+              Keranjang
+            </button>
+            <button
+              type="button"
+              data-testid="pos-mobile-pay-btn"
+              onClick={() => void handleCheckout()}
+              className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg whitespace-nowrap"
+            >
+              Bayar Sekarang
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Shift Open / Close Reconciliation Modal */}
       <ModalShell
@@ -2022,7 +2118,7 @@ export function PosPage() {
           {voidTargetOrder && (
             <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 space-y-3">
               <p className="text-xs font-bold text-rose-900">
-                Void Transaksi {voidTargetOrder.orderNumber} (Tercatat di Audit Log Anti-Fraud)
+                Void Transaksi {voidTargetOrder.orderNumber} (Tercatat di Riwayat Pengawasan Kasir)
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -2231,6 +2327,36 @@ export function PosPage() {
         defaultMessage={fonnteOrder ? buildWhatsappReceiptText(fonnteOrder) : ''}
         documentType="RECEIPT"
         referenceNo={fonnteOrder?.orderNumber}
+      />
+
+      <DirectWaCustomerModal
+        open={Boolean(directWaOrder)}
+        onClose={() => setDirectWaOrder(null)}
+        title={
+          directWaOrder
+            ? `Kirim Rincian Transaksi ${directWaOrder.orderNumber}`
+            : 'Kirim Rincian ke Pelanggan'
+        }
+        subtitle="Rincian transaksi akan dibuka di aplikasi WhatsApp Anda agar siap dikirim ke pelanggan."
+        businessWhatsappNumber={tenant.settings?.businessWhatsappNumber}
+        defaultCustomerPhone={directWaOrder?.customerPhoneWa ?? ''}
+        defaultCustomerName={directWaOrder?.customerName}
+        defaultMessage={
+          directWaOrder
+            ? buildCustomerReceiptWaMessage({ tenant, order: directWaOrder })
+            : ''
+        }
+      />
+
+      <DailyClosingModal
+        open={closingModalOpen}
+        onClose={() => setClosingModalOpen(false)}
+      />
+
+      <OwnerWaReminderModal
+        open={waReminderModalOpen}
+        onClose={() => setWaReminderModalOpen(false)}
+        contextLabel="ringkasan pesanan kasir"
       />
     </AppShell>
   );

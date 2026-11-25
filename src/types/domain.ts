@@ -302,6 +302,16 @@ export interface StockOpnameSession {
 
 export type BoardingRoomStatus = 'AVAILABLE' | 'OCCUPIED' | 'MAINTENANCE';
 
+export type BoardingAddOnDurationMode = 'FOLLOW_RENT' | 'ONE_MONTH' | 'CUSTOM';
+
+export interface BoardingFacilityAddOn {
+  id: string;
+  name: string;
+  monthlyFee: string; // NUMERIC(19,4) per bulan
+  durationMode?: BoardingAddOnDurationMode; // FOLLOW_RENT (default) | ONE_MONTH | CUSTOM
+  durationMonths?: number; // Dipakai saat durationMode === 'CUSTOM' (1..24)
+}
+
 export interface BoardingRoom {
   id: string;
   tenantId: string;
@@ -315,9 +325,12 @@ export interface BoardingRoom {
   status: BoardingRoomStatus;
   showOnLanding?: boolean;
   facilities?: string;
+  includedFacilities?: string[]; // Fasilitas standar yang sudah termasuk (include) harga sewa kamar
   notes?: string;
   createdAt?: string;
 }
+
+export type BoardingBillingCycle = 'BULANAN' | 'TAHUNAN';
 
 export interface BoardingTenant {
   id: string;
@@ -328,7 +341,11 @@ export interface BoardingTenant {
   phoneWa: string;
   emergencyContact: string;
   checkInDate: string; // YYYY-MM-DD
+  billingCycle?: BoardingBillingCycle; // BULANAN (default) | TAHUNAN
+  nextDueDate?: string; // YYYY-MM-DD — jatuh tempo pembayaran berikutnya
   depositAmount: string; // NUMERIC(19,4) -> Liability account 2106!
+  includedFacilities?: string[]; // Fasilitas include yang disepakati saat Check-In
+  facilityAddOns?: BoardingFacilityAddOn[]; // Tambahan fasilitas berbayar saat Check-In / Perpanjangan
   isActive: boolean;
   createdAt?: string;
 }
@@ -339,10 +356,18 @@ export interface BoardingInvoice {
   branchId?: string | null;
   roomId: string;
   boardingTenantId: string;
-  periodMonth: string; // YYYY-MM
+  periodMonth: string; // YYYY-MM atau TAHUNAN-2026-2027 atau 3BLN-2026-02
+  billingCycle?: BoardingBillingCycle;
+  monthsCount?: number; // Jumlah bulan sewa yang dibayar/diperpanjang (1..24)
+  dueDate?: string; // YYYY-MM-DD — tanggal jatuh tempo tagihan
   rentAmount: string; // NUMERIC(19,4)
-  utilityFee: string; // Listrik / Air / WiFi NUMERIC(19,4)
-  lateFee: string; // Denda telat NUMERIC(19,4)
+  utilityFee: string; // Total biaya add-on fasilitas (backward-compatible NUMERIC(19,4))
+  facilityAddOns?: BoardingFacilityAddOn[]; // Rincian add-on fasilitas pada tagihan/perpanjangan ini
+  lateFee: string; // Total denda telat NUMERIC(19,4)
+  lateFeePerDay?: string; // Tarif denda per hari keterlambatan (opsional) NUMERIC(19,4)
+  daysOverdue?: number; // Jumlah hari keterlambatan saat denda dihitung
+  regionalTaxAmount?: string; // PBJT / Pajak Daerah (misal Kost >10 kamar) — dipisah ke Liabilitas 2103
+  regionalTaxLabel?: string; // Label Pajak Daerah aktif (misal PBJT Kos >10 Kamar 10%)
   totalAmount: string; // NUMERIC(19,4)
   pph42Amount: string; // 10% PPh Final Sewa Bangunan Pasal 4(2)
   paymentStatus: 'UNPAID' | 'PAID' | 'OVERDUE';
@@ -1037,6 +1062,9 @@ export interface ManagedCustomerAccount {
   fullName: string;
   email: string;
   passwordDemo: string;
+  passwordHash?: string;
+  allowGoogleLogin?: boolean;
+  allowPasswordLogin?: boolean;
   phone: string;
   role: MemberRole;
   status: CustomerAccountStatus;
@@ -1060,6 +1088,22 @@ export interface ManagedCustomerAccount {
   createdAt: string;
 }
 
+export interface MasterAdminAccountSummary {
+  id: string;
+  email: string;
+  fullName: string;
+  phone: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  allowGoogleLogin: boolean;
+  allowPasswordLogin: boolean;
+  isPrimaryOwner: boolean;
+  hasPassword: boolean;
+  notes: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AppSession {
   role: 'GUEST' | 'MASTER_ADMIN' | 'CUSTOMER' | 'STAFF';
   accountScope?: AccountScope;
@@ -1068,7 +1112,12 @@ export interface AppSession {
   phone?: string;
   customerId?: string;
   firebaseUid?: string;
-  authProvider?: 'FIREBASE_GOOGLE' | 'FIREBASE_EMAIL' | 'SAAS_ACCOUNT';
+  authProvider?:
+    | 'FIREBASE_GOOGLE'
+    | 'FIREBASE_EMAIL'
+    | 'SAAS_ACCOUNT'
+    | 'BETTER_AUTH_GOOGLE'
+    | 'BETTER_AUTH_EMAIL';
   staffId?: string;
   staffTenantId?: string;
   staffRoleTitle?: string;
@@ -1298,6 +1347,7 @@ export interface TenantRegionalTaxSettings {
   cityName: string;
   applyRegionalTax: boolean; // False = UMKM exempt / ignored per regional threshold or user preference
   customRateOverride?: string | null; // Optional Decimal override e.g. '0.10'
+  customTaxName?: string | null; // Optional label pajak/retribusi daerah tambahan sesuai Perda setempat
   lastSyncedAt?: string;
 }
 

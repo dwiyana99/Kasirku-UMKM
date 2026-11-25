@@ -125,10 +125,10 @@ export function Navbar({
         </div>
       )}
 
-      {/* Unified Dashboard Navbar */}
+      {/* Unified Dashboard Navbar (Single-DOM primaryAction wraps neatly on mobile without duplication) */}
       <header
         data-testid="unified-dashboard-navbar"
-        className="h-14 sm:h-16 bg-white border-b border-stone-200 px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-4 w-full max-w-full"
+        className="min-h-14 sm:min-h-16 bg-white border-b border-stone-200 px-3 sm:px-6 lg:px-8 py-2 sm:py-0 flex flex-wrap items-center justify-between gap-x-2 sm:gap-x-4 gap-y-2 w-full max-w-full"
       >
         {/* Left Zone: Mobile Toggle + Breadcrumb Title */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -153,11 +153,15 @@ export function Navbar({
           </div>
         </div>
 
-        {/* Right Zone: Primary Action (sm+) + Optional AI (md+, active add-on only) + Notification Bell + Desktop Controls (lg+) */}
+        {/* Single-DOM Primary Action (wraps cleanly to second row on narrow phones, stays inline on sm+) */}
+        {primaryAction && (
+          <div className="order-last basis-full pt-2 border-t border-stone-100 flex flex-wrap items-center gap-2 sm:order-none sm:basis-auto sm:pt-0 sm:border-t-0">
+            {primaryAction}
+          </div>
+        )}
+
+        {/* Right Zone: Optional AI (md+, active add-on only) + Notification Bell + Desktop Controls (lg+) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {primaryAction && (
-            <div className="hidden sm:flex items-center gap-2">{primaryAction}</div>
-          )}
 
           {showAiTrigger && (
             <button
@@ -309,17 +313,11 @@ export function Navbar({
         </div>
       </header>
 
-      {/* Mobile Secondary Action Strip (so primaryAction like Buka Kasir / Tutup Kasir never overflows header on narrow phones) */}
-      {primaryAction && (
-        <div className="sm:hidden bg-white border-b border-stone-200 px-3 py-2 flex flex-wrap items-center gap-2">
-          {primaryAction}
-        </div>
-      )}
-
       {/* Responsive Centered Notifications Modal (100% readable on 320px-1920px viewports, zero clipping) */}
       <ModalShell
         open={notifModalOpen}
         onClose={() => setNotifModalOpen(false)}
+        closeOnEscape={true}
         headerId="navbar-notifications-modal-header"
         testId="navbar-notifications-modal"
         maxWidthClass="max-w-lg"

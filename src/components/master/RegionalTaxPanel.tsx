@@ -20,6 +20,7 @@ interface DraftRegionForm {
   pbjtHotelVillaRate: string;
   pbjtSpaEntertainmentRate: string;
   pbjtParkingRate: string;
+  pbjtSportsRate: string;
   umkmExemptMonthlyThreshold: string;
   regulationRef: string;
   notes: string;
@@ -101,6 +102,7 @@ export function RegionalTaxPanel() {
       pbjtHotelVillaRate: toPercentStr(rule.pbjtHospitalityRate),
       pbjtSpaEntertainmentRate: toPercentStr(rule.pbjtEntertainmentSpaRate),
       pbjtParkingRate: toPercentStr(rule.pbjtParkingRate),
+      pbjtSportsRate: toPercentStr(rule.pbjtSportsRate),
       umkmExemptMonthlyThreshold: String(Math.round(Number(rule.umkmExemptMonthlyThreshold || '0'))),
       regulationRef: rule.perdaReference,
       notes: rule.notes ?? '',
@@ -117,6 +119,7 @@ export function RegionalTaxPanel() {
       pbjtHotelVillaRate: '10',
       pbjtSpaEntertainmentRate: '25',
       pbjtParkingRate: '10',
+      pbjtSportsRate: '0',
       umkmExemptMonthlyThreshold: '5000000',
       regulationRef: 'Perda PDRD Kabupaten/Kota (UU HKPD)',
       notes: '',
@@ -137,7 +140,7 @@ export function RegionalTaxPanel() {
       pbjtHospitalityRate: fromPercentStr(editingRule.pbjtHotelVillaRate),
       pbjtEntertainmentSpaRate: fromPercentStr(editingRule.pbjtSpaEntertainmentRate),
       pbjtParkingRate: fromPercentStr(editingRule.pbjtParkingRate),
-      pbjtSportsRate: '0.0000',
+      pbjtSportsRate: fromPercentStr(editingRule.pbjtSportsRate),
       umkmExemptMonthlyThreshold: `${Math.max(0, Number(editingRule.umkmExemptMonthlyThreshold || '0'))}.0000`,
       perdaReference: editingRule.regulationRef.trim() || 'UU HKPD No. 1/2022',
       notes: editingRule.notes.trim() || '',
@@ -164,7 +167,7 @@ export function RegionalTaxPanel() {
               </h2>
             </div>
             <p className="mt-1 max-w-[68ch] text-sm text-stone-600">
-              Kelola tarif PBJT Makanan/Minuman, Perhotelan/Homestay/Villa, SPA/Hiburan, dan Parkir untuk 38+ kota/kabupaten. Setiap perubahan tarif langsung tersinkron otomatis ke tenant yang berdomisili di kota terkait.
+              Kelola tarif PBJT Makanan/Minuman, Perhotelan/Homestay/Villa, SPA/Hiburan, Parkir/Garasi, dan Olahraga/Lapangan untuk 38+ kota/kabupaten. Setiap perubahan tarif langsung tersinkron otomatis ke tenant yang berdomisili di kota terkait.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -244,6 +247,7 @@ export function RegionalTaxPanel() {
                 <th className="px-3 py-3 text-right">PBJT Hotel/Villa</th>
                 <th className="px-3 py-3 text-right">PBJT SPA</th>
                 <th className="px-3 py-3 text-right">PBJT Parkir</th>
+                <th className="px-3 py-3 text-right">PBJT Olahraga</th>
                 <th className="px-3 py-3 text-right">Batas UMKM/Bln</th>
                 <th className="px-3 py-3 text-center">Tenant</th>
                 <th className="px-4 py-3 text-right">Aksi</th>
@@ -274,6 +278,9 @@ export function RegionalTaxPanel() {
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums text-stone-800">
                       {toPercentStr(rule.pbjtParkingRate)}%
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums text-stone-800">
+                      {toPercentStr(rule.pbjtSportsRate)}%
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs tabular-nums text-stone-600">
                       {Number(rule.umkmExemptMonthlyThreshold) > 0
@@ -426,6 +433,22 @@ export function RegionalTaxPanel() {
                   value={editingRule.pbjtParkingRate}
                   onChange={(e) =>
                     setEditingRule({ ...editingRule, pbjtParkingRate: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm tabular-nums text-stone-900"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-stone-700">
+                  PBJT Olahraga / Lapangan (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  max="100"
+                  value={editingRule.pbjtSportsRate}
+                  onChange={(e) =>
+                    setEditingRule({ ...editingRule, pbjtSportsRate: e.target.value })
                   }
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm tabular-nums text-stone-900"
                 />

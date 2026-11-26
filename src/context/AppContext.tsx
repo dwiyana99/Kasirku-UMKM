@@ -1144,20 +1144,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         currentPath.startsWith('/customer-display/');
       if (isPublicCustomerRoute) return;
       if (res.needsOnboarding) {
-        if (
-          currentPath === '/login' ||
-          currentPath === '/register' ||
-          currentPath === '/master/login' ||
-          currentPath === '/dashboard' ||
-          currentPath === '/master'
-        ) {
+        if (currentPath !== '/onboarding') {
           navigate('/onboarding?mode=real&source=oauth');
+        }
+      } else if (res.defaultRoute === '/master') {
+        if (currentPath !== '/master') {
+          navigate('/master');
         }
       } else if (
         res.defaultRoute &&
         (currentPath === '/login' ||
           currentPath === '/register' ||
-          currentPath === '/master/login')
+          currentPath === '/master/login' ||
+          currentPath === '/onboarding')
       ) {
         navigate(res.defaultRoute);
       }

@@ -33,8 +33,16 @@ function normalizeApiRequestUrl(req: IncomingMessage): void {
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
+  const rawUrl = req.url || '/api';
+  const rawPath = rawUrl.split('?')[0];
   try {
     normalizeApiRequestUrl(req);
+    const normalizedPath = (req.url || '/api').split('?')[0];
+    if (process.env.VERCEL || process.env.AUTH_DEBUG === 'true') {
+      console.info(
+        `[vercel-api] ${req.method || 'GET'} raw=${rawPath} -> normalized=${normalizedPath}`,
+      );
+    }
     const app = await getExpressApp();
     return app(req, res);
   } catch (err) {

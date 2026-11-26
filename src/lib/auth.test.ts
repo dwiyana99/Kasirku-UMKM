@@ -314,6 +314,21 @@ describe('Vercel Serverless Runtime Compatibility', () => {
       const rewrittenCfgJson = (await rewrittenCfgResp.json()) as Record<string, unknown>;
       assert.equal(typeof rewrittenCfgJson.betterAuthReady, 'boolean');
 
+      // Verify diagnostic endpoint exposes safe Better Auth & Google OAuth readiness without leaking secrets
+      const diagResp = await fetch(
+        `${baseUrl}/api/index?__vercel_path=${encodeURIComponent('auth/diagnostics')}`,
+      );
+      assert.equal(diagResp.status, 200);
+      const diagJson = (await diagResp.json()) as Record<string, unknown>;
+      assert.equal(diagJson.status, 'ok');
+      assert.equal(diagJson.matchedPath, '/api/auth/diagnostics');
+      assert.equal(diagJson.masterGoogleAdminEmail, 'dwiyana99@gmail.com');
+      assert.equal(diagJson.newUserGoogleOnboardingEnabled, true);
+      assert.equal(typeof diagJson.betterAuthUrlMatchesRequestHost, 'boolean');
+      assert.ok(String(diagJson.googleCallbackUrl).endsWith('/api/auth/callback/google'));
+      assert.equal('BETTER_AUTH_SECRET' in diagJson, false);
+      assert.equal('GOOGLE_CLIENT_SECRET' in diagJson, false);
+
       const loginResp = await fetch(
         `${baseUrl}/api/index?__vercel_path=${encodeURIComponent('auth/master-login')}`,
         {
@@ -352,7 +367,7 @@ describe('Vercel Serverless Runtime Compatibility', () => {
 });
 
 describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sync', () => {
-  it('synchronizes STANDARD_ENV_CATALOG and buildProductionEnvSnippet to strictly the 14 required Vercel + Neon + Midtrans + Fonnte keys', async () => {
+  it('synchronizes STANDARD_ENV_CATALOG and buildProductionEnvSnippet to the 16 Vercel + Neon + Midtrans + Fonnte + Google keys', async () => {
     const { STANDARD_ENV_CATALOG } = await import('../server/env-secrets-routes.ts');
     const { buildProductionEnvSnippet, DEFAULT_INFRA_MIGRATION_CONFIG } = await import(
       './infra/pg-migration-builder.ts'
@@ -374,6 +389,8 @@ describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sy
       'MIDTRANS_SERVER_KEY',
       'MIDTRANS_CLIENT_KEY',
       'FONNTE_TOKEN',
+      'GOOGLE_CLIENT_ID',
+      'GOOGLE_CLIENT_SECRET',
     ];
     assert.equal(STANDARD_ENV_CATALOG.length, expectedKeys.length);
     for (const key of expectedKeys) {
@@ -391,7 +408,6 @@ describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sy
       'TRIPAY_API_KEY',
       'TRIPAY_PRIVATE_KEY',
       'GEMINI_API_KEY',
-      'GOOGLE_CLIENT_ID',
     ];
     for (const removed of removedKeys) {
       assert.equal(catalogKeys.has(removed), false, `Unused key ${removed} should be removed`);
@@ -417,6 +433,8 @@ describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sy
       'MIDTRANS_SERVER_KEY=',
       'MIDTRANS_CLIENT_KEY=',
       'FONNTE_TOKEN=',
+      'GOOGLE_CLIENT_ID=',
+      'GOOGLE_CLIENT_SECRET=',
     ]) {
       assert.ok(snippet.includes(token), `Missing ${token} in buildProductionEnvSnippet`);
     }

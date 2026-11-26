@@ -707,8 +707,8 @@ export function LoginPage({
                 >
                   {authConfig.betterAuthReady
                     ? authConfig.googleAuthConfigured
-                      ? 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email & Google aktif)'
-                      : 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email & Kata Sandi aktif)'
+                      ? 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email & Google aktif untuk semua akun)'
+                      : 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email aktif · Tambahkan GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Vercel untuk tombol Login Google)'
                     : 'Login Email & Akun Terkelola aktif · Neon PostgreSQL opsional via Vercel / Master Admin'}
                 </p>
 

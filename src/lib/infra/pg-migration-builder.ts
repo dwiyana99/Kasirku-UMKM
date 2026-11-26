@@ -469,8 +469,8 @@ export function buildPostgresMigrationSql(params: {
 }
 
 /**
- * Generates a clean, minimal 14-variable production .env template for Vercel:
- * Neon PostgreSQL + Better Auth (Neon) + Neon Object Storage + Midtrans + Fonnte.
+ * Generates a clean production .env template for Vercel / VPS (Biznet Gio Cloud):
+ * Neon PostgreSQL + Better Auth (Neon) + Neon Object Storage + Midtrans + Fonnte + Google OAuth.
  */
 export function buildProductionEnvSnippet(config: InfraMigrationConfig): string {
   const hostPreview = config.pgHostPreview || 'ep-kasirakun-pooler.ap-southeast-1.aws.neon.tech';
@@ -504,5 +504,9 @@ export function buildProductionEnvSnippet(config: InfraMigrationConfig): string 
     ``,
     `# 5. WhatsApp Otomatis: Fonnte (WAJIB)`,
     `FONNTE_TOKEN="<ISI_FONNTE_DEVICE_TOKEN>"`,
+    ``,
+    `# 6. Login Google — Better Auth Google OAuth (dwiyana99@gmail.com & User Baru)`,
+    `GOOGLE_CLIENT_ID="<ISI_CLIENT_ID>.apps.googleusercontent.com"`,
+    `GOOGLE_CLIENT_SECRET="GOCSPX-<ISI_CLIENT_SECRET>"`,
   ].join('\n');
 }

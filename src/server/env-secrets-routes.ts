@@ -272,6 +272,37 @@ export const STANDARD_ENV_CATALOG: EnvSecretCatalogItem[] = [
       'Klik tombol Token pada perangkat yang berstatus Connected, salin tokennya, lalu tempel ke FONNTE_TOKEN di Vercel.',
     ],
   },
+  {
+    key: 'GOOGLE_CLIENT_ID',
+    label: 'Google OAuth Client ID (Login Google Master & User Baru)',
+    category: 'AUTH_SSO',
+    serviceName: 'Google OAuth (Better Auth)',
+    isSecret: false,
+    placeholder: '1234567890-xxxx.apps.googleusercontent.com',
+    description:
+      'Client ID dari Google Cloud Console untuk mengaktifkan tombol Masuk/Daftar dengan Google bagi Master Admin (dwiyana99@gmail.com) maupun pendaftar UMKM baru.',
+    portalUrl: 'https://console.cloud.google.com/apis/credentials',
+    guideSteps: [
+      'Buka console.cloud.google.com/apis/credentials, buat OAuth consent screen (External), lalu Create Credentials > OAuth client ID (Web application).',
+      'Pada Authorized redirect URIs, tambahkan: https://DOMAIN-VERCEL-ANDA/api/auth/callback/google (dan domain custom / AI Studio bila dipakai).',
+      'Salin Client ID berakhiran .apps.googleusercontent.com ke Vercel Environment Variables.',
+    ],
+  },
+  {
+    key: 'GOOGLE_CLIENT_SECRET',
+    label: 'Google OAuth Client Secret (Login Google)',
+    category: 'AUTH_SSO',
+    serviceName: 'Google OAuth (Better Auth)',
+    isSecret: true,
+    placeholder: 'GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx',
+    description:
+      'Client Secret pasangan GOOGLE_CLIENT_ID dari Google Cloud Console (khusus server Better Auth, tidak pernah dikirim ke browser).',
+    portalUrl: 'https://console.cloud.google.com/apis/credentials',
+    guideSteps: [
+      'Salin Client Secret (diawali GOCSPX-...) tepat di bawah Client ID pada Google Cloud Console.',
+      'Simpan di Vercel Environment Variables sebagai GOOGLE_CLIENT_SECRET lalu Redeploy.',
+    ],
+  },
 ];
 
 const saveEnvSecretSchema = z.object({

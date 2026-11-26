@@ -6,7 +6,7 @@ Panduan ini dibuat khusus untuk Anda yang **murni mulai dari browser saja tanpa 
 
 ---
 
-## Ringkasan 14 Environment Variables yang Akan Dimasukkan ke Vercel
+## Ringkasan 16 Environment Variables untuk Vercel (14 Inti + 2 Login Google)
 
 | No | Bagian | Nama Variable | Dari Mana Mengambilnya |
 |---:|---|---|---|
@@ -24,6 +24,8 @@ Panduan ini dibuat khusus untuk Anda yang **murni mulai dari browser saja tanpa 
 | 12 | **Midtrans Master** | `MIDTRANS_SERVER_KEY` | Midtrans Dashboard → Settings → Access Keys |
 | 13 | **Midtrans Master** | `MIDTRANS_CLIENT_KEY` | Midtrans Dashboard → Settings → Access Keys |
 | 14 | **WhatsApp Fonnte** | `FONNTE_TOKEN` | Fonnte Dashboard (`md.fonnte.com`) → Device → Token |
+| 15 | **Login Google** | `GOOGLE_CLIENT_ID` | Google Cloud Console → Credentials → Web Client ID |
+| 16 | **Login Google** | `GOOGLE_CLIENT_SECRET` | Google Cloud Console → Credentials → Web Client Secret |
 
 ---
 
@@ -119,14 +121,23 @@ Panduan ini dibuat khusus untuk Anda yang **murni mulai dari browser saja tanpa 
      `https://DOMAIN-VERCEL-ANDA/api/webhooks/payment/midtrans/master`
    - Klik **Update / Save**.
 2. **Cek Koneksi Semua Layanan (1 Klik di Browser)**:
-   - Buka tab baru dan akses: `https://DOMAIN-VERCEL-ANDA/api/health`
+   - Buka tab baru dan akses: `https://DOMAIN-VERCEL-ANDA/api/health` dan `https://DOMAIN-VERCEL-ANDA/api/auth/diagnostics`
    - Pastikan hasil yang muncul menunjukkan:
      - `"status": "ok"`
      - `"database": "connected"`
      - `"betterAuthConfigured": true`
+     - `"betterAuthUrlMatchesRequestHost": true`
      - `"storageConfigured": true`
-3. **Login ke Konsol Master Admin**:
+3. **Aktifkan Tombol Login Google (`dwiyana99@gmail.com` & User Baru)**:
+   - Buka [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) → buat **OAuth consent screen** (External) → **Create Credentials → OAuth client ID → Web application**.
+   - Pada bagian **Authorized redirect URIs**, masukkan URL callback berikut:
+     - `https://DOMAIN-VERCEL-ANDA/api/auth/callback/google`
+   - Salin **Client ID** ke `GOOGLE_CLIENT_ID` dan **Client Secret** ke `GOOGLE_CLIENT_SECRET` di **Vercel → Settings → Environment Variables**, lalu **Redeploy**.
+   - Setelah Redeploy, tombol **Masuk Google Master** (`dwiyana99@gmail.com`) dan **Masuk/Daftar dengan Google** (untuk user baru) muncul otomatis di halaman `/login`.
+4. **Login ke Konsol Master Admin**:
    - Buka `https://DOMAIN-VERCEL-ANDA/login` → pilih tab **Master Admin**.
-   - Login menggunakan `MASTER_ADMIN_EMAIL` dan `MASTER_ADMIN_PASSWORD` yang Anda buat di Vercel.
-   - Buka menu **Migrasi DB, Storage & Sync** di sidebar kiri — pastikan kelima kotak indikator (**Neon PostgreSQL**, **Better Auth (Neon)**, **Neon Object Storage**, **Midtrans Master**, **WhatsApp Fonnte**) tampil **Terhubung / Aktif**.
-4. *(Opsional nanti)* Jika sudah membeli domain sendiri (misal `kasirakun.id`), tambahkan di **Vercel → Settings → Domains**, lalu ubah `BETTER_AUTH_URL` dan Payment Notification URL Midtrans ke `https://kasirakun.id`, kemudian **Redeploy**.
+   - Login menggunakan `MASTER_ADMIN_EMAIL` dan `MASTER_ADMIN_PASSWORD` yang Anda buat di Vercel (atau klik **Masuk Google Master** bila Google OAuth sudah diisi).
+   - Buka menu **Migrasi DB, Storage & Sync** di sidebar kiri — pastikan seluruh indikator koneksi tampil **Terhubung / Aktif**.
+5. *(Migrasi Domain Biznet / Biznet Gio Cloud nanti)* Jika sudah memakai domain sendiri (misal `kasirakun.id`) atau pindah ke VPS **Biznet Gio Cloud**:
+   - Di Vercel: tambahkan domain di **Settings → Domains**, lalu ubah `BETTER_AUTH_URL` & Redirect URI Google + Midtrans ke `https://kasirakun.id`, kemudian **Redeploy**.
+   - Pindah ke **Biznet Gio Cloud**: cukup gunakan tombol **Export SQL Dump** & generator `.env.production` di menu **Migrasi DB, Storage & Sync**, jalankan `npm run build && npm start` (port `3000`) di VPS, dan arahkan DNS domain Biznet Anda ke IP VPS.

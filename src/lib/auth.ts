@@ -85,6 +85,14 @@ export function buildTrustedOrigins(env: NodeJS.ProcessEnv = process.env): strin
     origins.add('https://*.vercel.app');
   }
 
+  const customDomain = (env.CUSTOM_DOMAIN || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  if (customDomain) {
+    origins.add(`https://${customDomain}`);
+    if (!customDomain.startsWith('www.')) {
+      origins.add(`https://www.${customDomain}`);
+    }
+  }
+
   const rootDomain = (env.ROOT_DOMAIN || env.NEXT_PUBLIC_ROOT_DOMAIN || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
   if (rootDomain) {
     origins.add(`https://${rootDomain}`);
@@ -140,6 +148,7 @@ function createBetterAuthInstance(params: {
         },
       }
     : undefined;
+  const isAiStudioIframe = params.baseURL.includes('.run.app');
 
   return betterAuth({
     database: prismaAdapter(params.prismaClient, {
@@ -161,6 +170,9 @@ function createBetterAuthInstance(params: {
       modelName: 'authAccount',
     },
     advanced: {
+      defaultCookieAttributes: isAiStudioIframe
+        ? { sameSite: 'none', secure: true, httpOnly: true }
+        : { sameSite: 'lax', secure: params.baseURL.startsWith('https://'), httpOnly: true },
       database: {
         generateId: () => crypto.randomUUID(),
       },

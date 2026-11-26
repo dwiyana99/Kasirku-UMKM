@@ -57,6 +57,7 @@ import { mountUploadRoutes } from './src/server/upload-routes.ts';
 import { mountMasterAccountsRoutes } from './src/server/master-accounts-routes.ts';
 import { createSubdomainRewriteMiddleware } from './src/middleware.ts';
 import {
+  buildTrustedOrigins,
   getAuthConfigurationStatus,
   getBetterAuthInstance,
   getCurrentSession,
@@ -423,6 +424,18 @@ export async function createExpressApp(
     '/api/auth/forget-password',
     '/api/auth/reset-password',
   ];
+  app.use('/api/auth', (req, res, next) => {
+    const startedAt = Date.now();
+    const authStatus = getAuthConfigurationStatus();
+    const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || 'unknown');
+    res.on('finish', () => {
+      console.info(
+        `[auth-diag] ${req.method} ${req.originalUrl.split('?')[0]} host=${reqHost} status=${res.statusCode} baReady=${authStatus.betterAuthReady} googleReady=${authStatus.googleAuthConfigured} ms=${Date.now() - startedAt}`,
+      );
+    });
+    next();
+  });
+
   app.use((req, res, next) => {
     const reqPath = req.path || '';
     const isBetterAuthPath = BETTER_AUTH_PREFIXES.some(
@@ -474,6 +487,72 @@ export async function createExpressApp(
       googleAuthConfigured: authStatus.googleAuthConfigured,
       betterAuthConfigured: authStatus.betterAuthReady,
       service: 'kasirakun-umkm',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Safe, non-secret diagnostic endpoint to inspect Better Auth routing, BETTER_AUTH_URL match, and Google OAuth readiness
+  app.get('/api/auth/diagnostics', async (req, res) => {
+    const authStatus = getAuthConfigurationStatus();
+    const authInstance = getBetterAuthInstance();
+    const trustedOrigins = buildTrustedOrigins();
+    const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+    const proto = String(req.headers['x-forwarded-proto'] || (rawHost.includes('localhost') ? 'http' : 'https'))
+      .split(',')[0]
+      .trim();
+    const requestOrigin = rawHost ? `${proto}://${rawHost}` : authStatus.baseURL;
+
+    let configuredHost = '';
+    try {
+      configuredHost = new URL(authStatus.baseURL).host;
+    } catch {
+      configuredHost = '';
+    }
+    const betterAuthUrlMatchesRequestHost = Boolean(
+      rawHost && configuredHost && rawHost.toLowerCase() === configuredHost.toLowerCase(),
+    );
+    const requestOriginTrusted =
+      trustedOrigins.includes(requestOrigin) ||
+      (rawHost.endsWith('.vercel.app') && trustedOrigins.includes('https://*.vercel.app'));
+
+    const hints: string[] = [];
+    if (!authStatus.databaseConfigured) {
+      hints.push('DATABASE_URL Neon belum terpasang atau masih berupa placeholder.');
+    }
+    if (!authStatus.betterAuthSecretConfigured) {
+      hints.push('BETTER_AUTH_SECRET belum terpasang atau kurang dari 16 karakter.');
+    }
+    if (!betterAuthUrlMatchesRequestHost && rawHost) {
+      hints.push(
+        `BETTER_AUTH_URL (${authStatus.baseURL}) berbeda dengan host saat ini (${requestOrigin}). Sesuaikan BETTER_AUTH_URL di Vercel lalu Redeploy.`,
+      );
+    }
+    if (!authStatus.googleAuthConfigured) {
+      hints.push(
+        `Login Google belum aktif karena GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET belum diisi. Pasang Redirect URI: ${authStatus.baseURL}/api/auth/callback/google`,
+      );
+    }
+
+    return res.status(200).json({
+      status: 'ok',
+      matchedPath: req.path,
+      originalUrl: req.originalUrl.split('?')[0],
+      requestHost: rawHost || null,
+      requestOrigin,
+      configuredBetterAuthUrl: authStatus.baseURL,
+      betterAuthUrlMatchesRequestHost,
+      requestOriginTrusted,
+      betterAuthMounted: Boolean(authInstance),
+      betterAuthReady: authStatus.betterAuthReady,
+      betterAuthSecretConfigured: authStatus.betterAuthSecretConfigured,
+      databaseConfigured: authStatus.databaseConfigured,
+      googleAuthConfigured: authStatus.googleAuthConfigured,
+      googleCallbackUrl: `${authStatus.baseURL}/api/auth/callback/google`,
+      storageConfigured: isS3StorageConfigured(),
+      masterGoogleAdminEmail: 'dwiyana99@gmail.com',
+      newUserGoogleOnboardingEnabled: true,
+      vercelEnv: process.env.VERCEL_ENV || (process.env.VERCEL ? 'vercel' : 'local'),
+      hints,
       timestamp: new Date().toISOString(),
     });
   });

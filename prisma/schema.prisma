@@ -5,7 +5,8 @@
 // Hybrid Subscription Plans + Add-Ons, AI Assistant Quota/Cache, and Master Demo Control.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

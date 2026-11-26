@@ -3,22 +3,33 @@ import { getExpressApp } from '../server.ts';
 
 function normalizeApiRequestUrl(req: IncomingMessage): void {
   const rawUrl = req.url || '/api';
-  const qIndex = rawUrl.indexOf('?');
-  const pathPart = qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl;
-  const queryPart = qIndex >= 0 ? rawUrl.slice(qIndex) : '';
+  const parsed = new URL(rawUrl, 'http://localhost');
+  const vercelPath = parsed.searchParams.get('__vercel_path');
 
-  if (pathPart.startsWith('/api')) {
+  if (vercelPath !== null) {
+    parsed.searchParams.delete('__vercel_path');
+    const cleanPath = vercelPath.replace(/^\/+/, '');
+    parsed.pathname = cleanPath ? `/api/${cleanPath}` : '/api';
+    const qs = parsed.searchParams.toString();
+    req.url = qs ? `${parsed.pathname}?${qs}` : parsed.pathname;
     return;
   }
 
-  // Fallback if an upstream proxy/rewrite stripped `/api`
-  const headerOrig = req.headers['x-vercel-original-url'] || req.headers['x-forwarded-uri'];
-  if (typeof headerOrig === 'string' && headerOrig.startsWith('/api')) {
-    req.url = headerOrig;
+  if (parsed.pathname === '/api/index') {
+    const headerOrig = req.headers['x-vercel-original-url'] || req.headers['x-forwarded-uri'];
+    if (typeof headerOrig === 'string' && headerOrig.startsWith('/api')) {
+      req.url = headerOrig;
+      return;
+    }
+  }
+
+  if (parsed.pathname.startsWith('/api')) {
     return;
   }
 
-  req.url = `/api${pathPart.startsWith('/') ? pathPart : `/${pathPart}`}${queryPart}`;
+  const qs = parsed.searchParams.toString();
+  const normalizedPath = `/api${parsed.pathname.startsWith('/') ? parsed.pathname : `/${parsed.pathname}`}`;
+  req.url = qs ? `${normalizedPath}?${qs}` : normalizedPath;
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {

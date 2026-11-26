@@ -290,9 +290,7 @@ describe('Vercel Serverless Runtime Compatibility', () => {
     process.env.KASIRAKUN_SERVERLESS_ONLY = '1';
     process.env.KASIRAKUN_DATA_ROOT = tempRoot;
     const http = await import('node:http');
-    const { default: vercelIndexHandler } = await import('../../api/index.ts');
-    const { default: vercelHandler } = await import('../../api/[...route].ts');
-    assert.equal(typeof vercelIndexHandler, 'function');
+    const { default: vercelHandler } = await import('../../api/index.ts');
 
     const srv = http.createServer((req, res) => {
       void vercelHandler(req, res);
@@ -308,14 +306,25 @@ describe('Vercel Serverless Runtime Compatibility', () => {
       const cfgJson = (await cfgResp.json()) as Record<string, unknown>;
       assert.equal(typeof cfgJson.betterAuthReady, 'boolean');
 
-      const loginResp = await fetch(`${baseUrl}/api/auth/master-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'master@kasirakun.id',
-          password: 'Master2026!',
-        }),
-      });
+      // Simulate Vercel rewrite `/api/:path* -> /api/index?__vercel_path=:path*`
+      const rewrittenCfgResp = await fetch(
+        `${baseUrl}/api/index?__vercel_path=${encodeURIComponent('auth/config-status')}`,
+      );
+      assert.equal(rewrittenCfgResp.status, 200);
+      const rewrittenCfgJson = (await rewrittenCfgResp.json()) as Record<string, unknown>;
+      assert.equal(typeof rewrittenCfgJson.betterAuthReady, 'boolean');
+
+      const loginResp = await fetch(
+        `${baseUrl}/api/index?__vercel_path=${encodeURIComponent('auth/master-login')}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: 'master@kasirakun.id',
+            password: 'Master2026!',
+          }),
+        },
+      );
       assert.equal(loginResp.status, 200);
       const loginJson = (await loginResp.json()) as Record<string, unknown>;
       assert.equal(loginJson.authenticated, true);

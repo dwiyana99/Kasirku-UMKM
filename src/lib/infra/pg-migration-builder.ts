@@ -18,15 +18,15 @@ Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 export const DEFAULT_INFRA_MIGRATION_CONFIG: InfraMigrationConfig = {
   activeDbProvider: 'CURRENT_LOCAL_FIRESTORE',
   activeStorageProvider: 'CURRENT_LOCAL_FIRESTORE',
-  targetDbProvider: 'SUPABASE_POSTGRES',
-  targetStorageProvider: 'CLOUDFLARE_R2',
-  pgHostPreview: 'aws-0-ap-southeast-1.pooler.supabase.com:6543',
-  pgDatabaseName: 'postgres',
+  targetDbProvider: 'NEON_POSTGRES',
+  targetStorageProvider: 'NEON_OBJECT_STORAGE',
+  pgHostPreview: 'ep-kasirakun-pooler.ap-southeast-1.aws.neon.tech:5432',
+  pgDatabaseName: 'neondb',
   pgSslRequired: true,
   pgPoolerEnabled: true,
   storageBucketName: 'kasirakun-assets',
-  storageEndpointPreview: 'https://account-id.r2.cloudflarestorage.com',
-  storagePublicBaseUrl: 'https://cdn.kasirakun.id',
+  storageEndpointPreview: 'https://br-kasirakun.storage.c-1.ap-southeast-1.aws.neon.tech',
+  storagePublicBaseUrl: 'https://br-kasirakun.storage.c-1.ap-southeast-1.aws.neon.tech/kasirakun-assets',
   maintenanceModeZeroDowntime: true,
   cutoverStage: 'IDLE',
   updatedAt: new Date().toISOString(),
@@ -161,7 +161,7 @@ export interface StorageConfigValidationResult {
 }
 
 export function validateStorageTargetConfig(params: {
-  provider: 'SUPABASE_STORAGE' | 'CLOUDFLARE_R2';
+  provider: 'NEON_OBJECT_STORAGE' | 'SUPABASE_STORAGE' | 'CLOUDFLARE_R2';
   endpointUrl: string;
   bucketName: string;
   publicBaseUrl?: string;
@@ -184,6 +184,13 @@ export function validateStorageTargetConfig(params: {
     const u = new URL(endpoint);
     if (u.protocol !== 'https:') {
       warnings.push('Endpoint storage wajib menggunakan HTTPS di produksi.');
+    }
+    if (
+      params.provider === 'NEON_OBJECT_STORAGE' &&
+      !u.hostname.includes('neon.tech') &&
+      !u.hostname.includes('neon.build')
+    ) {
+      warnings.push('Endpoint Neon Object Storage umumnya berakhiran .aws.neon.tech');
     }
     if (params.provider === 'CLOUDFLARE_R2' && !u.hostname.includes('r2.cloudflarestorage.com')) {
       warnings.push('Endpoint Cloudflare R2 umumnya berakhiran .r2.cloudflarestorage.com');
@@ -462,51 +469,40 @@ export function buildPostgresMigrationSql(params: {
 }
 
 /**
- * Generates a production-ready .env template (sanitized placeholders for secrets)
- * tailored to the chosen PostgreSQL + Object Storage + Fonnte combination.
+ * Generates a clean, minimal 14-variable production .env template for Vercel:
+ * Neon PostgreSQL + Better Auth (Neon) + Neon Object Storage + Midtrans + Fonnte.
  */
 export function buildProductionEnvSnippet(config: InfraMigrationConfig): string {
-  const dbBlock =
-    config.targetDbProvider === 'SUPABASE_POSTGRES'
-      ? [
-          `# PostgreSQL Target: Supabase (Transaction Pooler + Direct URL for Prisma)`,
-          `DB_PROVIDER="SUPABASE_POSTGRES"`,
-          `DATABASE_URL="postgresql://postgres.<PROJECT_REF>:<PASSWORD>@${config.pgHostPreview || 'aws-0-ap-southeast-1.pooler.supabase.com:6543'}/${config.pgDatabaseName || 'postgres'}?pgbouncer=true&sslmode=require"`,
-          `DIRECT_URL="postgresql://postgres:<PASSWORD>@db.<PROJECT_REF>.supabase.co:5432/${config.pgDatabaseName || 'postgres'}?sslmode=require"`,
-        ]
-      : [
-          `# PostgreSQL Target: Neon Serverless Postgres`,
-          `DB_PROVIDER="NEON_POSTGRES"`,
-          `DATABASE_URL="postgresql://<USER>:<PASSWORD>@${config.pgHostPreview || 'ep-kasirakun-pooler.ap-southeast-1.aws.neon.tech:5432'}/${config.pgDatabaseName || 'neondb'}?sslmode=require"`,
-          `DIRECT_URL="postgresql://<USER>:<PASSWORD>@ep-kasirakun.ap-southeast-1.aws.neon.tech:5432/${config.pgDatabaseName || 'neondb'}?sslmode=require"`,
-        ];
-
-  const storageBlock =
-    config.targetStorageProvider === 'CLOUDFLARE_R2'
-      ? [
-          `# Object Storage Target: Cloudflare R2 (Zero Egress Fee, S3-Compatible)`,
-          `STORAGE_PROVIDER="CLOUDFLARE_R2"`,
-          `R2_ENDPOINT="${config.storageEndpointPreview || 'https://<ACCOUNT_ID>.r2.cloudflarestorage.com'}"`,
-          `R2_BUCKET_NAME="${config.storageBucketName || 'kasirakun-assets'}"`,
-          `R2_PUBLIC_BASE_URL="${config.storagePublicBaseUrl || 'https://cdn.kasirakun.id'}"`,
-          `R2_ACCESS_KEY_ID="<ISI_R2_ACCESS_KEY>"`,
-          `R2_SECRET_ACCESS_KEY="<ISI_R2_SECRET_KEY>"`,
-        ]
-      : [
-          `# Object Storage Target: Supabase Storage`,
-          `STORAGE_PROVIDER="SUPABASE_STORAGE"`,
-          `SUPABASE_URL="${config.storageEndpointPreview || 'https://<PROJECT_REF>.supabase.co'}"`,
-          `SUPABASE_STORAGE_BUCKET="${config.storageBucketName || 'kasirakun-assets'}"`,
-          `SUPABASE_SERVICE_ROLE_KEY="<ISI_SUPABASE_SERVICE_ROLE_KEY>"`,
-        ];
+  const hostPreview = config.pgHostPreview || 'ep-kasirakun-pooler.ap-southeast-1.aws.neon.tech';
+  const directHost = hostPreview.replace('-pooler', '');
+  const dbName = config.pgDatabaseName || 'neondb';
+  const storageEndpoint =
+    config.storageEndpointPreview || 'https://br-xxxx.storage.c-1.ap-southeast-1.aws.neon.tech';
+  const bucketName = config.storageBucketName || 'kasirakun-assets';
 
   return [
-    ...dbBlock,
+    `# 1. Neon PostgreSQL Database (WAJIB)`,
+    `DATABASE_URL="postgresql://neondb_owner:<PASSWORD>@${hostPreview}/${dbName}?sslmode=require"`,
+    `DIRECT_URL="postgresql://neondb_owner:<PASSWORD>@${directHost}/${dbName}?sslmode=require"`,
     ``,
-    ...storageBlock,
+    `# 2. Better Auth di Neon & Akun Master Admin (WAJIB)`,
+    `BETTER_AUTH_SECRET="<ISI_HASIL_openssl_rand_hex_32>"`,
+    `BETTER_AUTH_URL="https://nama-app-anda.vercel.app"`,
+    `MASTER_ADMIN_EMAIL="master@kasirakun.id"`,
+    `MASTER_ADMIN_PASSWORD="<GANTI_PASSWORD_MASTER_KUAT>"`,
     ``,
-    `# WhatsApp Gateway Add-On (Fonnte — Rp66.000/bulan)`,
+    `# 3. Neon Object Storage — S3 Compatible (WAJIB)`,
+    `AWS_ENDPOINT_URL_S3="${storageEndpoint}"`,
+    `AWS_REGION="ap-southeast-1"`,
+    `AWS_ACCESS_KEY_ID="nak_live_<ISI_ACCESS_KEY>"`,
+    `AWS_SECRET_ACCESS_KEY="nsk_live_<ISI_SECRET_KEY>"`,
+    `S3_BUCKET="${bucketName}"`,
+    ``,
+    `# 4. Pembayaran Master Admin: Midtrans (WAJIB)`,
+    `MIDTRANS_SERVER_KEY="SB-Mid-server-<ISI_SERVER_KEY>"`,
+    `MIDTRANS_CLIENT_KEY="SB-Mid-client-<ISI_CLIENT_KEY>"`,
+    ``,
+    `# 5. WhatsApp Otomatis: Fonnte (WAJIB)`,
     `FONNTE_TOKEN="<ISI_FONNTE_DEVICE_TOKEN>"`,
-    `FONNTE_COUNTRY_CODE="62"`,
   ].join('\n');
 }

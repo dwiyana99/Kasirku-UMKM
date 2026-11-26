@@ -3,13 +3,14 @@ import Decimal from 'decimal.js';
 import {
   Building2,
   CheckCircle2,
-  Cloud,
+  Database,
   Image as ImageIcon,
   Landmark,
   MessageCircle,
   Printer,
   RotateCcw,
   Save,
+  ShieldCheck,
   Trash2,
   Upload,
   AlertCircle,
@@ -23,7 +24,7 @@ import {
 } from '../lib/tax/regional-tax-indonesia';
 import type { TaxEntityType } from '../types/domain';
 
-const MAX_LOGO_BYTES = 200 * 1024; // 200 KB limit keeps Firestore workspacePayload well under 1 MB
+const MAX_LOGO_BYTES = 200 * 1024; // 200 KB cap for fast server & Neon JSONB sync
 const ALLOWED_LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
 const MAX_FOOTER_LENGTH = 240;
 
@@ -66,15 +67,11 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
     updateTenantProfile,
     updateTenantRegionalAndWa,
     regionalTaxRegistry,
-    user,
-    authLoading,
-    linkActiveWorkspaceToGoogleCloud,
-    realtimeInventoryCount,
-    realtimeOrderCount,
+    syncStatus,
+    session,
   } = useApp();
   const tenant = activeWorkspace.tenant;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [cloudNotice, setCloudNotice] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const [name, setName] = useState(tenant.name);
   const [address, setAddress] = useState(tenant.address);
@@ -774,66 +771,37 @@ export function TenantSettings({ onSaved }: TenantSettingsProps) {
           </div>
         </section>
 
-        {/* Cloud Firestore Realtime Sync */}
+        {/* Neon PostgreSQL & Better Auth Sync Status */}
         <section className="space-y-3 pt-4 border-t border-slate-100">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
             <div className="space-y-1 min-w-0">
               <div className="flex items-center gap-2 text-xs font-semibold text-slate-900">
-                <Cloud className="w-4 h-4 text-emerald-700 shrink-0" />
-                <span>Sinkronisasi Realtime Cloud Firestore</span>
+                <Database className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>Sinkronisasi Database Server &amp; Neon PostgreSQL</span>
               </div>
-              {user ? (
-                <p className="text-xs text-slate-600">
-                  Terhubung sebagai <span className="font-semibold">{user.email}</span> ·{' '}
-                  {realtimeInventoryCount} item inventori &amp; {realtimeOrderCount} transaksi POS
-                  aktif disinkronkan realtime.
-                </p>
-              ) : (
-                <p className="text-xs text-slate-600">
-                  Tautkan workspace ini ke akun Google Cloud Firestore agar inventori dan transaksi
-                  POS tersimpan otomatis secara realtime di cloud.
-                </p>
-              )}
-              {cloudNotice && (
-                <p
-                  className={`text-xs mt-1 ${
-                    cloudNotice.ok ? 'text-emerald-700' : 'text-rose-700'
-                  }`}
-                >
-                  {cloudNotice.msg}
-                </p>
-              )}
+              <p className="text-xs text-slate-600">
+                Akun aktif: <span className="font-semibold">{session.email || 'Mode Demo'}</span> ·{' '}
+                {activeWorkspace.products.length} item katalog &amp; {activeWorkspace.orders.length}{' '}
+                transaksi POS tersimpan di ruang kerja terisolasi.
+              </p>
             </div>
 
-            <button
-              type="button"
-              disabled={authLoading}
-              onClick={async () => {
-                setCloudNotice(null);
-                const res = await linkActiveWorkspaceToGoogleCloud();
-                if (res.ok) {
-                  setCloudNotice({
-                    ok: true,
-                    msg: 'Workspace, inventori, dan riwayat transaksi POS berhasil disinkronkan ke Cloud Firestore.',
-                  });
-                } else {
-                  setCloudNotice({
-                    ok: false,
-                    msg: res.error || 'Gagal menghubungkan ke Cloud Firestore.',
-                  });
-                }
-              }}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border whitespace-nowrap shrink-0 ${
+                syncStatus === 'synced'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-white text-slate-700 border-slate-200'
+              }`}
             >
-              <Cloud className="w-3.5 h-3.5 text-emerald-700" />
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
               <span>
-                {authLoading
-                  ? 'Menyinkronkan...'
-                  : user
-                  ? 'Sinkronkan Ulang ke Cloud'
-                  : 'Hubungkan Google Cloud'}
+                {syncStatus === 'synced'
+                  ? 'Tersinkron ke Server'
+                  : syncStatus === 'saving'
+                  ? 'Menyimpan...'
+                  : 'Mode Lokal / Demo'}
               </span>
-            </button>
+            </span>
           </div>
         </section>
 

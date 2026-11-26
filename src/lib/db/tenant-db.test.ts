@@ -87,8 +87,9 @@ test('PartitionedTenantDatabase separates DEMO and REAL directories and isolates
 
     db.seedIfEmpty({ initialCustomers, initialWorkspaces });
 
-    // All 8 seeded UMKM demo accounts must live in `demo/` partition, ZERO in `real/`
-    assert.equal(db.listCustomers('DEMO').length, 8);
+    // All seeded UMKM demo accounts must live in `demo/` partition, ZERO in `real/`
+    assert.ok(initialCustomers.length >= 8);
+    assert.equal(db.listCustomers('DEMO').length, initialCustomers.length);
     assert.equal(db.listCustomers('REAL').length, 0);
     assert.equal(fs.existsSync(path.join(tmpDir, 'demo', 'cust-warung-berkah', 'tenant-warung-berkah.json')), true);
 
@@ -120,7 +121,7 @@ test('PartitionedTenantDatabase separates DEMO and REAL directories and isolates
     db.saveWorkspace('REAL', realCustomer.id, realWorkspace);
 
     assert.equal(db.listCustomers('REAL').length, 1);
-    assert.equal(db.listCustomers('DEMO').length, 8);
+    assert.equal(db.listCustomers('DEMO').length, initialCustomers.length);
     assert.equal(
       fs.existsSync(path.join(tmpDir, 'real', 'real-cust-budi99', 'real-tenant-budi99.json')),
       true

@@ -1,8 +1,8 @@
 /**
- * KasirAkun UMKM — Neon / PostgreSQL & Better Auth Account Sync Helper
- * Synchronizes Master Admin, Real Customer, and Demo accounts into PostgreSQL
- * `users` and `auth_accounts` tables (`providerId: 'credential'`) so accounts created
- * or updated in Master Admin work natively with Better Auth Email + Google OAuth.
+ * KasirAkun UMKM — Neon / PostgreSQL & Better Auth Persistence + Cold-Start Hydration
+ * Synchronizes Master Admin, Real Customer, Demo accounts, full Tenant Workspaces
+ * (products, orders, double-entry journals, rooms, settings), and Tenant Payment Configs
+ * into Neon PostgreSQL so Vercel serverless deployments survive cold starts seamlessly.
  */
 
 import crypto from 'node:crypto';
@@ -13,12 +13,15 @@ import type {
   ManagedCustomerAccount,
   SubscriptionPlanCode,
   TaxEntityType,
+  TenantPaymentConfig,
   TenantWorkspaceData,
 } from '../../types/domain.ts';
 import {
   buildMasterProvisionedAccountAndWorkspace,
   type MasterAdminAccountRecord,
 } from './account-management.ts';
+import { maskSecretKey } from '../payments/crypto.ts';
+import { DEFAULT_ENABLED_CHANNELS } from '../payments/fee-calculator.ts';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -29,6 +32,56 @@ export function toDeterministicUuid(input: string): string {
   }
   const hex = crypto.createHash('sha256').update(`kasirakun:${trimmed}`).digest('hex').slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+export function buildTenantSettingsPayload(params: {
+  customer?: Pick<
+    ManagedCustomerAccount,
+    'id' | 'accountScope' | 'subscriptionPlan' | 'billingCycle' | 'activeAddOns'
+  >;
+  workspace: TenantWorkspaceData;
+  existingSettings?: unknown;
+}): Record<string, unknown> {
+  const prev =
+    params.existingSettings &&
+    typeof params.existingSettings === 'object' &&
+    !Array.isArray(params.existingSettings)
+      ? (params.existingSettings as Record<string, unknown>)
+      : {};
+
+  const ws = params.workspace;
+  // Clone cleanly via JSON roundtrip to ensure plain JSONB compatibility
+  const cleanSnapshot = JSON.parse(JSON.stringify(ws)) as TenantWorkspaceData;
+
+  return {
+    ...prev,
+    legacyTenantId: ws.tenant.id,
+    legacyCustomerId: params.customer?.id ?? ws.tenant.ownerAccountId ?? prev.legacyCustomerId ?? null,
+    accountScope: params.customer?.accountScope ?? ws.tenant.accountScope ?? 'REAL',
+    planCode: params.customer?.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC',
+    billingCycle: params.customer?.billingCycle ?? prev.billingCycle ?? 'MONTHLY',
+    selectedAddOns: params.customer?.activeAddOns ?? ws.tenant.activeAddOns ?? [],
+    businessWhatsappNumber: ws.tenant.settings?.businessWhatsappNumber ?? null,
+    workspaceSnapshot: cleanSnapshot,
+    snapshotUpdatedAt: new Date().toISOString(),
+  };
+}
+
+export function extractWorkspaceSnapshotFromSettings(
+  settings: unknown,
+): TenantWorkspaceData | null {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return null;
+  }
+  const snap = (settings as Record<string, unknown>).workspaceSnapshot;
+  if (!snap || typeof snap !== 'object' || Array.isArray(snap)) {
+    return null;
+  }
+  const candidate = snap as Partial<TenantWorkspaceData>;
+  if (!candidate.tenant?.id || !Array.isArray(candidate.products) || !Array.isArray(candidate.accounts)) {
+    return null;
+  }
+  return candidate as TenantWorkspaceData;
 }
 
 export interface PostgresAccountSyncInput {
@@ -140,45 +193,56 @@ export async function syncTenantWorkspaceToPostgres(params: {
     const safeVertical = ws.tenant.vertical as BusinessVertical;
     const safeTaxEntity = (ws.tenant.taxEntity || 'WP_OP') as TaxEntityType;
 
-    const settingsPayload = {
-      legacyTenantId: ws.tenant.id,
-      legacyCustomerId: params.customer.id,
-      accountScope: params.customer.accountScope ?? 'REAL',
-      planCode: params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC',
-      billingCycle: params.customer.billingCycle ?? 'MONTHLY',
-      selectedAddOns: params.customer.activeAddOns ?? ws.tenant.activeAddOns ?? [],
-      businessWhatsappNumber: ws.tenant.settings?.businessWhatsappNumber ?? null,
-    } as unknown as Prisma.InputJsonValue;
+    const existingTenant = await prisma.tenant.findFirst({
+      where: { OR: [{ id: tenantUuid }, { slug }] },
+      select: { id: true, settings: true },
+    });
+
+    const settingsPayload = buildTenantSettingsPayload({
+      customer: params.customer,
+      workspace: ws,
+      existingSettings: existingTenant?.settings,
+    }) as unknown as Prisma.InputJsonValue;
 
     const verticalOpsPayload = (ws.verticalOps ?? {}) as unknown as Prisma.InputJsonValue;
 
-    const tenant = await prisma.tenant.upsert({
-      where: { slug },
-      create: {
-        id: tenantUuid,
-        name: ws.tenant.name.slice(0, 150),
-        slug,
-        vertical: safeVertical,
-        taxEntity: safeTaxEntity,
-        isPkp: Boolean(ws.tenant.isPkp),
-        npwp16: ws.tenant.npwp16?.slice(0, 16) ?? null,
-        nitku22: ws.tenant.nitku22?.slice(0, 22) ?? null,
-        address: ws.tenant.address ?? null,
-        logoUrl: ws.tenant.logoUrl ?? null,
-        planCode: (params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
-        settings: settingsPayload,
-        verticalOpsJson: verticalOpsPayload,
-      },
-      update: {
-        name: ws.tenant.name.slice(0, 150),
-        vertical: safeVertical,
-        taxEntity: safeTaxEntity,
-        isPkp: Boolean(ws.tenant.isPkp),
-        planCode: (params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
-        settings: settingsPayload,
-        verticalOpsJson: verticalOpsPayload,
-      },
-    });
+    const tenant = existingTenant
+      ? await prisma.tenant.update({
+          where: { id: existingTenant.id },
+          data: {
+            name: ws.tenant.name.slice(0, 150),
+            slug,
+            vertical: safeVertical,
+            taxEntity: safeTaxEntity,
+            isPkp: Boolean(ws.tenant.isPkp),
+            npwp16: ws.tenant.npwp16?.slice(0, 16) ?? null,
+            nitku22: ws.tenant.nitku22?.slice(0, 22) ?? null,
+            address: ws.tenant.address ?? null,
+            logoUrl: ws.tenant.logoUrl ?? null,
+            receiptFooter: ws.tenant.receiptFooter ?? undefined,
+            planCode: (params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
+            settings: settingsPayload,
+            verticalOpsJson: verticalOpsPayload,
+          },
+        })
+      : await prisma.tenant.create({
+          data: {
+            id: tenantUuid,
+            name: ws.tenant.name.slice(0, 150),
+            slug,
+            vertical: safeVertical,
+            taxEntity: safeTaxEntity,
+            isPkp: Boolean(ws.tenant.isPkp),
+            npwp16: ws.tenant.npwp16?.slice(0, 16) ?? null,
+            nitku22: ws.tenant.nitku22?.slice(0, 22) ?? null,
+            address: ws.tenant.address ?? null,
+            logoUrl: ws.tenant.logoUrl ?? null,
+            receiptFooter: ws.tenant.receiptFooter ?? undefined,
+            planCode: (params.customer.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
+            settings: settingsPayload,
+            verticalOpsJson: verticalOpsPayload,
+          },
+        });
 
     await prisma.tenantMembership.upsert({
       where: {
@@ -203,6 +267,217 @@ export async function syncTenantWorkspaceToPostgres(params: {
   } catch {
     return false;
   }
+}
+
+export async function syncTenantWorkspaceOnlyToPostgres(
+  workspace: TenantWorkspaceData,
+  ownerEmail?: string,
+): Promise<boolean> {
+  if (!isDatabaseConfigured()) return false;
+  const prisma = getPrismaClient();
+  if (!prisma) return false;
+
+  try {
+    const ws = workspace;
+    const tenantUuid = toDeterministicUuid(ws.tenant.id);
+    const slug = (ws.tenant.slug || ws.tenant.id).slice(0, 100);
+    const safeVertical = ws.tenant.vertical as BusinessVertical;
+    const safeTaxEntity = (ws.tenant.taxEntity || 'WP_OP') as TaxEntityType;
+
+    const existingTenant = await prisma.tenant.findFirst({
+      where: { OR: [{ id: tenantUuid }, { slug }] },
+      select: { id: true, settings: true },
+    });
+
+    const settingsPayload = buildTenantSettingsPayload({
+      workspace: ws,
+      existingSettings: existingTenant?.settings,
+    }) as unknown as Prisma.InputJsonValue;
+
+    const verticalOpsPayload = (ws.verticalOps ?? {}) as unknown as Prisma.InputJsonValue;
+
+    const tenant = existingTenant
+      ? await prisma.tenant.update({
+          where: { id: existingTenant.id },
+          data: {
+            name: ws.tenant.name.slice(0, 150),
+            slug,
+            vertical: safeVertical,
+            taxEntity: safeTaxEntity,
+            isPkp: Boolean(ws.tenant.isPkp),
+            npwp16: ws.tenant.npwp16?.slice(0, 16) ?? null,
+            nitku22: ws.tenant.nitku22?.slice(0, 22) ?? null,
+            address: ws.tenant.address ?? null,
+            logoUrl: ws.tenant.logoUrl ?? null,
+            receiptFooter: ws.tenant.receiptFooter ?? undefined,
+            planCode: (ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
+            settings: settingsPayload,
+            verticalOpsJson: verticalOpsPayload,
+          },
+        })
+      : await prisma.tenant.create({
+          data: {
+            id: tenantUuid,
+            name: ws.tenant.name.slice(0, 150),
+            slug,
+            vertical: safeVertical,
+            taxEntity: safeTaxEntity,
+            isPkp: Boolean(ws.tenant.isPkp),
+            npwp16: ws.tenant.npwp16?.slice(0, 16) ?? null,
+            nitku22: ws.tenant.nitku22?.slice(0, 22) ?? null,
+            address: ws.tenant.address ?? null,
+            logoUrl: ws.tenant.logoUrl ?? null,
+            receiptFooter: ws.tenant.receiptFooter ?? undefined,
+            planCode: (ws.tenant.subscriptionPlan ?? 'BASIC').slice(0, 30),
+            settings: settingsPayload,
+            verticalOpsJson: verticalOpsPayload,
+          },
+        });
+
+    if (ownerEmail) {
+      const user = await prisma.user.findUnique({
+        where: { email: ownerEmail.trim().toLowerCase() },
+        select: { id: true },
+      });
+      if (user) {
+        await prisma.tenantMembership.upsert({
+          where: {
+            userId_tenantId: {
+              userId: user.id,
+              tenantId: tenant.id,
+            },
+          },
+          create: {
+            userId: user.id,
+            tenantId: tenant.id,
+            role: 'OWNER',
+            isActive: true,
+          },
+          update: {
+            role: 'OWNER',
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function syncCustomerUpdateToPostgres(
+  customer: ManagedCustomerAccount,
+): Promise<boolean> {
+  const res = await syncUserAccountToPostgres({
+    email: customer.email,
+    fullName: customer.fullName,
+    phone: customer.phone,
+    passwordHash: customer.passwordHash || undefined,
+    isSuperAdmin: false,
+    accountStatus: customer.status,
+    maxTenantsAllowed: customer.maxTenantsAllowed,
+  });
+  return res.synced;
+}
+
+function hydrateTenantRowToWorkspace(params: {
+  tenantRow: {
+    id: string;
+    name: string;
+    slug: string;
+    vertical: BusinessVertical;
+    taxEntity: TaxEntityType;
+    isPkp: boolean;
+    npwp16: string | null;
+    nitku22: string | null;
+    address: string | null;
+    logoUrl: string | null;
+    receiptFooter: string | null;
+    planCode: string;
+    settings: unknown;
+    verticalOpsJson: unknown;
+  };
+  ownerEmail: string;
+  ownerName: string;
+  ownerPhone: string;
+  ownerStatus: string;
+  maxTenantsAllowed: number;
+  passwordHash: string | null;
+}): { customer: ManagedCustomerAccount; workspace: TenantWorkspaceData } {
+  const t = params.tenantRow;
+  const settingsObj =
+    t.settings && typeof t.settings === 'object' && !Array.isArray(t.settings)
+      ? (t.settings as Record<string, unknown>)
+      : {};
+  const scope = settingsObj.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
+  const planCode = (typeof settingsObj.planCode === 'string'
+    ? settingsObj.planCode
+    : t.planCode || 'BASIC') as SubscriptionPlanCode;
+  const billingCycle = settingsObj.billingCycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY';
+
+  const built = buildMasterProvisionedAccountAndWorkspace({
+    accountScope: scope,
+    fullName: params.ownerName,
+    email: params.ownerEmail,
+    password: '••••••••',
+    phone: params.ownerPhone || '081200000000',
+    allowGoogleLogin: true,
+    allowPasswordLogin: true,
+    status:
+      params.ownerStatus === 'SUSPENDED' || params.ownerStatus === 'TRIAL'
+        ? params.ownerStatus
+        : 'ACTIVE',
+    businessName: t.name,
+    vertical: t.vertical,
+    planCode,
+    billingCycle,
+    maxTenantsAllowed: params.maxTenantsAllowed || 3,
+    passwordHash: params.passwordHash || '',
+  });
+
+  const resolvedTenantId =
+    typeof settingsObj.legacyTenantId === 'string' && settingsObj.legacyTenantId
+      ? settingsObj.legacyTenantId
+      : t.id;
+  const resolvedCustomerId =
+    typeof settingsObj.legacyCustomerId === 'string' && settingsObj.legacyCustomerId
+      ? settingsObj.legacyCustomerId
+      : built.customer.id;
+
+  const snapshot = extractWorkspaceSnapshotFromSettings(t.settings);
+  const baseWorkspace = snapshot ?? built.workspace;
+
+  const hydratedWorkspace: TenantWorkspaceData = {
+    ...baseWorkspace,
+    tenant: {
+      ...baseWorkspace.tenant,
+      id: resolvedTenantId,
+      slug: t.slug,
+      name: t.name,
+      vertical: t.vertical,
+      taxEntity: t.taxEntity,
+      isPkp: t.isPkp,
+      npwp16: t.npwp16 ?? baseWorkspace.tenant.npwp16,
+      nitku22: t.nitku22 ?? baseWorkspace.tenant.nitku22,
+      address: t.address ?? baseWorkspace.tenant.address,
+      logoUrl: t.logoUrl ?? baseWorkspace.tenant.logoUrl,
+      receiptFooter: t.receiptFooter ?? baseWorkspace.tenant.receiptFooter,
+      subscriptionPlan: planCode,
+      accountScope: scope,
+      ownerAccountId: resolvedCustomerId,
+    },
+  };
+
+  const hydratedCustomer: ManagedCustomerAccount = {
+    ...built.customer,
+    id: resolvedCustomerId,
+    primaryTenantId: resolvedTenantId,
+    tenantIds: [resolvedTenantId],
+  };
+
+  return { customer: hydratedCustomer, workspace: hydratedWorkspace };
 }
 
 export interface HydratedPostgresUserResult {
@@ -254,73 +529,342 @@ export async function hydrateUserFromPostgresByEmail(
       passwordHash,
     };
 
-    const primaryMembership = pgUser.memberships[0];
-    if (!primaryMembership?.tenant) {
+    const validMemberships = pgUser.memberships.filter((m) => Boolean(m.tenant));
+    if (validMemberships.length === 0) {
       return baseResult;
     }
 
-    const t = primaryMembership.tenant;
-    const settingsObj =
-      t.settings && typeof t.settings === 'object' && !Array.isArray(t.settings)
-        ? (t.settings as Record<string, unknown>)
-        : {};
-    const scope = settingsObj.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
-    const planCode = (typeof settingsObj.planCode === 'string'
-      ? settingsObj.planCode
-      : t.planCode || 'BASIC') as SubscriptionPlanCode;
-    const billingCycle = settingsObj.billingCycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY';
+    const hydratedPairs = validMemberships.map((m) =>
+      hydrateTenantRowToWorkspace({
+        tenantRow: m.tenant,
+        ownerEmail: emailNorm,
+        ownerName: baseResult.fullName,
+        ownerPhone: baseResult.phone,
+        ownerStatus: baseResult.accountStatus,
+        maxTenantsAllowed: pgUser.maxTenantsAllowed || 3,
+        passwordHash,
+      }),
+    );
 
-    const built = buildMasterProvisionedAccountAndWorkspace({
-      accountScope: scope,
-      fullName: baseResult.fullName,
-      email: emailNorm,
-      password: '••••••••',
-      phone: baseResult.phone || '081200000000',
-      allowGoogleLogin: true,
-      allowPasswordLogin: true,
-      status:
-        pgUser.accountStatus === 'SUSPENDED' || pgUser.accountStatus === 'TRIAL'
-          ? pgUser.accountStatus
-          : 'ACTIVE',
-      businessName: t.name,
-      vertical: t.vertical as BusinessVertical,
-      planCode,
-      billingCycle,
-      maxTenantsAllowed: pgUser.maxTenantsAllowed || 3,
-      passwordHash: passwordHash || '',
-    });
-
-    const resolvedTenantId =
-      typeof settingsObj.legacyTenantId === 'string' && settingsObj.legacyTenantId
-        ? settingsObj.legacyTenantId
-        : t.id;
-    const resolvedCustomerId =
-      typeof settingsObj.legacyCustomerId === 'string' && settingsObj.legacyCustomerId
-        ? settingsObj.legacyCustomerId
-        : built.customer.id;
-
+    const primary = hydratedPairs[0];
+    const allTenantIds = Array.from(new Set(hydratedPairs.map((p) => p.workspace.tenant.id)));
     const hydratedCustomer: ManagedCustomerAccount = {
-      ...built.customer,
-      id: resolvedCustomerId,
-      primaryTenantId: resolvedTenantId,
-      tenantIds: [resolvedTenantId],
+      ...primary.customer,
+      tenantIds: allTenantIds,
     };
-
-    const hydratedWorkspace: TenantWorkspaceData = {
-      ...built.workspace,
+    const hydratedWorkspaces = hydratedPairs.map((p) => ({
+      ...p.workspace,
       tenant: {
-        ...built.workspace.tenant,
-        id: resolvedTenantId,
-        slug: t.slug,
-        name: t.name,
-        ownerAccountId: resolvedCustomerId,
+        ...p.workspace.tenant,
+        ownerAccountId: hydratedCustomer.id,
       },
-    };
+    }));
 
     return {
       ...baseResult,
       customer: hydratedCustomer,
-      workspaces: [hydratedWorkspace],
+      workspaces: hydratedWorkspaces,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function hydrateWorkspaceFromPostgresByTenantId(tenantId: string): Promise<{
+  scope: 'DEMO' | 'REAL';
+  ownerAccountId: string;
+  customer: ManagedCustomerAccount | null;
+  workspace: TenantWorkspaceData;
+} | null> {
+  if (!isDatabaseConfigured()) return null;
+  const prisma = getPrismaClient();
+  if (!prisma) return null;
+
+  try {
+    const candidateUuid = toDeterministicUuid(tenantId);
+    const tenantRow = await prisma.tenant.findFirst({
+      where: {
+        OR: [
+          { id: candidateUuid },
+          { slug: tenantId },
+          { settings: { path: ['legacyTenantId'], equals: tenantId } },
+        ],
+      },
+      include: {
+        memberships: {
+          where: { isActive: true },
+          include: {
+            user: {
+              include: {
+                authAccounts: {
+                  where: { providerId: 'credential' },
+                  select: { password: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!tenantRow) return null;
+
+    const ownerUser =
+      tenantRow.memberships.find((m) => m.role === 'OWNER')?.user ??
+      tenantRow.memberships[0]?.user ??
+      null;
+
+    const pair = hydrateTenantRowToWorkspace({
+      tenantRow,
+      ownerEmail: ownerUser?.email || `owner-${tenantRow.slug}@kasirakun.id`,
+      ownerName: ownerUser?.fullName || ownerUser?.name || tenantRow.name,
+      ownerPhone: ownerUser?.phone || '',
+      ownerStatus: ownerUser?.accountStatus || 'ACTIVE',
+      maxTenantsAllowed: ownerUser?.maxTenantsAllowed || 3,
+      passwordHash: ownerUser?.authAccounts[0]?.password || ownerUser?.passwordHash || null,
+    });
+
+    const scope = pair.workspace.tenant.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
+    return {
+      scope,
+      ownerAccountId: pair.customer.id,
+      customer: ownerUser ? pair.customer : null,
+      workspace: pair.workspace,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function hydrateWorkspaceFromPostgresBySlug(
+  slug: string,
+): Promise<TenantWorkspaceData | null> {
+  if (!isDatabaseConfigured()) return null;
+  const prisma = getPrismaClient();
+  if (!prisma) return null;
+
+  try {
+    const tenantRow = await prisma.tenant.findUnique({
+      where: { slug },
+      include: {
+        memberships: {
+          where: { isActive: true },
+          include: { user: true },
+        },
+      },
+    });
+    if (!tenantRow) return null;
+
+    const ownerUser =
+      tenantRow.memberships.find((m) => m.role === 'OWNER')?.user ??
+      tenantRow.memberships[0]?.user ??
+      null;
+
+    const pair = hydrateTenantRowToWorkspace({
+      tenantRow,
+      ownerEmail: ownerUser?.email || `owner-${tenantRow.slug}@kasirakun.id`,
+      ownerName: ownerUser?.fullName || ownerUser?.name || tenantRow.name,
+      ownerPhone: ownerUser?.phone || '',
+      ownerStatus: ownerUser?.accountStatus || 'ACTIVE',
+      maxTenantsAllowed: ownerUser?.maxTenantsAllowed || 3,
+      passwordHash: ownerUser?.passwordHash || null,
+    });
+    return pair.workspace;
+  } catch {
+    return null;
+  }
+}
+
+export async function hydrateAllPostgresWorkspacesForMaster(): Promise<{
+  customers: ManagedCustomerAccount[];
+  workspaces: TenantWorkspaceData[];
+}> {
+  if (!isDatabaseConfigured()) {
+    return { customers: [], workspaces: [] };
+  }
+  const prisma = getPrismaClient();
+  if (!prisma) {
+    return { customers: [], workspaces: [] };
+  }
+
+  try {
+    const pgUsers = await prisma.user.findMany({
+      where: { isSuperAdmin: false },
+      include: {
+        authAccounts: {
+          where: { providerId: 'credential' },
+          select: { password: true },
+        },
+        memberships: {
+          where: { isActive: true },
+          include: { tenant: true },
+        },
+      },
+    });
+
+    const customers: ManagedCustomerAccount[] = [];
+    const workspaces: TenantWorkspaceData[] = [];
+
+    for (const u of pgUsers) {
+      const valid = u.memberships.filter((m) => Boolean(m.tenant));
+      if (valid.length === 0) continue;
+      const passwordHash = u.authAccounts[0]?.password || u.passwordHash || null;
+      const pairs = valid.map((m) =>
+        hydrateTenantRowToWorkspace({
+          tenantRow: m.tenant,
+          ownerEmail: u.email,
+          ownerName: u.fullName || u.name || u.email,
+          ownerPhone: u.phone || '',
+          ownerStatus: u.accountStatus || 'ACTIVE',
+          maxTenantsAllowed: u.maxTenantsAllowed || 3,
+          passwordHash,
+        }),
+      );
+      const allIds = Array.from(new Set(pairs.map((p) => p.workspace.tenant.id)));
+      customers.push({
+        ...pairs[0].customer,
+        tenantIds: allIds,
+      });
+      for (const p of pairs) {
+        workspaces.push({
+          ...p.workspace,
+          tenant: {
+            ...p.workspace.tenant,
+            ownerAccountId: pairs[0].customer.id,
+          },
+        });
+      }
+    }
+
+    return { customers, workspaces };
+  } catch {
+    return { customers: [], workspaces: [] };
+  }
+}
+
+export async function syncTenantPaymentConfigToPostgres(
+  config: TenantPaymentConfig,
+): Promise<boolean> {
+  if (!isDatabaseConfigured()) return false;
+  const prisma = getPrismaClient();
+  if (!prisma) return false;
+
+  try {
+    const tenantUuid = toDeterministicUuid(config.tenantId);
+    const tenant = await prisma.tenant.findFirst({
+      where: {
+        OR: [
+          { id: tenantUuid },
+          { settings: { path: ['legacyTenantId'], equals: config.tenantId } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!tenant) return false;
+
+    const prismaProvider: 'MIDTRANS' | 'MANUAL_ONLY' | 'SIMULATOR' =
+      config.provider === 'MIDTRANS' ||
+      config.provider === 'MANUAL_ONLY' ||
+      config.provider === 'SIMULATOR'
+        ? config.provider
+        : 'SIMULATOR';
+
+    await prisma.tenantPaymentConfig.upsert({
+      where: { tenantId: tenant.id },
+      create: {
+        tenantId: tenant.id,
+        provider: prismaProvider,
+        environment: config.environment,
+        merchantCode: config.merchantCode ?? null,
+        encryptedServerKey: config.encryptedServerKey ?? null,
+        encryptedClientKey: config.encryptedClientKey ?? null,
+        encryptedPrivateKey: config.encryptedPrivateKey ?? null,
+        feeBearer: config.feeBearer,
+        qrisMdrPercent: config.qrisMdrPercent,
+        vaFlatFee: config.vaFlatFee,
+        ewalletFeePercent: config.ewalletFeePercent,
+        enabledChannels: config.enabledChannels as unknown as Prisma.InputJsonValue,
+        manualBankAccounts: config.manualBankAccounts as unknown as Prisma.InputJsonValue,
+        setupStatus: config.setupStatus,
+        lastTestedAt: config.lastTestedAt ? new Date(config.lastTestedAt) : null,
+        configuredByAdminId: config.configuredByAdminId ?? null,
+      },
+      update: {
+        provider: prismaProvider,
+        environment: config.environment,
+        merchantCode: config.merchantCode ?? null,
+        encryptedServerKey: config.encryptedServerKey ?? null,
+        encryptedClientKey: config.encryptedClientKey ?? null,
+        encryptedPrivateKey: config.encryptedPrivateKey ?? null,
+        feeBearer: config.feeBearer,
+        qrisMdrPercent: config.qrisMdrPercent,
+        vaFlatFee: config.vaFlatFee,
+        ewalletFeePercent: config.ewalletFeePercent,
+        enabledChannels: config.enabledChannels as unknown as Prisma.InputJsonValue,
+        manualBankAccounts: config.manualBankAccounts as unknown as Prisma.InputJsonValue,
+        setupStatus: config.setupStatus,
+        lastTestedAt: config.lastTestedAt ? new Date(config.lastTestedAt) : null,
+        configuredByAdminId: config.configuredByAdminId ?? null,
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function hydrateTenantPaymentConfigFromPostgres(
+  tenantId: string,
+): Promise<TenantPaymentConfig | null> {
+  if (!isDatabaseConfigured()) return null;
+  const prisma = getPrismaClient();
+  if (!prisma) return null;
+
+  try {
+    const tenantUuid = toDeterministicUuid(tenantId);
+    const tenant = await prisma.tenant.findFirst({
+      where: {
+        OR: [
+          { id: tenantUuid },
+          { settings: { path: ['legacyTenantId'], equals: tenantId } },
+        ],
+      },
+      include: { paymentConfig: true },
+    });
+    const row = tenant?.paymentConfig;
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      tenantId,
+      provider: row.provider,
+      environment: row.environment,
+      merchantCode: row.merchantCode ?? null,
+      encryptedServerKey: row.encryptedServerKey ?? null,
+      encryptedClientKey: row.encryptedClientKey ?? null,
+      encryptedPrivateKey: row.encryptedPrivateKey ?? null,
+      maskedServerKey: row.encryptedServerKey ? maskSecretKey(row.encryptedServerKey) : null,
+      maskedClientKey: row.encryptedClientKey ? maskSecretKey(row.encryptedClientKey) : null,
+      maskedPrivateKey: row.encryptedPrivateKey ? maskSecretKey(row.encryptedPrivateKey) : null,
+      hasServerKey: Boolean(row.encryptedServerKey),
+      hasClientKey: Boolean(row.encryptedClientKey),
+      hasPrivateKey: Boolean(row.encryptedPrivateKey),
+      feeBearer: row.feeBearer,
+      qrisMdrPercent: row.qrisMdrPercent.toFixed(4),
+      vaFlatFee: row.vaFlatFee.toFixed(4),
+      ewalletFeePercent: row.ewalletFeePercent.toFixed(4),
+      enabledChannels: {
+        ...DEFAULT_ENABLED_CHANNELS,
+        ...(row.enabledChannels && typeof row.enabledChannels === 'object' && !Array.isArray(row.enabledChannels)
+          ? (row.enabledChannels as unknown as Partial<TenantPaymentConfig['enabledChannels']>)
+          : {}),
+      },
+      manualBankAccounts: Array.isArray(row.manualBankAccounts)
+        ? (row.manualBankAccounts as unknown as TenantPaymentConfig['manualBankAccounts'])
+        : [],
+      setupStatus: row.setupStatus as TenantPaymentConfig['setupStatus'],
+      lastTestedAt: row.lastTestedAt ? row.lastTestedAt.toISOString() : null,
+      configuredByAdminId: row.configuredByAdminId ?? null,
+      updatedAt: row.updatedAt.toISOString(),
     };
   } catch {
     return null;

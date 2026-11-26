@@ -934,37 +934,37 @@ test('jsPDF Real PDF Generators produce valid %PDF- documents for PO and Stock T
   assert.ok(trfBytes.length > 1000, 'Transfer PDF output should be non-trivial');
 });
 
-test('PostgreSQL (Supabase/Neon) & Storage (R2/Supabase) Migration Validators, Pre-flight Audit & Idempotent SQL Dump', () => {
-  // Valid Supabase & Neon URIs
-  const supaCheck = validatePostgresConnectionUri(
-    'postgresql://postgres.abcd:secret@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true&sslmode=require'
+test('Neon PostgreSQL Migration Validators, Pre-flight Audit & Idempotent SQL Dump', () => {
+  // Valid Neon pooled & direct URIs
+  const neonPoolCheck = validatePostgresConnectionUri(
+    'postgresql://neondb_owner:secret@ep-calm-pond-1234-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
   );
-  assert.equal(supaCheck.valid, true);
-  assert.equal(supaCheck.providerDetected, 'SUPABASE_POSTGRES');
-  assert.equal(supaCheck.sslRequired, true);
-  assert.equal(supaCheck.poolerDetected, true);
+  assert.equal(neonPoolCheck.valid, true);
+  assert.equal(neonPoolCheck.providerDetected, 'NEON_POSTGRES');
+  assert.equal(neonPoolCheck.sslRequired, true);
+  assert.equal(neonPoolCheck.poolerDetected, true);
 
-  const neonCheck = validatePostgresConnectionUri(
+  const neonDirectCheck = validatePostgresConnectionUri(
     'postgresql://neondb_owner:secret@ep-calm-pond-1234.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
   );
-  assert.equal(neonCheck.valid, true);
-  assert.equal(neonCheck.providerDetected, 'NEON_POSTGRES');
+  assert.equal(neonDirectCheck.valid, true);
+  assert.equal(neonDirectCheck.providerDetected, 'NEON_POSTGRES');
 
   // Invalid URIs rejected
   assert.equal(validatePostgresConnectionUri('https://example.com').valid, false);
   assert.equal(validatePostgresConnectionUri('').valid, false);
 
-  // Storage validation
-  const r2Check = validateStorageTargetConfig({
-    provider: 'CLOUDFLARE_R2',
-    endpointUrl: 'https://abc123.r2.cloudflarestorage.com',
+  // Neon Object Storage validation
+  const s3Check = validateStorageTargetConfig({
+    provider: 'NEON_OBJECT_STORAGE',
+    endpointUrl: 'https://br-calm-pond.storage.c-1.ap-southeast-1.aws.neon.tech',
     bucketName: 'kasirakun-assets',
   });
-  assert.equal(r2Check.valid, true);
+  assert.equal(s3Check.valid, true);
 
   const badBucket = validateStorageTargetConfig({
-    provider: 'SUPABASE_STORAGE',
-    endpointUrl: 'https://xyz.supabase.co',
+    provider: 'NEON_OBJECT_STORAGE',
+    endpointUrl: 'https://br-calm-pond.storage.c-1.ap-southeast-1.aws.neon.tech',
     bucketName: 'INVALID_BUCKET!',
   });
   assert.equal(badBucket.valid, false);
@@ -978,7 +978,7 @@ test('PostgreSQL (Supabase/Neon) & Storage (R2/Supabase) Migration Validators, P
   assert.ok(audit.totalJournalEntries >= 2);
 
   const sql = buildPostgresMigrationSql({
-    targetProvider: 'SUPABASE_POSTGRES',
+    targetProvider: 'NEON_POSTGRES',
     customers: [],
     workspaces: [barberWs, retailWs],
   });
@@ -989,6 +989,9 @@ test('PostgreSQL (Supabase/Neon) & Storage (R2/Supabase) Migration Validators, P
 
   const envSnippet = buildProductionEnvSnippet(DEFAULT_INFRA_MIGRATION_CONFIG);
   assert.ok(envSnippet.includes('DATABASE_URL='));
+  assert.ok(envSnippet.includes('DIRECT_URL='));
+  assert.ok(envSnippet.includes('BETTER_AUTH_SECRET='));
+  assert.ok(envSnippet.includes('MIDTRANS_SERVER_KEY='));
   assert.ok(envSnippet.includes('FONNTE_TOKEN='));
 });
 

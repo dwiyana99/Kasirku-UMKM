@@ -51,14 +51,14 @@ test('maskSecretKey hides middle secret material safely', () => {
 });
 
 test('decryptSecret rejects tampered ciphertext / auth tag', () => {
-  const enc = encryptSecret('DEV-Tripay-Secret-9988');
+  const enc = encryptSecret('SB-Mid-server-Secret-9988');
   const parts = enc.split(':');
   parts[2] = parts[2].slice(0, -4) + 'ffff';
   assert.throws(() => decryptSecret(parts.join(':')));
 });
 
 // =============================================================================
-// 2. PAYMENT GATEWAY SIGNATURE VERIFICATION (MIDTRANS, DUITKU, TRIPAY, SIMULATOR)
+// 2. PAYMENT GATEWAY SIGNATURE VERIFICATION (MIDTRANS & SIMULATOR)
 // =============================================================================
 test('Midtrans SHA-512 webhook signature accepts valid payload and rejects tampered gross_amount', () => {
   const midtrans = getPaymentAdapter('MIDTRANS');
@@ -99,80 +99,6 @@ test('Midtrans SHA-512 webhook signature accepts valid payload and rejects tampe
     },
     rawBody: '',
     credentials: { serverKey, environment: 'SANDBOX' },
-  });
-  assert.equal(tampered.isValid, false);
-});
-
-test('Duitku MD5 callback signature accepts valid payload and rejects tampered amount', () => {
-  const duitku = getPaymentAdapter('DUITKU');
-  const merchantCode = 'DS12345';
-  const apiKey = 'DUITKU-SECRET-APIKEY';
-  const merchantOrderId = 'INV-DK-002';
-  const amount = '75000';
-  const sig = crypto
-    .createHash('md5')
-    .update(`${merchantCode}${amount}${merchantOrderId}${apiKey}`)
-    .digest('hex');
-
-  const valid = duitku.verifyWebhook({
-    headers: {},
-    parsedBody: {
-      merchantCode,
-      amount,
-      merchantOrderId,
-      resultCode: '00',
-      signature: sig,
-      reference: 'DK-REF-001',
-    },
-    rawBody: '',
-    credentials: { merchantCode, serverKey: apiKey, environment: 'SANDBOX' },
-  });
-  assert.equal(valid.isValid, true);
-  assert.equal(valid.isPaid, true);
-
-  const tampered = duitku.verifyWebhook({
-    headers: {},
-    parsedBody: {
-      merchantCode,
-      amount: '75001',
-      merchantOrderId,
-      resultCode: '00',
-      signature: sig,
-    },
-    rawBody: '',
-    credentials: { merchantCode, serverKey: apiKey, environment: 'SANDBOX' },
-  });
-  assert.equal(tampered.isValid, false);
-});
-
-test('Tripay HMAC-SHA256 webhook signature validates exact rawBody and rejects tampering', () => {
-  const tripay = getPaymentAdapter('TRIPAY');
-  const privateKey = 'tripay-private-key-abc';
-  const payloadObj = {
-    merchant_ref: 'INV-TP-003',
-    reference: 'T000100001',
-    status: 'PAID',
-    total_amount: 120000,
-    amount_received: 119160,
-  };
-  const rawBody = JSON.stringify(payloadObj);
-  const sig = crypto.createHmac('sha256', privateKey).update(rawBody).digest('hex');
-
-  const valid = tripay.verifyWebhook({
-    headers: { 'x-callback-signature': sig },
-    parsedBody: payloadObj,
-    rawBody,
-    credentials: { privateKey, environment: 'SANDBOX' },
-  });
-  assert.equal(valid.isValid, true);
-  assert.equal(valid.isPaid, true);
-
-  const tamperedBody = { ...payloadObj, total_amount: 100 };
-  const tampered = tripay.verifyWebhook({
-    headers: { 'x-callback-signature': sig },
-    parsedBody: tamperedBody,
-    rawBody: JSON.stringify(tamperedBody),
-    credentials: { privateKey, environment: 'SANDBOX' },
   });
   assert.equal(tampered.isValid, false);
 });
@@ -387,11 +313,11 @@ test('Paket LITE with 3 modular add-ons triggers smart upsell to Paket BASIC', (
     selectedAddOns: [
       'ADDON_NON_CASH_PAYMENT', // 25k
       'ADDON_THERMAL_RECEIPT', // 15k
-      'ADDON_PURCHASE_ORDER', // 20k
+      'ADDON_PURCHASE_ORDER', // 25k
     ],
     billingCycle: 'MONTHLY',
   });
-  // 49k + 60k = 109k > 100k BASIC
-  assert.equal(new Decimal(pricing.effectiveMonthlySubtotal).toFixed(0), '109000');
+  // 49k + 65k = 114k > 95k BASIC
+  assert.equal(new Decimal(pricing.effectiveMonthlySubtotal).toFixed(0), '114000');
   assert.ok(pricing.smartUpsellRecommendation?.includes('BASIC'));
 });

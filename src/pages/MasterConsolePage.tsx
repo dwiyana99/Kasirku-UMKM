@@ -278,12 +278,12 @@ export function MasterConsolePage() {
     ENV_SECRETS: {
       title: 'Pengaturan API & Secret Key Server',
       subtitle:
-        'Atur, tambah custom key, lihat panduan pembuatan API, dan sinkronisasi otomatis ke runtime server secara terenkripsi.',
+        'Peta 14 variabel inti untuk produksi Vercel: Neon PostgreSQL, Neon Object Storage, Better Auth (Neon), Midtrans, dan Fonnte.',
     },
     INFRA_MIGRATION: {
       title: 'Migrasi Database, Storage & Sinkronisasi Otomatis',
       subtitle:
-        'Kelola kesiapan PostgreSQL (Supabase/Neon), Object Storage (Cloudflare R2/Supabase), dan status secret server.',
+        'Kelola kesiapan Neon PostgreSQL, Neon Object Storage, Better Auth (Neon), Midtrans, dan Fonnte untuk deployment Vercel.',
     },
   };
 

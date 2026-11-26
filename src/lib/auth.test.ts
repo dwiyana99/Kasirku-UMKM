@@ -340,4 +340,157 @@ describe('Vercel Serverless Runtime Compatibility', () => {
   });
 });
 
+describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sync', () => {
+  it('synchronizes STANDARD_ENV_CATALOG and buildProductionEnvSnippet to strictly the 14 required Vercel + Neon + Midtrans + Fonnte keys', async () => {
+    const { STANDARD_ENV_CATALOG } = await import('../server/env-secrets-routes.ts');
+    const { buildProductionEnvSnippet, DEFAULT_INFRA_MIGRATION_CONFIG } = await import(
+      './infra/pg-migration-builder.ts'
+    );
+
+    const catalogKeys = new Set(STANDARD_ENV_CATALOG.map((item) => item.key));
+    const expectedKeys = [
+      'DATABASE_URL',
+      'DIRECT_URL',
+      'AWS_ENDPOINT_URL_S3',
+      'AWS_REGION',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'S3_BUCKET',
+      'BETTER_AUTH_SECRET',
+      'BETTER_AUTH_URL',
+      'MASTER_ADMIN_EMAIL',
+      'MASTER_ADMIN_PASSWORD',
+      'MIDTRANS_SERVER_KEY',
+      'MIDTRANS_CLIENT_KEY',
+      'FONNTE_TOKEN',
+    ];
+    assert.equal(STANDARD_ENV_CATALOG.length, expectedKeys.length);
+    for (const key of expectedKeys) {
+      assert.ok(catalogKeys.has(key), `Missing ${key} in STANDARD_ENV_CATALOG`);
+    }
+
+    const removedKeys = [
+      'SUPABASE_URL',
+      'SUPABASE_SERVICE_ROLE_KEY',
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'DUITKU_MERCHANT_CODE',
+      'DUITKU_API_KEY',
+      'TRIPAY_MERCHANT_CODE',
+      'TRIPAY_API_KEY',
+      'TRIPAY_PRIVATE_KEY',
+      'GEMINI_API_KEY',
+      'GOOGLE_CLIENT_ID',
+    ];
+    for (const removed of removedKeys) {
+      assert.equal(catalogKeys.has(removed), false, `Unused key ${removed} should be removed`);
+    }
+
+    const snippet = buildProductionEnvSnippet({
+      ...DEFAULT_INFRA_MIGRATION_CONFIG,
+      targetDbProvider: 'NEON_POSTGRES',
+      targetStorageProvider: 'NEON_OBJECT_STORAGE',
+    });
+    for (const token of [
+      'DATABASE_URL=',
+      'DIRECT_URL=',
+      'BETTER_AUTH_SECRET=',
+      'BETTER_AUTH_URL=',
+      'MASTER_ADMIN_EMAIL=',
+      'MASTER_ADMIN_PASSWORD=',
+      'AWS_ENDPOINT_URL_S3=',
+      'AWS_REGION=',
+      'AWS_ACCESS_KEY_ID=',
+      'AWS_SECRET_ACCESS_KEY=',
+      'S3_BUCKET=',
+      'MIDTRANS_SERVER_KEY=',
+      'MIDTRANS_CLIENT_KEY=',
+      'FONNTE_TOKEN=',
+    ]) {
+      assert.ok(snippet.includes(token), `Missing ${token} in buildProductionEnvSnippet`);
+    }
+    assert.equal(snippet.includes('DUITKU_'), false);
+    assert.equal(snippet.includes('TRIPAY_'), false);
+    assert.equal(snippet.includes('SUPABASE_'), false);
+    assert.equal(snippet.includes('R2_'), false);
+    assert.equal(snippet.includes('GEMINI_'), false);
+  });
+
+  it('resolves per-tenant encrypted payment credentials and falls back to platform env vars safely', async () => {
+    const { encryptSecret } = await import('./payments/crypto.ts');
+    const { hasRequiredGatewayCredentials, resolveEffectiveGatewayCredentials } = await import(
+      './payments/gateway-credentials.ts'
+    );
+
+    const emptyCfg = {
+      provider: 'MIDTRANS' as const,
+      environment: 'SANDBOX' as const,
+      merchantCode: null,
+      encryptedServerKey: null,
+      encryptedClientKey: null,
+      encryptedPrivateKey: null,
+    };
+
+    const platformFallback = resolveEffectiveGatewayCredentials(emptyCfg, {
+      MIDTRANS_SERVER_KEY: 'Mid-server-live123',
+      MIDTRANS_CLIENT_KEY: 'Mid-client-live123',
+    });
+    assert.equal(platformFallback.serverKey, 'Mid-server-live123');
+    assert.equal(platformFallback.clientKey, 'Mid-client-live123');
+    assert.equal(platformFallback.environment, 'PRODUCTION');
+    assert.equal(hasRequiredGatewayCredentials('MIDTRANS', platformFallback), true);
+
+    const tenantOverride = resolveEffectiveGatewayCredentials(
+      {
+        ...emptyCfg,
+        encryptedServerKey: encryptSecret('SB-Mid-server-tenant999'),
+      },
+      {
+        MIDTRANS_SERVER_KEY: 'Mid-server-live123',
+      },
+    );
+    assert.equal(tenantOverride.serverKey, 'SB-Mid-server-tenant999');
+
+    const tripayFallback = resolveEffectiveGatewayCredentials(
+      { ...emptyCfg, provider: 'TRIPAY' },
+      {
+        TRIPAY_MERCHANT_CODE: 'T9999',
+        TRIPAY_API_KEY: 'DEV-abc',
+        TRIPAY_PRIVATE_KEY: 'priv-xyz',
+      },
+    );
+    assert.equal(hasRequiredGatewayCredentials('TRIPAY', tripayFallback), true);
+    assert.equal(tripayFallback.merchantCode, 'T9999');
+  });
+
+  it('preserves and extracts full workspaceSnapshot inside Neon Tenant settings payload', async () => {
+    const { buildTenantSettingsPayload, extractWorkspaceSnapshotFromSettings } = await import(
+      './auth/postgres-sync.ts'
+    );
+    const hash = await hashAccountPassword('Pass1234');
+    const prov = buildMasterProvisionedAccountAndWorkspace({
+      accountScope: 'REAL',
+      fullName: 'Siti Warung',
+      email: 'siti@warung.id',
+      password: 'Pass1234',
+      businessName: 'Warung Siti Berkah',
+      vertical: 'WARUNG_SEMBAKO',
+      planCode: 'PRO',
+      billingCycle: 'MONTHLY',
+      passwordHash: hash,
+    });
+
+    const settingsPayload = buildTenantSettingsPayload({
+      customer: prov.customer,
+      workspace: prov.workspace,
+    });
+    const restored = extractWorkspaceSnapshotFromSettings(settingsPayload);
+    assert.ok(restored);
+    assert.equal(restored.tenant.id, prov.workspace.tenant.id);
+    assert.equal(restored.tenant.name, 'Warung Siti Berkah');
+    assert.equal(restored.accounts.length, prov.workspace.accounts.length);
+    assert.equal(extractWorkspaceSnapshotFromSettings({}), null);
+  });
+});
+
 

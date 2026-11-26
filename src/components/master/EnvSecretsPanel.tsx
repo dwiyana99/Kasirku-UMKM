@@ -49,12 +49,12 @@ interface EnvSecretsStats {
 }
 
 const CATEGORY_TABS: Array<{ id: 'ALL' | EnvSecretCategory; label: string }> = [
-  { id: 'ALL', label: 'Semua Variabel' },
-  { id: 'AUTH_SSO', label: 'Login & Google OAuth' },
-  { id: 'DATABASE_STORAGE', label: 'Neon DB & S3 Storage' },
-  { id: 'PAYMENT_GATEWAY', label: 'Payment Gateway' },
-  { id: 'WHATSAPP_AI', label: 'WhatsApp & AI' },
-  { id: 'SECURITY_CUSTOM', label: 'Keamanan & Custom' },
+  { id: 'ALL', label: 'Semua Variabel (14 Inti)' },
+  { id: 'DATABASE_STORAGE', label: 'Neon DB & Object Storage' },
+  { id: 'AUTH_SSO', label: 'Better Auth (Neon)' },
+  { id: 'PAYMENT_GATEWAY', label: 'Midtrans' },
+  { id: 'WHATSAPP_AI', label: 'WhatsApp Fonnte' },
+  { id: 'SECURITY_CUSTOM', label: 'Custom' },
 ];
 
 export function EnvSecretsPanel() {
@@ -70,7 +70,7 @@ export function EnvSecretsPanel() {
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [activeCategory, setActiveCategory] = useState<'ALL' | EnvSecretCategory>('ALL');
-  const [expandedGuideKey, setExpandedGuideKey] = useState<string | null>('GEMINI_API_KEY');
+  const [expandedGuideKey, setExpandedGuideKey] = useState<string | null>('DATABASE_URL');
 
   // Inline edit drafts per key
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
@@ -260,12 +260,12 @@ export function EnvSecretsPanel() {
               <span>Brankas AES-256-GCM &amp; Sinkronisasi Runtime Otomatis</span>
             </div>
             <h2 className="text-lg font-bold text-stone-900 tracking-[-0.02em]">
-              Kelola Environment API &amp; Secret Key Langsung dari Akun Master
+              Peta API &amp; Environment Produksi (Vercel + Neon + Midtrans + Fonnte)
             </h2>
             <p className="text-xs sm:text-sm text-stone-600 leading-relaxed">
-              Isi atau tambahkan kunci API di halaman ini tanpa perlu mengedit kode atau mengirim
-              rahasia lewat chat. Setiap kunci langsung dienkripsi di server dan aktif seketika di
-              runtime aplikasi.
+              Hanya 14 variabel inti yang diperlukan agar KasirAkun UMKM online penuh di Vercel:
+              Neon PostgreSQL, Neon Object Storage, Better Auth di Neon, Midtrans Master Admin, dan
+              WhatsApp Fonnte. Variabel layanan lain yang belum dipakai sudah dibersihkan agar rapi.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -385,7 +385,7 @@ export function EnvSecretsPanel() {
                 data-testid="input-custom-env-key"
                 value={customKey}
                 onChange={(e) => setCustomKey(e.target.value.toUpperCase())}
-                placeholder="Contoh: TRIPAY_PRIVATE_KEY atau XENDIT_SECRET_KEY"
+                placeholder="Contoh: GOOGLE_CLIENT_ID atau S3_PUBLIC_URL"
                 className="w-full px-3 py-2 text-xs font-mono bg-stone-50 border border-stone-200 rounded-lg focus:bg-white focus:border-emerald-600"
               />
             </div>
@@ -411,7 +411,7 @@ export function EnvSecretsPanel() {
                 type="text"
                 value={customLabel}
                 onChange={(e) => setCustomLabel(e.target.value)}
-                placeholder="Contoh: Tripay Private Key Produksi"
+                placeholder="Contoh: Custom Domain CDN Storage"
                 className="w-full px-3 py-2 text-xs bg-stone-50 border border-stone-200 rounded-lg focus:bg-white focus:border-emerald-600"
               />
             </div>
@@ -423,11 +423,11 @@ export function EnvSecretsPanel() {
                   onChange={(e) => setCustomCategory(e.target.value as EnvSecretCategory)}
                   className="w-full px-3 py-2 text-xs bg-stone-50 border border-stone-200 rounded-lg focus:bg-white focus:border-emerald-600"
                 >
-                  <option value="AUTH_SSO">Login &amp; Google OAuth</option>
-                  <option value="DATABASE_STORAGE">Neon DB &amp; S3 Storage</option>
-                  <option value="PAYMENT_GATEWAY">Payment Gateway</option>
-                  <option value="WHATSAPP_AI">WhatsApp &amp; AI</option>
-                  <option value="SECURITY_CUSTOM">Keamanan &amp; Custom</option>
+                  <option value="DATABASE_STORAGE">Neon DB &amp; Object Storage</option>
+                  <option value="AUTH_SSO">Better Auth (Neon)</option>
+                  <option value="PAYMENT_GATEWAY">Midtrans</option>
+                  <option value="WHATSAPP_AI">WhatsApp Fonnte</option>
+                  <option value="SECURITY_CUSTOM">Custom</option>
                 </select>
               </div>
               <div>
@@ -438,7 +438,7 @@ export function EnvSecretsPanel() {
                   type="text"
                   value={customService}
                   onChange={(e) => setCustomService(e.target.value)}
-                  placeholder="Contoh: Tripay / Xendit"
+                  placeholder="Contoh: Neon / Midtrans / Custom"
                   className="w-full px-3 py-2 text-xs bg-stone-50 border border-stone-200 rounded-lg focus:bg-white focus:border-emerald-600"
                 />
               </div>

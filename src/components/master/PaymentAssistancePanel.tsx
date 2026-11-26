@@ -2,7 +2,7 @@
  * Master Admin Panel: Pengaturan Pembayaran Non-Tunai per User (Terisolasi Penuh)
  * - Tab 1: Atur Langsung per User (Tanpa Perlu Request Terlebih Dahulu)
  *   Master Admin bisa langsung memilih akun usaha mana saja dan mengisi kredensial
- *   Midtrans / Duitku / Tripay / Transfer Manual secara terenkripsi & 100% terpisah per tenant.
+ *   Midtrans / Transfer Manual secara terenkripsi & 100% terpisah per tenant.
  * - Tab 2: Antrean Permintaan Bantuan (Tiket dari UMKM + Template WA 1-Klik)
  */
 
@@ -35,7 +35,7 @@ import type {
 } from '../../types/domain';
 
 interface SanitizedTenantPaymentConfig extends TenantPaymentConfig {
-  webhookUrls?: Record<'MIDTRANS' | 'DUITKU' | 'TRIPAY', string>;
+  webhookUrls?: Record<'MIDTRANS', string>;
 }
 
 interface DirectTenantPaymentItem {
@@ -191,13 +191,9 @@ export const PaymentAssistancePanel: React.FC<PaymentAssistancePanelProps> = ({ 
       templates.find((t) => t.category === 'PAYMENT_ASSIST') ||
       templates[0];
 
-    const providerKey: 'MIDTRANS' | 'DUITKU' | 'TRIPAY' =
-      ticket.preferredProvider === 'DUITKU' || ticket.preferredProvider === 'TRIPAY'
-        ? ticket.preferredProvider
-        : 'MIDTRANS';
     const webhookUrl =
-      ticket.currentConfig?.webhookUrls?.[providerKey] ||
-      `${window.location.origin}/api/webhooks/payment/${providerKey.toLowerCase()}/${ticket.tenantId}`;
+      ticket.currentConfig?.webhookUrls?.MIDTRANS ||
+      `${window.location.origin}/api/webhooks/payment/midtrans/${ticket.tenantId}`;
 
     const body = tpl?.bodyTemplate || 'Halo {{nama_pemilik}}, kami siap membantu setting {{provider}}.';
     const text = renderWaTemplate(body, {
@@ -353,7 +349,7 @@ export const PaymentAssistancePanel: React.FC<PaymentAssistancePanelProps> = ({ 
               <span>Pembayaran Non-Tunai Per User (Terpisah 100%)</span>
             </h2>
             <p className="text-xs text-stone-600 max-w-[68ch] leading-relaxed">
-              Master Admin dapat langsung mengatur Midtrans, Duitku, Tripay, atau Transfer Manual
+              Master Admin dapat langsung mengatur Midtrans atau Transfer Manual
               untuk setiap akun usaha <strong>tanpa perlu menunggu user mengirim request</strong>.
               Kunci API dan alamat webhook disimpan terenkripsi khusus per akun usaha sehingga dana
               dan transaksi non-tunai 1 user tidak pernah tercampur dengan user lain.
@@ -773,8 +769,6 @@ export const PaymentAssistancePanel: React.FC<PaymentAssistancePanelProps> = ({ 
                     className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm bg-white"
                   >
                     <option value="MIDTRANS">Midtrans (QRIS, GoPay, VA)</option>
-                    <option value="DUITKU">Duitku (QRIS, OVO, DANA, VA)</option>
-                    <option value="TRIPAY">Tripay (QRIS, E-Wallet, VA)</option>
                     <option value="MANUAL_ONLY">Transfer Bank Manual</option>
                   </select>
                 </div>
@@ -794,33 +788,17 @@ export const PaymentAssistancePanel: React.FC<PaymentAssistancePanelProps> = ({ 
                 </div>
               </div>
 
-              {(cfgProvider === 'DUITKU' || cfgProvider === 'TRIPAY') && (
-                <div>
-                  <label className="block text-xs font-semibold text-stone-700 mb-1">
-                    Merchant Code
-                  </label>
-                  <input
-                    type="text"
-                    data-testid="drawer-payment-merchant-code"
-                    value={cfgMerchantCode}
-                    onChange={(e) => setCfgMerchantCode(e.target.value)}
-                    placeholder="Masukkan Kode Merchant khusus user ini"
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm font-mono"
-                  />
-                </div>
-              )}
-
               {cfgProvider !== 'MANUAL_ONLY' && (
                 <div>
                   <label className="block text-xs font-semibold text-stone-700 mb-1">
-                    {cfgProvider === 'MIDTRANS' ? 'Server Key' : 'API Key'}
+                    Server Key Midtrans
                   </label>
                   <input
                     type="password"
                     data-testid="drawer-payment-server-key"
                     value={cfgServerKey}
                     onChange={(e) => setCfgServerKey(e.target.value)}
-                    placeholder="Masukkan Server Key / API Key milik user ini"
+                    placeholder="Masukkan Server Key Midtrans milik user ini"
                     className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm font-mono"
                   />
                 </div>
@@ -829,7 +807,7 @@ export const PaymentAssistancePanel: React.FC<PaymentAssistancePanelProps> = ({ 
               {cfgProvider === 'MIDTRANS' && (
                 <div>
                   <label className="block text-xs font-semibold text-stone-700 mb-1">
-                    Client Key
+                    Client Key Midtrans
                   </label>
                   <input
                     type="password"
@@ -837,22 +815,6 @@ export const PaymentAssistancePanel: React.FC<PaymentAssistancePanelProps> = ({ 
                     value={cfgClientKey}
                     onChange={(e) => setCfgClientKey(e.target.value)}
                     placeholder="Masukkan Client Key Midtrans"
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm font-mono"
-                  />
-                </div>
-              )}
-
-              {cfgProvider === 'TRIPAY' && (
-                <div>
-                  <label className="block text-xs font-semibold text-stone-700 mb-1">
-                    Private Key
-                  </label>
-                  <input
-                    type="password"
-                    data-testid="drawer-payment-private-key"
-                    value={cfgPrivateKey}
-                    onChange={(e) => setCfgPrivateKey(e.target.value)}
-                    placeholder="Masukkan Private Key Tripay"
                     className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm font-mono"
                   />
                 </div>

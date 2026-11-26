@@ -15,7 +15,6 @@ import path from 'node:path';
 import express from 'express';
 import { z } from 'zod';
 import Decimal from 'decimal.js';
-import { GoogleGenAI } from '@google/genai';
 import {
   PartitionedTenantDatabase,
   assertTenantAccess,
@@ -70,7 +69,12 @@ import {
   verifyAccountPassword,
 } from './src/lib/auth/account-management.ts';
 import {
+  hydrateAllPostgresWorkspacesForMaster,
   hydrateUserFromPostgresByEmail,
+  hydrateWorkspaceFromPostgresBySlug,
+  hydrateWorkspaceFromPostgresByTenantId,
+  syncCustomerUpdateToPostgres,
+  syncTenantWorkspaceOnlyToPostgres,
   syncTenantWorkspaceToPostgres,
   syncUserAccountToPostgres,
 } from './src/lib/auth/postgres-sync.ts';
@@ -91,7 +95,20 @@ import type {
 } from './src/types/domain.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
-const QRIS_WEBHOOK_SECRET = process.env.QRIS_WEBHOOK_SECRET || 'kasirakun-qris-hmac-dev-secret-2026';
+function getQrisWebhookSecret(): string {
+  const explicit = (process.env.QRIS_WEBHOOK_SECRET || '').trim();
+  if (explicit && !explicit.includes('REPLACE_WITH_')) {
+    return explicit;
+  }
+  const betterAuthSecret = (process.env.BETTER_AUTH_SECRET || '').trim();
+  if (betterAuthSecret && !betterAuthSecret.includes('REPLACE_WITH_')) {
+    return crypto
+      .createHmac('sha256', betterAuthSecret)
+      .update('kasirakun:qris-webhook:v1', 'utf8')
+      .digest('hex');
+  }
+  return 'kasirakun-qris-hmac-dev-secret-2026';
+}
 
 const ALL_VERTICAL_ENUM = [
   'WARUNG_SEMBAKO',
@@ -262,7 +279,7 @@ const dynamicCustomFields = new Map<
 >();
 
 function computeHmacSignature(payload: string): string {
-  return crypto.createHmac('sha256', QRIS_WEBHOOK_SECRET).update(payload).digest('hex');
+  return crypto.createHmac('sha256', getQrisWebhookSecret()).update(payload).digest('hex');
 }
 
 const generateQrisSchema = z.object({
@@ -953,14 +970,26 @@ export async function createExpressApp(
     });
   });
 
-  // 0a-4. Authenticated Partitioned DB Bootstrap (Strictly scoped to Bearer Token)
-  app.get('/api/db/bootstrap', (req, res) => {
+  // 0a-4. Authenticated Partitioned DB Bootstrap (Strictly scoped to Bearer Token + Neon Cold-Start Hydration)
+  app.get('/api/db/bootstrap', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session) {
       return res.status(401).json({ error: 'Sesi tidak valid atau telah berakhir.' });
     }
 
     if (session.role === 'MASTER_ADMIN') {
+      const pgHydrated = await hydrateAllPostgresWorkspacesForMaster();
+      for (const c of pgHydrated.customers) {
+        if (!tenantDb.findCustomerById(c.id)) {
+          tenantDb.upsertCustomer(c);
+        }
+      }
+      for (const ws of pgHydrated.workspaces) {
+        if (!tenantDb.findWorkspaceByTenantId(ws.tenant.id)) {
+          const scope = resolveAccountScope(null, ws.tenant.id);
+          tenantDb.saveWorkspace(scope, ws.tenant.ownerAccountId || 'real-owner', ws);
+        }
+      }
       return res.status(200).json({
         role: 'MASTER_ADMIN',
         accountScope: 'REAL',
@@ -970,24 +999,52 @@ export async function createExpressApp(
     }
 
     if (session.role === 'CUSTOMER') {
-      const customer = tenantDb.findCustomerById(session.ownerAccountId);
+      let customer = tenantDb.findCustomerById(session.ownerAccountId);
+      if (!customer && session.email) {
+        const hydrated = await hydrateUserFromPostgresByEmail(session.email);
+        if (hydrated?.customer && hydrated.workspaces?.length) {
+          const scope = resolveAccountScope(hydrated.customer);
+          customer = tenantDb.upsertCustomer(hydrated.customer);
+          for (const ws of hydrated.workspaces) {
+            tenantDb.saveWorkspace(scope, customer.id, ws);
+          }
+        }
+      }
       if (!customer) {
         return res.status(404).json({ error: 'Akun pengguna tidak ditemukan.' });
       }
       const scope = resolveAccountScope(customer);
-      const workspaces = tenantDb
+      let workspaces = tenantDb
         .listWorkspacesForOwner(scope, customer.id)
         .filter((w) => customer.tenantIds.includes(w.tenant.id));
+      if (workspaces.length === 0 && session.email) {
+        const hydrated = await hydrateUserFromPostgresByEmail(session.email);
+        if (hydrated?.workspaces?.length) {
+          for (const ws of hydrated.workspaces) {
+            tenantDb.saveWorkspace(scope, customer.id, ws);
+          }
+          workspaces = tenantDb
+            .listWorkspacesForOwner(scope, customer.id)
+            .filter((w) => customer.tenantIds.includes(w.tenant.id));
+        }
+      }
       return res.status(200).json({
         role: 'CUSTOMER',
         accountScope: scope,
-        customers: [customer],
+        customers: [sanitizeCustomerForApi(customer)],
         workspaces,
       });
     }
 
     if (session.role === 'STAFF' && session.staffTenantId) {
-      const ws = tenantDb.getWorkspace(session.accountScope, session.ownerAccountId, session.staffTenantId);
+      let ws = tenantDb.getWorkspace(session.accountScope, session.ownerAccountId, session.staffTenantId);
+      if (!ws) {
+        const hydrated = await hydrateWorkspaceFromPostgresByTenantId(session.staffTenantId);
+        if (hydrated) {
+          if (hydrated.customer) tenantDb.upsertCustomer(hydrated.customer);
+          ws = tenantDb.saveWorkspace(hydrated.scope, hydrated.ownerAccountId, hydrated.workspace);
+        }
+      }
       if (!ws) {
         return res.status(404).json({ error: 'Workspace usaha tidak ditemukan.' });
       }
@@ -995,7 +1052,7 @@ export async function createExpressApp(
       return res.status(200).json({
         role: 'STAFF',
         accountScope: session.accountScope,
-        customers: owner ? [owner] : [],
+        customers: owner ? [sanitizeCustomerForApi(owner)] : [],
         workspaces: [ws],
       });
     }
@@ -1003,14 +1060,32 @@ export async function createExpressApp(
     return res.status(403).json({ error: 'Akses ditolak.' });
   });
 
-  // 0a-5. Read or Persist Workspace (Enforces Strict Per-User & DEMO vs REAL Privacy Isolation)
-  app.get('/api/db/workspace/:tenantId', (req, res) => {
+  // 0a-5. Read or Persist Workspace (Enforces Strict Per-User & DEMO vs REAL Privacy Isolation + Neon Sync)
+  app.get('/api/db/workspace/:tenantId', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session) {
       return res.status(401).json({ error: 'Autentikasi diperlukan untuk membaca data usaha.' });
     }
     const tenantId = String(req.params.tenantId || '');
-    const record = tenantDb.findWorkspaceByTenantId(tenantId);
+    let record = tenantDb.findWorkspaceByTenantId(tenantId);
+    if (!record) {
+      const hydrated = await hydrateWorkspaceFromPostgresByTenantId(tenantId);
+      if (hydrated) {
+        if (hydrated.customer) {
+          tenantDb.upsertCustomer(hydrated.customer);
+        }
+        const cachedWs = tenantDb.saveWorkspace(
+          hydrated.scope,
+          hydrated.ownerAccountId,
+          hydrated.workspace,
+        );
+        record = {
+          scope: hydrated.scope,
+          ownerAccountId: hydrated.ownerAccountId,
+          workspace: cachedWs,
+        };
+      }
+    }
     if (!record) {
       return res.status(404).json({ error: 'Workspace usaha tidak ditemukan.' });
     }
@@ -1027,7 +1102,7 @@ export async function createExpressApp(
     return res.status(200).json({ workspace: record.workspace });
   });
 
-  app.put('/api/db/workspace/:tenantId', (req, res) => {
+  app.put('/api/db/workspace/:tenantId', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session) {
       return res.status(401).json({ error: 'Autentikasi diperlukan untuk menyimpan data usaha.' });
@@ -1063,11 +1138,13 @@ export async function createExpressApp(
     }
 
     const saved = tenantDb.saveWorkspace(targetScope, targetOwnerId, incoming.workspace);
+    const ownerCust = tenantDb.findCustomerById(targetOwnerId);
+    await syncTenantWorkspaceOnlyToPostgres(saved, ownerCust?.email || session.email);
     return res.status(200).json({ saved: true, workspace: saved });
   });
 
-  // 0a-6. Persist Managed Customer Account Update (Master Admin or Self-Owner)
-  app.put('/api/db/customers/:customerId', (req, res) => {
+  // 0a-6. Persist Managed Customer Account Update (Master Admin or Self-Owner + Neon Sync)
+  app.put('/api/db/customers/:customerId', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session) {
       return res.status(401).json({ error: 'Autentikasi diperlukan.' });
@@ -1083,13 +1160,21 @@ export async function createExpressApp(
     }
 
     const saved = tenantDb.upsertCustomer(body.customer);
-    return res.status(200).json({ saved: true, customer: saved });
+    await syncCustomerUpdateToPostgres(saved);
+    return res.status(200).json({ saved: true, customer: sanitizeCustomerForApi(saved) });
   });
 
   // 0a-7. Public Read-Only Projection for QR Table Self-Order (/order/:slug/:qrToken)
-  app.get('/api/public/tenant/:slug', (req, res) => {
+  app.get('/api/public/tenant/:slug', async (req, res) => {
     const slug = String(req.params.slug || '');
-    const ws = tenantDb.findWorkspaceBySlug(slug);
+    let ws = tenantDb.findWorkspaceBySlug(slug);
+    if (!ws) {
+      const hydratedWs = await hydrateWorkspaceFromPostgresBySlug(slug);
+      if (hydratedWs) {
+        const scope = resolveAccountScope(null, hydratedWs.tenant.id);
+        ws = tenantDb.saveWorkspace(scope, hydratedWs.tenant.ownerAccountId || 'real-owner', hydratedWs);
+      }
+    }
     if (!ws) {
       return res.status(404).json({ error: 'Usaha tidak ditemukan.' });
     }
@@ -2048,41 +2133,11 @@ export async function createExpressApp(
       });
     }
 
-    const promptText = [
-      `Anda adalah Konsultan Bisnis & Akuntansi UMKM Indonesia untuk aplikasi KasirAkun UMKM.`,
-      `Jawab singkat, padat, praktis (maksimal 5 poin terstruktur) dalam Bahasa Indonesia berdasarkan RINGKASAN TERAGREGASI berikut:`,
-      JSON.stringify(summary),
-      `Pertanyaan Pemilik Usaha: "${question.trim()}"`,
-      `Jangan mengarang angka di luar ringkasan di atas. Sertakan saran tindakan nyata.`,
-    ].join('\n\n');
-
+    const modelLabel = 'ringkasan-analitik-lokal';
     let answerText = '';
-    let modelLabel = 'gemini-2.5-flash';
-
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey) {
-        const ai = new GoogleGenAI({
-          apiKey,
-          httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-        });
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: promptText,
-          config: {
-            maxOutputTokens: 700,
-            temperature: 0.3,
-          },
-        });
-        answerText = response.text || '';
-      }
-    } catch (err) {
-      console.error('Gemini API error:', err);
-    }
 
     if (!answerText) {
-      // Deterministic analytical fallback when GEMINI_API_KEY is not configured in local dev
-      modelLabel = 'ringkasan-analitik-lokal';
+      // Deterministic analytical summary engine (zero external AI dependency)
       const topStr =
         summary.topProducts.length > 0
           ? summary.topProducts.map((p) => `${p.name} (${p.qty})`).join(', ')
@@ -2281,24 +2336,29 @@ export async function createExpressApp(
     const allWorkspaces = tenantDb.listAllWorkspaces();
     const audit = runMigrationPreflightAudit(allCustomers, allWorkspaces);
     const envSnippet = buildProductionEnvSnippet(infraMigrationConfig);
+    const authStatus = getAuthConfigurationStatus();
+    const hasNeonObjectStorage = isS3StorageConfigured();
     return res.status(200).json({
       ok: true,
       config: infraMigrationConfig,
       audit,
       envSnippet,
       serverEnvReady: {
-        hasDatabaseUrl: Boolean(process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('USER:PASSWORD')),
+        hasDatabaseUrl: authStatus.databaseConfigured,
+        hasBetterAuthSecret: authStatus.betterAuthSecretConfigured,
+        hasNeonObjectStorage,
+        hasMidtrans: Boolean(process.env.MIDTRANS_SERVER_KEY && !process.env.MIDTRANS_SERVER_KEY.includes('<ISI_')),
         hasFonnteToken: Boolean(process.env.FONNTE_TOKEN && process.env.FONNTE_TOKEN !== 'YOUR_FONNTE_DEVICE_TOKEN'),
-        hasR2Config: Boolean(process.env.R2_ACCESS_KEY_ID && process.env.R2_BUCKET_NAME),
-        hasSupabaseStorage: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
       },
     });
   });
 
   const infraTestSchema = z.object({
-    targetDbProvider: z.enum(['SUPABASE_POSTGRES', 'NEON_POSTGRES']),
+    targetDbProvider: z.enum(['NEON_POSTGRES', 'SUPABASE_POSTGRES']).default('NEON_POSTGRES'),
     postgresUri: z.string().min(10).max(500),
-    targetStorageProvider: z.enum(['SUPABASE_STORAGE', 'CLOUDFLARE_R2']),
+    targetStorageProvider: z
+      .enum(['NEON_OBJECT_STORAGE', 'SUPABASE_STORAGE', 'CLOUDFLARE_R2'])
+      .default('NEON_OBJECT_STORAGE'),
     storageEndpointUrl: z.string().min(8).max(300),
     storageBucketName: z.string().min(3).max(63),
     storagePublicBaseUrl: z.string().max(300).optional().default(''),
@@ -2473,15 +2533,15 @@ export async function createExpressApp(
       });
     }
 
-    const hasDatabaseUrl = Boolean(
-      process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('USER:PASSWORD')
+    const authStatus = getAuthConfigurationStatus();
+    const hasDatabaseUrl = authStatus.databaseConfigured;
+    const hasBetterAuthSecret = authStatus.betterAuthSecretConfigured;
+    const hasNeonObjectStorage = isS3StorageConfigured();
+    const hasMidtrans = Boolean(
+      process.env.MIDTRANS_SERVER_KEY && !process.env.MIDTRANS_SERVER_KEY.includes('<ISI_')
     );
     const hasFonnteToken = Boolean(
       process.env.FONNTE_TOKEN && process.env.FONNTE_TOKEN !== 'YOUR_FONNTE_DEVICE_TOKEN'
-    );
-    const hasR2Config = Boolean(process.env.R2_ACCESS_KEY_ID && process.env.R2_BUCKET_NAME);
-    const hasSupabaseStorage = Boolean(
-      process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
     );
 
     const sqlText = buildPostgresMigrationSql({
@@ -2508,8 +2568,8 @@ export async function createExpressApp(
     saveJsonFile(INFRA_CONFIG_PATH, infraMigrationConfig);
 
     const message = hasDatabaseUrl
-      ? `Sinkronisasi otomatis siap & paket SQL terbaru (${(sqlText.length / 1024).toFixed(1)} KB, ${audit.totalJournalEntries} jurnal seimbang) telah disiapkan untuk ${infraMigrationConfig.targetDbProvider}.`
-      : `Paket sinkronisasi otomatis (${(sqlText.length / 1024).toFixed(1)} KB, ${audit.totalJournalEntries} jurnal 100% seimbang) sudah siap. Saat Anda mengisi DATABASE_URL di server hosting nanti, sistem akan langsung menyinkronkan data secara otomatis.`;
+      ? `Sinkronisasi otomatis siap & paket SQL terbaru (${(sqlText.length / 1024).toFixed(1)} KB, ${audit.totalJournalEntries} jurnal seimbang) telah disiapkan untuk Neon PostgreSQL.`
+      : `Paket sinkronisasi otomatis (${(sqlText.length / 1024).toFixed(1)} KB, ${audit.totalJournalEntries} jurnal 100% seimbang) sudah siap. Saat Anda mengisi DATABASE_URL Neon di Vercel, sistem langsung terhubung otomatis.`;
 
     return res.status(200).json({
       ok: true,
@@ -2520,9 +2580,10 @@ export async function createExpressApp(
       audit,
       serverEnvReady: {
         hasDatabaseUrl,
+        hasBetterAuthSecret,
+        hasNeonObjectStorage,
+        hasMidtrans,
         hasFonnteToken,
-        hasR2Config,
-        hasSupabaseStorage,
       },
       envSnippet: buildProductionEnvSnippet(infraMigrationConfig),
     });

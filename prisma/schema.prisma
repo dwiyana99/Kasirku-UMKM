@@ -152,8 +152,6 @@ enum DemoRequestStatus {
 enum PaymentGatewayProvider {
   SIMULATOR
   MIDTRANS
-  DUITKU
-  TRIPAY
   MANUAL_ONLY
 
   @@map("payment_gateway_provider")
@@ -1069,7 +1067,7 @@ model JournalLine {
 }
 
 // =========================================================================
-// MULTI-PROVIDER NON-CASH PAYMENTS (MIDTRANS, DUITKU, TRIPAY, SIMULATOR),
+// PAYMENT GATEWAY (MIDTRANS, MANUAL TRANSFER, SIMULATOR),
 // ASSISTANCE TICKETS, SETTLEMENT BATCHES & MASTER ADMIN CUSTOM WA TEMPLATES
 // =========================================================================
 

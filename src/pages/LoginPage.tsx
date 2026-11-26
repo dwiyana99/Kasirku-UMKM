@@ -84,16 +84,12 @@ export function LoginPage({
     navigate,
     loginAsMaster,
     loginAsCustomer,
-    signInWithGoogle,
-    signInWithFirebaseEmail,
-    signUpWithFirebaseEmail,
     completeCustomerOnboarding,
     hydrateFromBetterAuthSession,
     betterAuthError,
     enterInstantDemo,
     systemDemoConfig,
     regionalTaxRegistry,
-    authLoading,
   } = useApp();
 
   const [tab, setTab] = useState<'CUSTOMER' | 'MASTER'>(initialTab);
@@ -243,7 +239,6 @@ export function LoginPage({
     setCustSuccess('');
     setGoogleSubmitting(true);
     try {
-      // 1. Primary path: Better Auth Google OAuth (Neon / PostgreSQL)
       if (authConfig.betterAuthReady && authConfig.googleAuthConfigured) {
         const result = await authClient.signIn.social({
           provider: 'google',
@@ -261,19 +256,15 @@ export function LoginPage({
         return;
       }
 
-      // 2. Fallback: Firebase Google Auth when Neon/Google OAuth keys are not yet configured in Env Vault
-      const res = await signInWithGoogle();
-      if (!res.ok) {
-        const hint = !authConfig.betterAuthReady
-          ? ' (Tips: Anda dapat mengaktifkan Google OAuth Better Auth via Neon/PostgreSQL di Master Admin -> Pengaturan API & Secret Key).'
-          : !authConfig.googleAuthConfigured
-          ? ' (Lengkapi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key).'
-          : '';
-        setCustError((res.error || 'Masuk dengan Google dibatalkan atau gagal.') + hint);
-        return;
+      if (!authConfig.betterAuthReady) {
+        setCustError(
+          'Login Google membutuhkan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server. Silakan masuk dengan Email & Kata Sandi atau lengkapi env Neon di Vercel / Master Admin.',
+        );
+      } else {
+        setCustError(
+          'Google OAuth belum dikonfigurasi. Lengkapi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Vercel atau Master Admin -> Pengaturan API & Secret Key.',
+        );
       }
-      setCustSuccess('Berhasil masuk dengan akun Google. Menyiapkan ruang kerja...');
-      navigate(res.defaultRoute || '/dashboard');
     } catch {
       setCustError('Terjadi kendala saat menghubungkan akun Google. Coba lagi beberapa saat.');
     } finally {
@@ -315,25 +306,6 @@ export function LoginPage({
       if (saasRes.ok) {
         setCustSuccess('Berhasil masuk. Mengarahkan ke ruang kerja Anda...');
         navigate(saasRes.defaultRoute || '/dashboard');
-        return;
-      }
-      // Do not bypass suspended/deactivated/expired blocks with Firebase fallback
-      if (
-        saasRes.error &&
-        (saasRes.error.includes('SUSPENDED') ||
-          saasRes.error.includes('DEACTIVATED') ||
-          saasRes.error.includes('dinonaktifkan') ||
-          saasRes.error.includes('berakhir'))
-      ) {
-        setCustError(saasRes.error);
-        return;
-      }
-
-      // 3. Fallback to Firebase Email/Password accounts (backward-compatible)
-      const fbRes = await signInWithFirebaseEmail(normalizedEmail, custPassword);
-      if (fbRes.ok) {
-        setCustSuccess('Berhasil masuk. Mengarahkan ke ruang kerja Anda...');
-        navigate(fbRes.defaultRoute || '/dashboard');
         return;
       }
 
@@ -391,70 +363,60 @@ export function LoginPage({
           );
           return;
         }
-        const nowIso = new Date().toISOString();
-        const suffix = Date.now().toString(36).toUpperCase();
-        await completeCustomerOnboarding({
-          invoice: {
-            id: `inv-reg-${suffix}`,
-            invoiceNumber: `REG-${suffix}`,
-            customerEmail: normalizedEmail,
-            billingCycle: 'MONTHLY',
-            planCode: 'LITE',
-            selectedAddOns: [],
-            selectedModules: deriveLegacyModulesFromHybrid('LITE', []),
-            subtotalAmount: '49000.0000',
-            dppNilaiLain: '0.0000',
-            ppnAmount: '0.0000',
-            grandTotal: '49000.0000',
-            paymentMethod: 'QRIS_DYNAMIC',
-            paymentStatus: 'VERIFIED_PAID',
-            gatewayRefId: `BA-SIGNUP-${suffix}`,
-            paidAt: nowIso,
-            createdAt: nowIso,
-          },
-          fullName: signupFullName.trim(),
-          email: normalizedEmail,
-          passwordDemo: signupPassword,
-          phone: signupWaNumber.trim() || '081200000000',
-          businessName: signupBusinessName.trim(),
-          vertical: signupVertical,
-          taxEntity: 'WP_OP',
-          isPkp: false,
-          npwp16: '3174010000000001',
-          nitku22: '3174010000000001000001',
-          address: 'Indonesia',
-          receiptFooter: `Terima kasih telah berkunjung ke ${signupBusinessName.trim()}!`,
-          thermalPaperWidth: '80mm',
-          autoPrintQrOrders: true,
-          tableCount:
-            signupVertical === 'RESTORAN' || signupVertical === 'KEDAI_MAKAN' ? 6 : 0,
-          initialCapital: '25000000',
-          menuDrafts: [],
-          customFields: [],
-          regionalTax,
-          businessWhatsappNumber: signupWaNumber.trim() || undefined,
-        });
-        setCustSuccess('Akun Better Auth & ruang kerja usaha siap digunakan!');
-        navigate('/dashboard');
-        return;
       }
 
-      // 2. Fallback registration creating instant tenant + default CoA (Firebase / local DB)
-      const res = await signUpWithFirebaseEmail({
-        email: normalizedEmail,
-        password: signupPassword,
+      const nowIso = new Date().toISOString();
+      const suffix = Date.now().toString(36).toUpperCase();
+      await completeCustomerOnboarding({
+        invoice: {
+          id: `inv-reg-${suffix}`,
+          invoiceNumber: `REG-${suffix}`,
+          customerEmail: normalizedEmail,
+          billingCycle: 'MONTHLY',
+          planCode: 'LITE',
+          selectedAddOns: [],
+          selectedModules: deriveLegacyModulesFromHybrid('LITE', []),
+          subtotalAmount: '49000.0000',
+          dppNilaiLain: '0.0000',
+          ppnAmount: '0.0000',
+          grandTotal: '49000.0000',
+          paymentMethod: 'QRIS_DYNAMIC',
+          paymentStatus: 'VERIFIED_PAID',
+          gatewayRefId: authConfig.betterAuthReady
+            ? `BA-SIGNUP-${suffix}`
+            : `LOCAL-SIGNUP-${suffix}`,
+          paidAt: nowIso,
+          createdAt: nowIso,
+        },
         fullName: signupFullName.trim(),
+        email: normalizedEmail,
+        passwordDemo: signupPassword,
+        phone: signupWaNumber.trim() || '081200000000',
         businessName: signupBusinessName.trim(),
         vertical: signupVertical,
-        businessWhatsappNumber: signupWaNumber.trim() || undefined,
+        taxEntity: 'WP_OP',
+        isPkp: false,
+        npwp16: '3174010000000001',
+        nitku22: '3174010000000001000001',
+        address: 'Indonesia',
+        receiptFooter: `Terima kasih telah berkunjung ke ${signupBusinessName.trim()}!`,
+        thermalPaperWidth: '80mm',
+        autoPrintQrOrders: true,
+        tableCount:
+          signupVertical === 'RESTORAN' || signupVertical === 'KEDAI_MAKAN' ? 6 : 0,
+        initialCapital: '25000000',
+        menuDrafts: [],
+        customFields: [],
         regionalTax,
+        businessWhatsappNumber: signupWaNumber.trim() || undefined,
       });
-      if (!res.ok) {
-        setCustError(res.error || 'Pendaftaran akun gagal. Silakan coba lagi.');
-        return;
-      }
-      setCustSuccess('Akun usaha siap digunakan. Membuka dashboard...');
-      navigate(res.defaultRoute || '/dashboard');
+
+      setCustSuccess(
+        authConfig.betterAuthReady
+          ? 'Akun Better Auth & ruang kerja usaha siap digunakan!'
+          : 'Akun usaha siap digunakan. Membuka dashboard...',
+      );
+      navigate('/dashboard');
     } catch (err) {
       setCustError(
         err instanceof Error
@@ -498,21 +460,14 @@ export function LoginPage({
       return;
     }
 
-    const res = await signInWithGoogle();
-    if (!res.ok) {
-      setMasterError(res.error || 'Masuk Google Master dibatalkan atau gagal.');
-      return;
-    }
-    if (res.defaultRoute !== '/master') {
-      setMasterError(
-        'Email Google tersebut tidak terdaftar sebagai Master Admin. Tambahkan email tersebut di Master Admin > Manajemen Akun Login.',
-      );
-      return;
-    }
-    navigate('/master');
+    setMasterError(
+      !authConfig.betterAuthReady
+        ? 'Login Google Master memerlukan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server.'
+        : 'Google OAuth belum dikonfigurasi (GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET).',
+    );
   };
 
-  const busy = submitting || googleSubmitting || authLoading;
+  const busy = submitting || googleSubmitting;
 
   return (
     <div className="min-h-screen bg-[#FAFAF9] text-stone-900 flex flex-col">
@@ -610,7 +565,7 @@ export function LoginPage({
                   </p>
                   <p className="leading-relaxed">
                     Kelola akun pelanggan, paket langganan, kebijakan demo, serta brankas API
-                    terenkripsi (Neon PostgreSQL, Better Auth, Google OAuth, dan Object Storage S3).
+                    terenkripsi (Neon PostgreSQL, Better Auth, Midtrans, dan WhatsApp Fonnte).
                   </p>
                 </div>
 
@@ -688,7 +643,7 @@ export function LoginPage({
                     </button>
                     <button
                       type="button"
-                      disabled={authLoading}
+                      disabled={masterSubmitting}
                       onClick={() => void handleGoogleMaster()}
                       className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium text-stone-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-lg transition-colors"
                     >
@@ -761,7 +716,7 @@ export function LoginPage({
                   </button>
                   <button
                     type="button"
-                    data-testid="firebase-signup-tab-btn"
+                    data-testid="signup-tab-btn"
                     onClick={() => {
                       setAuthMode('REGISTER');
                       setCustError('');
@@ -1119,7 +1074,7 @@ export function LoginPage({
                     <button
                       type="submit"
                       disabled={busy}
-                      data-testid="firebase-signup-submit-btn"
+                      data-testid="signup-submit-btn"
                       className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
                     >
                       {submitting ? (

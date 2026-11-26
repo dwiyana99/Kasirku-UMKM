@@ -49,8 +49,20 @@ export interface SignedSessionPayload {
   issuedAt: number;
 }
 
-const SESSION_SECRET =
-  process.env.KASIRAKUN_DB_SESSION_SECRET || 'kasirakun-privacy-isolation-secret-2026';
+function getSessionSecret(): string {
+  const explicit = (process.env.KASIRAKUN_DB_SESSION_SECRET || '').trim();
+  if (explicit && !explicit.includes('REPLACE_WITH_')) {
+    return explicit;
+  }
+  const betterAuthSecret = (process.env.BETTER_AUTH_SECRET || '').trim();
+  if (betterAuthSecret && !betterAuthSecret.includes('REPLACE_WITH_')) {
+    return crypto
+      .createHmac('sha256', betterAuthSecret)
+      .update('kasirakun:db-session:v1', 'utf8')
+      .digest('hex');
+  }
+  return 'kasirakun-privacy-isolation-secret-2026';
+}
 
 export function resolveAccountScope(
   customer?: Pick<ManagedCustomerAccount, 'isDemoAccount' | 'accountScope' | 'id'> | null,
@@ -75,7 +87,7 @@ export function normalizeIdSegment(id: string): string {
 
 export function signSessionToken(payload: SignedSessionPayload): string {
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('hex');
+  const sig = crypto.createHmac('sha256', getSessionSecret()).update(encoded).digest('hex');
   return `${encoded}.${sig}`;
 }
 
@@ -84,7 +96,7 @@ export function verifySessionToken(token: string | undefined | null): SignedSess
   const parts = token.split('.');
   if (parts.length !== 2) return null;
   const [encoded, sig] = parts;
-  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('hex');
+  const expected = crypto.createHmac('sha256', getSessionSecret()).update(encoded).digest('hex');
   if (sig.length !== expected.length) return null;
   const sigBuf = Buffer.from(sig, 'utf8');
   const expBuf = Buffer.from(expected, 'utf8');

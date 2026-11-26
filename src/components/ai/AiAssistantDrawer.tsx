@@ -88,7 +88,7 @@ export function AiAssistantDrawer({ open, onClose }: AiAssistantDrawerProps) {
         { role: 'assistant', text: data.answer || data.reply || 'Analisis selesai.' },
       ]);
     } catch {
-      // Deterministic local summary fallback when external Gemini key is not yet configured
+      // Deterministic local summary fallback when server analytics endpoint is unavailable
       const lowStock = activeWorkspace.products.filter(
         (p) => Number(p.stockQty) <= Number(p.minStockAlert || 0)
       );

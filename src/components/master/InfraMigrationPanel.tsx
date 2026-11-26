@@ -38,9 +38,10 @@ interface InfraStatusPayload {
   envSnippet: string;
   serverEnvReady: {
     hasDatabaseUrl: boolean;
+    hasBetterAuthSecret: boolean;
+    hasNeonObjectStorage: boolean;
+    hasMidtrans: boolean;
     hasFonnteToken: boolean;
-    hasR2Config: boolean;
-    hasSupabaseStorage: boolean;
   };
 }
 
@@ -52,21 +53,20 @@ export function InfraMigrationPanel() {
   const [notice, setNotice] = useState<string | null>(null);
   const [statusData, setStatusData] = useState<InfraStatusPayload | null>(null);
 
-  // Target DB & Storage Form State
-  const [targetDbProvider, setTargetDbProvider] = useState<'SUPABASE_POSTGRES' | 'NEON_POSTGRES'>(
-    'SUPABASE_POSTGRES'
-  );
-  const [targetStorageProvider, setTargetStorageProvider] = useState<
-    'SUPABASE_STORAGE' | 'CLOUDFLARE_R2'
-  >('CLOUDFLARE_R2');
+  // Target DB & Storage Form State (Focused on Neon PostgreSQL + Neon Object Storage)
+  const [targetDbProvider, setTargetDbProvider] = useState<'NEON_POSTGRES'>('NEON_POSTGRES');
+  const [targetStorageProvider, setTargetStorageProvider] =
+    useState<'NEON_OBJECT_STORAGE'>('NEON_OBJECT_STORAGE');
   const [connectionUri, setConnectionUri] = useState(
-    'postgresql://postgres:CHANGE_ME@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require'
+    'postgresql://neondb_owner:CHANGE_ME@ep-kasirakun-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
   );
-  const [storageBucket, setStorageBucket] = useState('kasirakun-umkm-media');
+  const [storageBucket, setStorageBucket] = useState('kasirakun-assets');
   const [storageEndpoint, setStorageEndpoint] = useState(
-    'https://ACCOUNT_ID.r2.cloudflarestorage.com'
+    'https://br-kasirakun.storage.c-1.ap-southeast-1.aws.neon.tech'
   );
-  const [storagePublicUrl, setStoragePublicUrl] = useState('https://cdn.kasirakun.id');
+  const [storagePublicUrl, setStoragePublicUrl] = useState(
+    'https://br-kasirakun.storage.c-1.ap-southeast-1.aws.neon.tech/kasirakun-assets'
+  );
 
   const [testing, setTesting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -88,8 +88,8 @@ export function InfraMigrationPanel() {
         setErrorMsg(data.error || 'Gagal memuat status infrastruktur migrasi.');
       } else {
         setStatusData(data);
-        setTargetDbProvider(data.config.targetDbProvider);
-        setTargetStorageProvider(data.config.targetStorageProvider);
+        setTargetDbProvider('NEON_POSTGRES');
+        setTargetStorageProvider('NEON_OBJECT_STORAGE');
         if (data.config.storageBucketName) setStorageBucket(data.config.storageBucketName);
         if (
           data.config.storageEndpointPreview &&
@@ -109,30 +109,6 @@ export function InfraMigrationPanel() {
   useEffect(() => {
     void fetchStatus();
   }, [fetchStatus]);
-
-  const handleSelectDbPreset = (provider: 'SUPABASE_POSTGRES' | 'NEON_POSTGRES') => {
-    setTargetDbProvider(provider);
-    if (provider === 'SUPABASE_POSTGRES') {
-      setConnectionUri(
-        'postgresql://postgres:CHANGE_ME@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require'
-      );
-    } else {
-      setConnectionUri(
-        'postgresql://neondb_owner:CHANGE_ME@ep-kasirakun-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
-      );
-    }
-  };
-
-  const handleSelectStoragePreset = (provider: 'SUPABASE_STORAGE' | 'CLOUDFLARE_R2') => {
-    setTargetStorageProvider(provider);
-    if (provider === 'CLOUDFLARE_R2') {
-      setStorageEndpoint('https://ACCOUNT_ID.r2.cloudflarestorage.com');
-      setStoragePublicUrl('https://cdn.kasirakun.id');
-    } else {
-      setStorageEndpoint('https://PROJECT_REF.supabase.co/storage/v1');
-      setStoragePublicUrl('https://PROJECT_REF.supabase.co/storage/v1/object/public/kasirakun-umkm-media');
-    }
-  };
 
   const handleTestConnection = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -179,9 +155,7 @@ export function InfraMigrationPanel() {
           );
         }
         setNotice(
-          `Validasi koneksi ${targetDbProvider === 'SUPABASE_POSTGRES' ? 'Supabase PostgreSQL' : 'Neon PostgreSQL'} & ${
-            targetStorageProvider === 'CLOUDFLARE_R2' ? 'Cloudflare R2' : 'Supabase Storage'
-          } berhasil! Tahap Pre-Flight siap.`
+          'Validasi koneksi Neon PostgreSQL & Neon Object Storage berhasil! Tahap Pre-Flight siap.'
         );
         await fetchStatus();
       }
@@ -356,9 +330,7 @@ export function InfraMigrationPanel() {
           </p>
           <p className="text-sm font-bold text-slate-900">
             {cfg?.activeDbProvider === 'CURRENT_LOCAL_FIRESTORE'
-              ? 'Default Aktif (Firestore + Partitioned DB)'
-              : cfg?.activeDbProvider === 'SUPABASE_POSTGRES'
-              ? 'Supabase PostgreSQL'
+              ? 'Mode Lokal Preview (Siap ke Neon)'
               : 'Neon Serverless Postgres'}
           </p>
           <p className="text-[11px] text-slate-500">
@@ -373,13 +345,11 @@ export function InfraMigrationPanel() {
           </p>
           <p className="text-sm font-bold text-slate-900">
             {cfg?.activeStorageProvider === 'CURRENT_LOCAL_FIRESTORE'
-              ? 'Default Aktif (Bawaan)'
-              : cfg?.activeStorageProvider === 'CLOUDFLARE_R2'
-              ? 'Cloudflare R2 (Zero Egress)'
-              : 'Supabase Storage'}
+              ? 'Mode Lokal Preview (Siap ke Neon)'
+              : 'Neon Object Storage (S3)'}
           </p>
           <p className="text-[11px] text-slate-500 font-mono truncate">
-            Bucket: {cfg?.storageBucketName || '-'}
+            Bucket: {cfg?.storageBucketName || 'kasirakun-assets'}
           </p>
         </div>
 
@@ -429,12 +399,12 @@ export function InfraMigrationPanel() {
               Status Kunci Rahasia Server (Secret Value) &amp; Sinkronisasi Otomatis
             </h3>
             <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-              Anda bisa <strong>mengisi secret nanti</strong> saat siap pindah ke skala besar. Demi
-              keamanan penuh, nilai rahasia (<span className="font-mono">DATABASE_URL</span>,{' '}
-              <span className="font-mono">R2_SECRET_ACCESS_KEY</span>,{' '}
-              <span className="font-mono">FONNTE_TOKEN</span>) cukup ditempel di menu{' '}
-              <strong>Environment Variables</strong> server hosting (bukan di browser), lalu klik
-              tombol sinkronisasi di samping.
+              Status kesiapan 5 layanan produksi Anda di Vercel:{' '}
+              <span className="font-mono">DATABASE_URL</span> (Neon),{' '}
+              <span className="font-mono">BETTER_AUTH_SECRET</span> (Better Auth),{' '}
+              <span className="font-mono">AWS_ENDPOINT_URL_S3</span> (Neon Object Storage),{' '}
+              <span className="font-mono">MIDTRANS_SERVER_KEY</span>, dan{' '}
+              <span className="font-mono">FONNTE_TOKEN</span>.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -463,41 +433,63 @@ export function InfraMigrationPanel() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
             <div>
-              <p className="font-semibold text-slate-900">PostgreSQL (DATABASE_URL)</p>
-              <p className="text-[11px] text-slate-500">Supabase / Neon</p>
+              <p className="font-semibold text-slate-900">Neon PostgreSQL</p>
+              <p className="text-[11px] text-slate-500 font-mono">DATABASE_URL</p>
             </div>
             <span
               className={`text-[11px] font-semibold ${
                 statusData?.serverEnvReady?.hasDatabaseUrl ? 'text-emerald-700' : 'text-amber-700'
               }`}
             >
-              {statusData?.serverEnvReady?.hasDatabaseUrl ? 'Terhubung' : 'Diisi Nanti'}
+              {statusData?.serverEnvReady?.hasDatabaseUrl ? 'Terhubung' : 'Belum Diisi'}
             </span>
           </div>
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
             <div>
-              <p className="font-semibold text-slate-900">Object Storage Secret</p>
-              <p className="text-[11px] text-slate-500">Cloudflare R2 / Supabase</p>
+              <p className="font-semibold text-slate-900">Better Auth (Neon)</p>
+              <p className="text-[11px] text-slate-500 font-mono">BETTER_AUTH_SECRET</p>
             </div>
             <span
               className={`text-[11px] font-semibold ${
-                statusData?.serverEnvReady?.hasR2Config || statusData?.serverEnvReady?.hasSupabaseStorage
-                  ? 'text-emerald-700'
-                  : 'text-amber-700'
+                statusData?.serverEnvReady?.hasBetterAuthSecret ? 'text-emerald-700' : 'text-amber-700'
               }`}
             >
-              {statusData?.serverEnvReady?.hasR2Config || statusData?.serverEnvReady?.hasSupabaseStorage
-                ? 'Terhubung'
-                : 'Diisi Nanti'}
+              {statusData?.serverEnvReady?.hasBetterAuthSecret ? 'Aktif' : 'Belum Diisi'}
             </span>
           </div>
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
             <div>
-              <p className="font-semibold text-slate-900">WhatsApp Fonnte Token</p>
-              <p className="text-[11px] text-slate-500">FONNTE_TOKEN (Add-On 66rb)</p>
+              <p className="font-semibold text-slate-900">Neon Object Storage</p>
+              <p className="text-[11px] text-slate-500 font-mono">AWS_* + S3_BUCKET</p>
+            </div>
+            <span
+              className={`text-[11px] font-semibold ${
+                statusData?.serverEnvReady?.hasNeonObjectStorage ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {statusData?.serverEnvReady?.hasNeonObjectStorage ? 'Terhubung' : 'Belum Diisi'}
+            </span>
+          </div>
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+            <div>
+              <p className="font-semibold text-slate-900">Midtrans Master</p>
+              <p className="text-[11px] text-slate-500 font-mono">MIDTRANS_SERVER_KEY</p>
+            </div>
+            <span
+              className={`text-[11px] font-semibold ${
+                statusData?.serverEnvReady?.hasMidtrans ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {statusData?.serverEnvReady?.hasMidtrans ? 'Aktif' : 'Belum Diisi'}
+            </span>
+          </div>
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+            <div>
+              <p className="font-semibold text-slate-900">WhatsApp Fonnte</p>
+              <p className="text-[11px] text-slate-500 font-mono">FONNTE_TOKEN</p>
             </div>
             <span
               className={`text-[11px] font-semibold ${
@@ -537,45 +529,23 @@ export function InfraMigrationPanel() {
             </button>
           </div>
 
-          {/* PostgreSQL Provider Selector */}
+          {/* Neon PostgreSQL Target */}
           <div className="space-y-2">
-            <p className="text-xs font-semibold text-slate-700">Pilih Penyedia Database PostgreSQL</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {(
-                [
-                  {
-                    code: 'SUPABASE_POSTGRES',
-                    title: 'Supabase PostgreSQL',
-                    desc: 'PgBouncer Transaction Pooler · Region Singapore (ap-southeast-1)',
-                  },
-                  {
-                    code: 'NEON_POSTGRES',
-                    title: 'Neon Serverless Postgres',
-                    desc: 'Auto-scale & scale-to-zero · Database branching instan',
-                  },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.code}
-                  type="button"
-                  data-testid={`select-db-${opt.code}`}
-                  onClick={() => handleSelectDbPreset(opt.code)}
-                  className={`p-3.5 text-left rounded-xl border transition-colors ${
-                    targetDbProvider === opt.code
-                      ? 'border-emerald-600 bg-emerald-50/50'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <p className="text-xs font-bold text-slate-900">{opt.title}</p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">{opt.desc}</p>
-                </button>
-              ))}
+            <p className="text-xs font-semibold text-slate-700">Database Target Produksi</p>
+            <div className="p-3.5 rounded-xl border border-emerald-600 bg-emerald-50/50">
+              <p className="text-xs font-bold text-slate-900">
+                Neon Serverless PostgreSQL + Better Auth (Neon)
+              </p>
+              <p className="text-[11px] text-slate-600 mt-0.5">
+                Auto-scale &amp; scale-to-zero · Region Singapore (ap-southeast-1) · Skema Prisma &amp;
+                Better Auth otomatis tersinkron
+              </p>
             </div>
           </div>
 
           <div>
             <label htmlFor="pg-uri-input" className="block text-xs font-semibold text-slate-700 mb-1">
-              PostgreSQL Connection URI (SSL Wajib)
+              Neon PostgreSQL Pooled URI (<code className="font-mono">DATABASE_URL</code>)
             </label>
             <input
               id="pg-uri-input"
@@ -588,45 +558,23 @@ export function InfraMigrationPanel() {
             />
             <p className="text-[11px] text-slate-500 mt-1">
               Kredensial sandi hanya divalidasi dan tidak disimpan plaintext di browser. Untuk
-              produksi, tempel URI ke Environment Variable <code className="font-mono">DATABASE_URL</code>.
+              produksi, tempel URI ke Environment Variable <code className="font-mono">DATABASE_URL</code> di Vercel.
             </p>
           </div>
 
-          {/* Storage Provider Selector */}
+          {/* Neon Object Storage Target */}
           <div className="space-y-2 pt-2 border-t border-slate-100">
             <p className="text-xs font-semibold text-slate-700">
-              Pilih Penyedia Object Storage (Foto Produk, Logo &amp; Nota Pajak)
+              Object Storage Target (Foto Produk, Logo &amp; Bukti Bayar)
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {(
-                [
-                  {
-                    code: 'CLOUDFLARE_R2',
-                    title: 'Cloudflare R2 (Rekomendasi)',
-                    desc: 'S3-Compatible · $0 biaya egress bandwidth · 10 GB gratis/bln',
-                  },
-                  {
-                    code: 'SUPABASE_STORAGE',
-                    title: 'Supabase Storage',
-                    desc: 'Terintegrasi dalam 1 project dengan Supabase PostgreSQL + CDN',
-                  },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.code}
-                  type="button"
-                  data-testid={`select-storage-${opt.code}`}
-                  onClick={() => handleSelectStoragePreset(opt.code)}
-                  className={`p-3.5 text-left rounded-xl border transition-colors ${
-                    targetStorageProvider === opt.code
-                      ? 'border-emerald-600 bg-emerald-50/50'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <p className="text-xs font-bold text-slate-900">{opt.title}</p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">{opt.desc}</p>
-                </button>
-              ))}
+            <div className="p-3.5 rounded-xl border border-emerald-600 bg-emerald-50/50">
+              <p className="text-xs font-bold text-slate-900">
+                Neon Object Storage (S3-Compatible)
+              </p>
+              <p className="text-[11px] text-slate-600 mt-0.5">
+                Satu ekosistem langsung di proyek Neon Anda · Menggunakan standar AWS_ENDPOINT_URL_S3,
+                AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY &amp; S3_BUCKET
+              </p>
             </div>
           </div>
 

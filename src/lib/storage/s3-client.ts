@@ -79,23 +79,44 @@ function sanitizeSegment(raw: string, fallback: string, maxLen = 64): string {
 }
 
 /**
- * Resolves Universal S3 config dynamically from process.env.
- * Supports primary S3_* env variables and backward-compatible R2_* aliases.
+ * Resolves Object Storage config dynamically from process.env.
+ * Prioritizes official Neon Object Storage AWS S3 env variables (`AWS_ENDPOINT_URL_S3`,
+ * `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET` / `NEON_STORAGE_BUCKET`)
+ * while preserving backward-compatible `S3_*` and `R2_*` aliases.
  */
 export function resolveS3StorageConfig(env: NodeJS.ProcessEnv = process.env): S3StorageConfig | null {
   const r2AccountId = (env.R2_ACCOUNT_ID || '').trim();
   const endpoint = (
+    env.AWS_ENDPOINT_URL_S3 ||
     env.S3_ENDPOINT ||
     (r2AccountId ? `https://${r2AccountId}.r2.cloudflarestorage.com` : '')
   ).trim();
 
-  const region = (env.S3_REGION || 'auto').trim() || 'auto';
-  const bucket = (env.S3_BUCKET || env.R2_BUCKET_NAME || '').trim();
-  const accessKeyId = (env.S3_ACCESS_KEY_ID || env.R2_ACCESS_KEY_ID || '').trim();
-  const secretAccessKey = (env.S3_SECRET_ACCESS_KEY || env.R2_SECRET_ACCESS_KEY || '').trim();
+  const region = (env.AWS_REGION || env.S3_REGION || 'ap-southeast-1').trim() || 'ap-southeast-1';
+  const bucket = (env.S3_BUCKET || env.NEON_STORAGE_BUCKET || env.R2_BUCKET_NAME || '').trim();
+  const accessKeyId = (
+    env.AWS_ACCESS_KEY_ID ||
+    env.S3_ACCESS_KEY_ID ||
+    env.R2_ACCESS_KEY_ID ||
+    ''
+  ).trim();
+  const secretAccessKey = (
+    env.AWS_SECRET_ACCESS_KEY ||
+    env.S3_SECRET_ACCESS_KEY ||
+    env.R2_SECRET_ACCESS_KEY ||
+    ''
+  ).trim();
   const publicUrl = (env.S3_PUBLIC_URL || env.R2_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
 
-  if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
+  if (
+    !endpoint ||
+    !bucket ||
+    !accessKeyId ||
+    !secretAccessKey ||
+    endpoint.includes('br-xxxx') ||
+    accessKeyId === 'nak_live_xxxx' ||
+    secretAccessKey === 'nsk_live_xxxx'
+  ) {
     return null;
   }
 
@@ -109,9 +130,11 @@ export function resolveS3StorageConfig(env: NodeJS.ProcessEnv = process.env): S3
     return null;
   }
 
-  // Biznet Gio NEO Object Storage, MinIO, and custom S3 gateways often require path-style URLs
+  // Neon Object Storage, Biznet Gio NEO, MinIO, and custom S3 gateways require path-style URLs
   const forcePathStyle =
     (env.S3_FORCE_PATH_STYLE || '').trim().toLowerCase() === 'true' ||
+    endpoint.includes('.neon.tech') ||
+    endpoint.includes('.neon.build') ||
     endpoint.includes('biznetgio') ||
     endpoint.includes('neos3') ||
     endpoint.includes('.neo.id') ||
@@ -263,6 +286,7 @@ function getOrCreateS3Client(config: S3StorageConfig): S3Client {
     region: config.region,
     endpoint: config.endpoint,
     forcePathStyle: config.forcePathStyle,
+    requestChecksumCalculation: 'WHEN_REQUIRED',
     credentials: {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
@@ -278,8 +302,8 @@ export function resetS3ClientCache(): void {
 }
 
 /**
- * Uploads an image buffer to Universal S3 Object Storage (Neon Storage, Cloudflare R2, Biznet Gio NEO).
- * Returns a clean unconfigured response instead of throwing if S3 env keys have not been configured yet.
+ * Uploads an image buffer to Neon Object Storage (S3-compatible).
+ * Returns a clean unconfigured response instead of throwing if Neon Object Storage env keys have not been configured yet.
  */
 export async function uploadFileToStorage(
   input: UploadFileInput,
@@ -302,7 +326,7 @@ export async function uploadFileToStorage(
       key: null,
       storage: 'unconfigured',
       message:
-        'Object Storage S3 belum dikonfigurasi. Lengkapi S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, dan S3_SECRET_ACCESS_KEY di Vercel atau Master Admin Vault.',
+        'Neon Object Storage belum dikonfigurasi. Lengkapi AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, dan S3_BUCKET di Vercel atau Master Admin > Pengaturan API.',
     };
   }
 

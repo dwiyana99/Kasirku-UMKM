@@ -10,17 +10,32 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96-bit recommended IV for GCM
 
 function deriveEncryptionKey(): Buffer {
-  const rawSecret =
+  const explicitSecret =
     process.env.PAYMENT_KEY_ENCRYPTION_SECRET ||
     process.env.PAYMENT_CREDENTIAL_ENCRYPTION_KEY ||
     process.env.APP_ENCRYPTION_KEY ||
-    'kasirakun-umkm-default-dev-aes256-key-replace-in-production';
+    '';
 
-  // If 64 hex chars (32 bytes), use directly; otherwise derive 32 bytes via SHA-256
-  if (/^[0-9a-fA-F]{64}$/.test(rawSecret.trim())) {
-    return Buffer.from(rawSecret.trim(), 'hex');
+  if (explicitSecret.trim()) {
+    // If 64 hex chars (32 bytes), use directly; otherwise derive 32 bytes via SHA-256
+    if (/^[0-9a-fA-F]{64}$/.test(explicitSecret.trim())) {
+      return Buffer.from(explicitSecret.trim(), 'hex');
+    }
+    return crypto.createHash('sha256').update(explicitSecret, 'utf8').digest();
   }
-  return crypto.createHash('sha256').update(rawSecret, 'utf8').digest();
+
+  const betterAuthSecret = (process.env.BETTER_AUTH_SECRET || '').trim();
+  if (betterAuthSecret && !betterAuthSecret.includes('REPLACE_WITH_')) {
+    return crypto
+      .createHmac('sha256', betterAuthSecret)
+      .update('kasirakun:payment-aes256:v1', 'utf8')
+      .digest();
+  }
+
+  return crypto
+    .createHash('sha256')
+    .update('kasirakun-umkm-default-dev-aes256-key-replace-in-production', 'utf8')
+    .digest();
 }
 
 /**

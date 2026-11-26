@@ -1,20 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  signOut,
-  updateProfile,
-  type User as FirebaseUser,
-} from 'firebase/auth';
-import {
-  doc,
-  getDoc,
-  serverTimestamp,
-  setDoc,
-  where,
-} from 'firebase/firestore';
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import Decimal from 'decimal.js';
 import type {
   AccountScope,
@@ -173,17 +157,6 @@ import {
   syncFlatArraysFromItems,
 } from '../lib/catalog/taxonomy-presets';
 import { getDefaultHomeRouteForSession } from '../lib/rbac/staff-rbac';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
-import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
-import {
-  mergeRealtimeOrders,
-  mergeRealtimeProducts,
-  normalizeFirestoreDocId,
-  provisionDefaultFirebaseWorkspace,
-  sanitizeFirestorePayload,
-  toFirestoreInventoryDoc,
-  toFirestoreOrderDoc,
-} from '../lib/db/firestore-sync';
 import {
   authClient,
   exchangeBetterAuthSession,
@@ -208,28 +181,6 @@ export interface MasterTenantSettingsPatch {
 interface AppContextValue {
   route: string;
   navigate: (path: string) => void;
-  user: FirebaseUser | null;
-  authReady: boolean;
-  authLoading: boolean;
-  realtimeInventoryCount: number;
-  realtimeOrderCount: number;
-  signInWithGoogle: () => Promise<{ ok: boolean; defaultRoute?: string; error?: string }>;
-  signInWithFirebaseEmail: (
-    email: string,
-    password: string
-  ) => Promise<{ ok: boolean; defaultRoute?: string; error?: string }>;
-  signUpWithFirebaseEmail: (input: {
-    email: string;
-    password: string;
-    fullName: string;
-    businessName: string;
-    vertical: Tenant['vertical'];
-    taxEntity?: Tenant['taxEntity'];
-    businessWhatsappNumber?: string;
-    regionalTax?: TenantRegionalTaxSettings;
-  }) => Promise<{ ok: boolean; defaultRoute?: string; error?: string }>;
-  linkActiveWorkspaceToGoogleCloud: () => Promise<{ ok: boolean; error?: string }>;
-  signOutUser: () => Promise<void>;
   workspaces: TenantWorkspaceData[];
   visibleWorkspaces: TenantWorkspaceData[];
   activeTenantId: string;
@@ -708,42 +659,6 @@ const GUEST_SESSION: AppSession = {
   fullName: 'Tamu Demo',
 };
 
-const MASTER_OWNER_EMAIL = 'dwiyana99@gmail.com';
-
-function sanitizeTenantSlug(raw: string): string {
-  const cleaned = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 96);
-  return cleaned || 'umkm-tenant';
-}
-
-function mapFirebaseAuthError(err: unknown): string {
-  const code = (err as { code?: string })?.code ?? '';
-  const msg = err instanceof Error ? err.message : String(err);
-  if (code === 'auth/operation-not-allowed' || msg.includes('operation-not-allowed')) {
-    return 'Provider Email/Password belum diaktifkan di Firebase Console (Authentication → Sign-in method → Email/Password). Gunakan tombol "Masuk / Daftar dengan Google" atau aktifkan provider tersebut di Console.';
-  }
-  if (code === 'auth/email-already-in-use') {
-    return 'Email sudah terdaftar di Firebase Auth. Silakan gunakan tab Masuk Email Cloud.';
-  }
-  if (
-    code === 'auth/invalid-credential' ||
-    code === 'auth/wrong-password' ||
-    code === 'auth/user-not-found'
-  ) {
-    return 'Email atau kata sandi Firebase Auth tidak cocok.';
-  }
-  if (code === 'auth/weak-password') {
-    return 'Kata sandi minimal 6 karakter.';
-  }
-  if (code === 'auth/popup-closed-by-user') {
-    return 'Jendela login Google ditutup sebelum selesai.';
-  }
-  return `Autentikasi Firebase gagal: ${msg}`;
-}
-
 function loadInitialWorkspaces(): TenantWorkspaceData[] {
   try {
     const raw = window.sessionStorage.getItem(STORAGE_KEY);
@@ -804,9 +719,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return loadInitialWorkspaces()[0]?.tenant.id ?? 'tenant-resto-pak-budi';
     }
   });
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [authLoading, setAuthLoading] = useState(false);
   const [oauthPendingUser, setOauthPendingUser] = useState<{
     email: string;
     fullName: string;
@@ -1306,672 +1218,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [session.role, session.token]);
 
-  const pendingSignupProfileRef = useRef<{
-    fullName: string;
-    businessName: string;
-    vertical: Tenant['vertical'];
-    taxEntity?: Tenant['taxEntity'];
-    businessWhatsappNumber?: string;
-    regionalTax?: TenantRegionalTaxSettings;
-  } | null>(null);
-  const provisionedUidRef = useRef<string | null>(null);
-
-  // Persist authenticated tenant ledger to Firestore (strictly partitioned by accountScope: REAL vs DEMO)
-  const syncWorkspaceToFirestore = useCallback(
-    async (firebaseUser: FirebaseUser, ws: TenantWorkspaceData) => {
-      const scope: AccountScope = ws.tenant.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
-      const docTenantId = normalizeFirestoreDocId(ws.tenant.id);
-      const safeSlug = sanitizeTenantSlug(ws.tenant.slug || ws.tenant.name);
-      const userPath = `users/${firebaseUser.uid}`;
-      const tenantPath =
-        scope === 'DEMO'
-          ? `demo_sandboxes/${docTenantId}`
-          : `users/${firebaseUser.uid}/tenants/${docTenantId}`;
-      setSyncStatus('saving');
-      try {
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const userSnap = await getDoc(userRef);
-        const displayName = (
-          firebaseUser.displayName ||
-          ws.tenant.name ||
-          'Pemilik UMKM'
-        ).slice(0, 150);
-        if (userSnap.exists()) {
-          await setDoc(
-            userRef,
-            {
-              displayName,
-              activeTenantId: docTenantId,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        } else {
-          await setDoc(
-            userRef,
-            {
-              ownerId: firebaseUser.uid,
-              accountScope: scope,
-              displayName,
-              activeTenantId: docTenantId,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, userPath);
-      }
-      try {
-        const targetRef =
-          scope === 'DEMO'
-            ? doc(db, 'demo_sandboxes', docTenantId)
-            : doc(db, 'users', firebaseUser.uid, 'tenants', docTenantId);
-        const tenantSnap = await getDoc(targetRef);
-        const cleanPayload = sanitizeFirestorePayload(ws);
-        if (tenantSnap.exists()) {
-          await setDoc(
-            targetRef,
-            {
-              name: ws.tenant.name.slice(0, 150),
-              slug: safeSlug,
-              vertical: ws.tenant.vertical,
-              taxEntity: ws.tenant.taxEntity,
-              workspacePayload: cleanPayload,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        } else {
-          await setDoc(
-            targetRef,
-            {
-              ownerId: firebaseUser.uid,
-              accountScope: scope,
-              tenantId: docTenantId,
-              name: ws.tenant.name.slice(0, 150),
-              slug: safeSlug,
-              vertical: ws.tenant.vertical,
-              taxEntity: ws.tenant.taxEntity,
-              workspacePayload: cleanPayload,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-        setSyncStatus('synced');
-      } catch (error) {
-        setSyncStatus('local');
-        handleFirestoreError(error, OperationType.WRITE, tenantPath);
-      }
-    },
-    []
-  );
-
-  const syncManagedCustomerToFirestore = useCallback(
-    async (firebaseUser: FirebaseUser, cust: ManagedCustomerAccount) => {
-      const docCustId = normalizeFirestoreDocId(cust.id);
-      const custPath = `managed_customers/${docCustId}`;
-      const scope: AccountScope =
-        cust.accountScope === 'DEMO' || cust.isDemoAccount ? 'DEMO' : 'REAL';
-      try {
-        const custRef = doc(db, 'managed_customers', docCustId);
-        const existingSnap = await getDoc(custRef);
-        const cleanCust = sanitizeFirestorePayload(cust);
-        if (existingSnap.exists()) {
-          await setDoc(
-            custRef,
-            {
-              fullName: cust.fullName.slice(0, 150),
-              customerPayload: cleanCust,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        } else {
-          await setDoc(
-            custRef,
-            {
-              customerId: docCustId,
-              ownerId: firebaseUser.uid,
-              accountScope: scope,
-              fullName: cust.fullName.slice(0, 150),
-              email: cust.email.slice(0, 255),
-              status: cust.status,
-              billingCycle: cust.billingCycle,
-              customerPayload: cleanCust,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, custPath);
-      }
-    },
-    []
-  );
-
-  // Firebase Auth listener
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (fbUser) => {
-      setUser(fbUser);
-      setAuthReady(true);
-      if (!fbUser) {
-        provisionedUidRef.current = null;
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  // Generic Realtime Firestore Collection Hooks (onSnapshot) for Tenants, Inventory Items, POS Orders & Customers
-  const firebaseScopeTenantId = useMemo(
-    () => normalizeFirestoreDocId(activeTenantId),
-    [activeTenantId]
-  );
-  const isMasterFirebaseUser = user?.email?.toLowerCase() === MASTER_OWNER_EMAIL;
-  const ownerConstraints = useMemo(
-    () => (user ? [where('ownerId', '==', user.uid)] : []),
-    [user]
-  );
-  const customerConstraints = useMemo(
-    () => (user && !isMasterFirebaseUser ? [where('ownerId', '==', user.uid)] : []),
-    [isMasterFirebaseUser, user]
-  );
-
-  const firestoreTenantsHook = useFirestoreCollection<TenantWorkspaceData>({
-    enabled: Boolean(user),
-    collectionPath: user ? `users/${user.uid}/tenants` : null,
-    constraints: ownerConstraints,
-    mapDoc: (_id, data) => {
-      const ws = data.workspacePayload as TenantWorkspaceData | undefined;
-      return ws && ws.tenant?.id ? ws : null;
-    },
-  });
-
-  const firestoreCustomersHook = useFirestoreCollection<ManagedCustomerAccount>({
-    enabled: Boolean(user),
-    collectionPath: user ? 'managed_customers' : null,
-    constraints: customerConstraints,
-    mapDoc: (_id, data) => {
-      const cust = data.customerPayload as ManagedCustomerAccount | undefined;
-      return cust && cust.id ? cust : null;
-    },
-  });
-
-  const activeTenantExistsInFirestore = useMemo(
-    () =>
-      Boolean(
-        user &&
-          firestoreTenantsHook.items.some(
-            (w) => normalizeFirestoreDocId(w.tenant.id) === firebaseScopeTenantId
-          )
-      ),
-    [firebaseScopeTenantId, firestoreTenantsHook.items, user]
-  );
-
-  const inventoryHook = useFirestoreCollection<Product>({
-    enabled: Boolean(user && activeTenantExistsInFirestore),
-    collectionPath:
-      user && activeTenantExistsInFirestore
-        ? `users/${user.uid}/tenants/${firebaseScopeTenantId}/products`
-        : null,
-    constraints: ownerConstraints,
-    mapDoc: (_id, data) => {
-      const prod = data.payload as Product | undefined;
-      return prod && prod.id ? prod : null;
-    },
-  });
-
-  const ordersHook = useFirestoreCollection<Order>({
-    enabled: Boolean(user && activeTenantExistsInFirestore),
-    collectionPath:
-      user && activeTenantExistsInFirestore
-        ? `users/${user.uid}/tenants/${firebaseScopeTenantId}/orders`
-        : null,
-    constraints: ownerConstraints,
-    mapDoc: (_id, data) => {
-      const ord = data.payload as Order | undefined;
-      return ord && ord.id ? ord : null;
-    },
-  });
-
-  // Hydrate workspaces & provision clean REAL workspace for new Firebase users (zero dummy fallback)
-  useEffect(() => {
-    if (!user || !firestoreTenantsHook.hasInitialSnapshot) return;
-
-    const remoteTenants = firestoreTenantsHook.items;
-    if (remoteTenants.length > 0) {
-      setWorkspaces((prev) => {
-        const localById = new Map(prev.map((w) => [w.tenant.id, w]));
-        // Merge existing remote tenants and keep only remote tenants when operating in Firebase Cloud mode
-        return remoteTenants.map((rw) => {
-          const existing = localById.get(rw.tenant.id);
-          if (!existing) return rw;
-          // Preserve latest in-flight products/orders if subcollection hooks already merged them
-          return {
-            ...rw,
-            products:
-              rw.products.length >= existing.products.length ? rw.products : existing.products,
-            orders: rw.orders.length >= existing.orders.length ? rw.orders : existing.orders,
-          };
-        });
-      });
-
-      setActiveTenantId((prevId) =>
-        remoteTenants.some((w) => w.tenant.id === prevId) ? prevId : remoteTenants[0].tenant.id
-      );
-      setSyncStatus('synced');
-
-      if (session.role === 'GUEST') {
-        const matchingCust = firestoreCustomersHook.items[0];
-        if (isMasterFirebaseUser) {
-          setSession({
-            role: 'MASTER_ADMIN',
-            accountScope: 'REAL',
-            email: user.email || MASTER_OWNER_EMAIL,
-            fullName: user.displayName || 'Master Pemilik KasirAkun',
-            firebaseUid: user.uid,
-            authProvider: 'FIREBASE_GOOGLE',
-          });
-        } else {
-          setSession({
-            role: 'CUSTOMER',
-            accountScope: 'REAL',
-            email: user.email || matchingCust?.email || '',
-            fullName:
-              user.displayName || matchingCust?.fullName || remoteTenants[0].tenant.name,
-            customerId: matchingCust?.id ?? normalizeFirestoreDocId(user.uid),
-            firebaseUid: user.uid,
-            authProvider:
-              user.providerData?.[0]?.providerId === 'password'
-                ? 'FIREBASE_EMAIL'
-                : 'FIREBASE_GOOGLE',
-          });
-        }
-      }
-      return;
-    }
-
-    // First-time authenticated Firebase user with 0 tenants in Firestore -> provision clean REAL workspace
-    if (provisionedUidRef.current === user.uid) return;
-    provisionedUidRef.current = user.uid;
-
-    const pendingProfile = pendingSignupProfileRef.current;
-    pendingSignupProfileRef.current = null;
-
-    const { customer, workspace } = provisionDefaultFirebaseWorkspace({
-      uid: user.uid,
-      email: user.email || `${user.uid}@kasirakun.id`,
-      fullName: pendingProfile?.fullName || user.displayName || 'Pemilik UMKM',
-      businessName: pendingProfile?.businessName,
-      vertical: pendingProfile?.vertical,
-      taxEntity: pendingProfile?.taxEntity,
-      businessWhatsappNumber: pendingProfile?.businessWhatsappNumber,
-      regionalTax: pendingProfile?.regionalTax,
-    });
-
-    setCustomers([customer]);
-    setWorkspaces([workspace]);
-    setActiveTenantId(workspace.tenant.id);
-    setSession({
-      role: isMasterFirebaseUser ? 'MASTER_ADMIN' : 'CUSTOMER',
-      accountScope: 'REAL',
-      email: customer.email,
-      fullName: customer.fullName,
-      customerId: customer.id,
-      firebaseUid: user.uid,
-      authProvider:
-        user.providerData?.[0]?.providerId === 'password'
-          ? 'FIREBASE_EMAIL'
-          : 'FIREBASE_GOOGLE',
-    });
-
-    void (async () => {
-      await syncWorkspaceToFirestore(user, workspace);
-      await syncManagedCustomerToFirestore(user, customer);
-    })();
-  }, [
-    firestoreCustomersHook.items,
-    firestoreTenantsHook.hasInitialSnapshot,
-    firestoreTenantsHook.items,
-    isMasterFirebaseUser,
-    session.role,
-    syncManagedCustomerToFirestore,
-    syncWorkspaceToFirestore,
-    user,
-  ]);
-
-  // Hydrate Managed Customers from realtime Firestore snapshot
-  useEffect(() => {
-    if (!user || !firestoreCustomersHook.hasInitialSnapshot) return;
-    if (firestoreCustomersHook.items.length === 0) return;
-    setCustomers((prev) => {
-      if (isMasterFirebaseUser) {
-        const byId = new Map(prev.map((c) => [c.id, c]));
-        for (const rc of firestoreCustomersHook.items) {
-          byId.set(rc.id, rc);
-        }
-        return Array.from(byId.values());
-      }
-      return firestoreCustomersHook.items;
-    });
-  }, [
-    firestoreCustomersHook.hasInitialSnapshot,
-    firestoreCustomersHook.items,
-    isMasterFirebaseUser,
-    user,
-  ]);
-
-  // Merge realtime Firestore Inventory Items into active tenant workspace
-  useEffect(() => {
-    if (!user || !activeTenantExistsInFirestore || !inventoryHook.hasInitialSnapshot) return;
-    if (inventoryHook.items.length === 0) return;
-    setWorkspaces((prev) =>
-      prev.map((ws) => {
-        if (normalizeFirestoreDocId(ws.tenant.id) !== firebaseScopeTenantId) return ws;
-        const merged = mergeRealtimeProducts(ws.products, inventoryHook.items);
-        if (
-          merged.length === ws.products.length &&
-          merged.every((p, idx) => p === ws.products[idx])
-        ) {
-          return ws;
-        }
-        return { ...ws, products: merged };
-      })
-    );
-  }, [
-    activeTenantExistsInFirestore,
-    firebaseScopeTenantId,
-    inventoryHook.hasInitialSnapshot,
-    inventoryHook.items,
-    user,
-  ]);
-
-  // Merge realtime Firestore POS Transactions into active tenant workspace
-  useEffect(() => {
-    if (!user || !activeTenantExistsInFirestore || !ordersHook.hasInitialSnapshot) return;
-    if (ordersHook.items.length === 0) return;
-    setWorkspaces((prev) =>
-      prev.map((ws) => {
-        if (normalizeFirestoreDocId(ws.tenant.id) !== firebaseScopeTenantId) return ws;
-        const merged = mergeRealtimeOrders(ws.orders, ordersHook.items);
-        if (
-          merged.length === ws.orders.length &&
-          merged.every((o, idx) => o === ws.orders[idx])
-        ) {
-          return ws;
-        }
-        return { ...ws, orders: merged };
-      })
-    );
-  }, [
-    activeTenantExistsInFirestore,
-    firebaseScopeTenantId,
-    ordersHook.hasInitialSnapshot,
-    ordersHook.items,
-    user,
-  ]);
-
-  // Helper to push individual product/order docs to Firestore subcollections
-  const upsertProductToFirestore = useCallback(
-    async (tenantId: string, product: Product) => {
-      if (!user) return;
-      const docTenantId = normalizeFirestoreDocId(tenantId);
-      const docProdId = normalizeFirestoreDocId(product.id);
-      const record = toFirestoreInventoryDoc(user.uid, docTenantId, product);
-      if (docTenantId === firebaseScopeTenantId && activeTenantExistsInFirestore) {
-        await inventoryHook.upsertItem(docProdId, record as unknown as Record<string, unknown>);
-        return;
-      }
-      const path = `users/${user.uid}/tenants/${docTenantId}/products`;
-      const ref = doc(db, path, docProdId);
-      const snap = await getDoc(ref);
-      await setDoc(
-        ref,
-        {
-          ...record,
-          ...(snap.exists() ? {} : { createdAt: serverTimestamp() }),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-    },
-    [activeTenantExistsInFirestore, firebaseScopeTenantId, inventoryHook, user]
-  );
-
-  const deleteProductFromFirestore = useCallback(
-    async (tenantId: string, productId: string) => {
-      if (!user) return;
-      const docTenantId = normalizeFirestoreDocId(tenantId);
-      const docProdId = normalizeFirestoreDocId(productId);
-      if (docTenantId === firebaseScopeTenantId && activeTenantExistsInFirestore) {
-        await inventoryHook.deleteItem(docProdId);
-      }
-    },
-    [activeTenantExistsInFirestore, firebaseScopeTenantId, inventoryHook, user]
-  );
-
-  const upsertOrderToFirestore = useCallback(
-    async (tenantId: string, order: Order) => {
-      if (!user) return;
-      const docTenantId = normalizeFirestoreDocId(tenantId);
-      const docOrderId = normalizeFirestoreDocId(order.id);
-      const record = toFirestoreOrderDoc(user.uid, docTenantId, order);
-      if (docTenantId === firebaseScopeTenantId && activeTenantExistsInFirestore) {
-        await ordersHook.upsertItem(docOrderId, record as unknown as Record<string, unknown>);
-        return;
-      }
-      const path = `users/${user.uid}/tenants/${docTenantId}/orders`;
-      const ref = doc(db, path, docOrderId);
-      const snap = await getDoc(ref);
-      await setDoc(
-        ref,
-        {
-          ...record,
-          ...(snap.exists() ? {} : { createdAt: serverTimestamp() }),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-    },
-    [activeTenantExistsInFirestore, firebaseScopeTenantId, ordersHook, user]
-  );
-
-  const signInWithGoogle = useCallback(async () => {
-    setAuthLoading(true);
-    try {
-      const cred = await signInWithPopup(auth, googleProvider);
-      const fbUser = cred.user;
-      const isMaster = fbUser.email?.toLowerCase() === MASTER_OWNER_EMAIL;
-      const nextSession: AppSession = isMaster
-        ? {
-            role: 'MASTER_ADMIN',
-            accountScope: 'REAL',
-            email: fbUser.email || MASTER_OWNER_EMAIL,
-            fullName: fbUser.displayName || 'Master Pemilik KasirAkun',
-            firebaseUid: fbUser.uid,
-            authProvider: 'FIREBASE_GOOGLE',
-          }
-        : {
-            role: 'CUSTOMER',
-            accountScope: 'REAL',
-            email: fbUser.email || '',
-            fullName: fbUser.displayName || 'Pemilik UMKM',
-            customerId: normalizeFirestoreDocId(fbUser.uid),
-            firebaseUid: fbUser.uid,
-            authProvider: 'FIREBASE_GOOGLE',
-          };
-      setSession(nextSession);
-      return { ok: true, defaultRoute: isMaster ? '/master' : '/dashboard' };
-    } catch (err) {
-      return { ok: false, error: mapFirebaseAuthError(err) };
-    } finally {
-      setAuthLoading(false);
-    }
-  }, []);
-
-  const signInWithFirebaseEmail: AppContextValue['signInWithFirebaseEmail'] = useCallback(
-    async (email, password) => {
-      setAuthLoading(true);
-      try {
-        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const fbUser = cred.user;
-        const isMaster = fbUser.email?.toLowerCase() === MASTER_OWNER_EMAIL;
-        setSession({
-          role: isMaster ? 'MASTER_ADMIN' : 'CUSTOMER',
-          accountScope: 'REAL',
-          email: fbUser.email || email.trim(),
-          fullName: fbUser.displayName || email.trim().split('@')[0],
-          customerId: normalizeFirestoreDocId(fbUser.uid),
-          firebaseUid: fbUser.uid,
-          authProvider: 'FIREBASE_EMAIL',
-        });
-        return { ok: true, defaultRoute: isMaster ? '/master' : '/dashboard' };
-      } catch (err) {
-        return { ok: false, error: mapFirebaseAuthError(err) };
-      } finally {
-        setAuthLoading(false);
-      }
-    },
-    []
-  );
-
-  const signUpWithFirebaseEmail: AppContextValue['signUpWithFirebaseEmail'] = useCallback(
-    async (input) => {
-      setAuthLoading(true);
-      try {
-        pendingSignupProfileRef.current = {
-          fullName: input.fullName.trim(),
-          businessName: input.businessName.trim(),
-          vertical: input.vertical,
-          taxEntity: input.taxEntity,
-          businessWhatsappNumber: input.businessWhatsappNumber,
-          regionalTax: input.regionalTax,
-        };
-        const cred = await createUserWithEmailAndPassword(
-          auth,
-          input.email.trim(),
-          input.password
-        );
-        if (input.fullName.trim()) {
-          await updateProfile(cred.user, { displayName: input.fullName.trim() });
-        }
-        const { customer, workspace } = provisionDefaultFirebaseWorkspace({
-          uid: cred.user.uid,
-          email: cred.user.email || input.email.trim(),
-          fullName: input.fullName.trim(),
-          businessName: input.businessName.trim(),
-          vertical: input.vertical,
-          taxEntity: input.taxEntity,
-          businessWhatsappNumber: input.businessWhatsappNumber,
-          regionalTax: input.regionalTax,
-        });
-        provisionedUidRef.current = cred.user.uid;
-        pendingSignupProfileRef.current = null;
-
-        setCustomers([customer]);
-        setWorkspaces([workspace]);
-        setActiveTenantId(workspace.tenant.id);
-        setSession({
-          role: 'CUSTOMER',
-          accountScope: 'REAL',
-          email: customer.email,
-          fullName: customer.fullName,
-          customerId: customer.id,
-          firebaseUid: cred.user.uid,
-          authProvider: 'FIREBASE_EMAIL',
-        });
-        await syncWorkspaceToFirestore(cred.user, workspace);
-        await syncManagedCustomerToFirestore(cred.user, customer);
-        return { ok: true, defaultRoute: '/dashboard' };
-      } catch (err) {
-        pendingSignupProfileRef.current = null;
-        return { ok: false, error: mapFirebaseAuthError(err) };
-      } finally {
-        setAuthLoading(false);
-      }
-    },
-    [syncManagedCustomerToFirestore, syncWorkspaceToFirestore]
-  );
-
-  const linkActiveWorkspaceToGoogleCloud = useCallback(async () => {
-    setAuthLoading(true);
-    try {
-      const currentWs =
-        workspaces.find((w) => w.tenant.id === activeTenantId) ?? workspaces[0];
-      const cred = await signInWithPopup(auth, googleProvider);
-      const fbUser = cred.user;
-      if (currentWs) {
-        const realWs: TenantWorkspaceData = {
-          ...currentWs,
-          tenant: {
-            ...currentWs.tenant,
-            accountScope: 'REAL',
-            ownerAccountId: fbUser.uid,
-          },
-        };
-        provisionedUidRef.current = fbUser.uid;
-        await syncWorkspaceToFirestore(fbUser, realWs);
-        const docTenantId = normalizeFirestoreDocId(realWs.tenant.id);
-        for (const prod of realWs.products) {
-          const rec = toFirestoreInventoryDoc(fbUser.uid, docTenantId, prod);
-          const ref = doc(
-            db,
-            `users/${fbUser.uid}/tenants/${docTenantId}/products`,
-            normalizeFirestoreDocId(prod.id)
-          );
-          const snap = await getDoc(ref);
-          await setDoc(
-            ref,
-            {
-              ...rec,
-              ...(snap.exists() ? {} : { createdAt: serverTimestamp() }),
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-        for (const ord of realWs.orders) {
-          const rec = toFirestoreOrderDoc(fbUser.uid, docTenantId, ord);
-          const ref = doc(
-            db,
-            `users/${fbUser.uid}/tenants/${docTenantId}/orders`,
-            normalizeFirestoreDocId(ord.id)
-          );
-          const snap = await getDoc(ref);
-          await setDoc(
-            ref,
-            {
-              ...rec,
-              ...(snap.exists() ? {} : { createdAt: serverTimestamp() }),
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-        setSession((prev) => ({
-          ...prev,
-          firebaseUid: fbUser.uid,
-          authProvider: 'FIREBASE_GOOGLE',
-        }));
-      }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: mapFirebaseAuthError(err) };
-    } finally {
-      setAuthLoading(false);
-    }
-  }, [activeTenantId, syncWorkspaceToFirestore, workspaces]);
-
-  const signOutUser = useCallback(async () => {
-    await signOut(auth);
-    setSyncStatus('local');
-  }, []);
-
   const loginAsMaster = useCallback(
     async (email: string, password: string): Promise<{ ok: boolean; error?: string }> => {
       try {
@@ -2183,9 +1429,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           phone: nextPhone,
         }));
         void syncCustomerToServer(session.token, updated);
-        if (user) {
-          void syncManagedCustomerToFirestore(user, updated);
-        }
         return { ok: true };
       }
 
@@ -2199,7 +1442,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }));
       return { ok: true };
     },
-    [customers, session, syncCustomerToServer, syncManagedCustomerToFirestore, user]
+    [customers, session, syncCustomerToServer]
   );
 
   const logoutSession = useCallback(async () => {
@@ -2223,10 +1466,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore if Better Auth is unconfigured
     }
-    if (user) {
-      await signOut(auth);
-    }
-  }, [user]);
+  }, []);
 
   const completeCustomerOnboarding: AppContextValue['completeCustomerOnboarding'] = useCallback(
     async (input) => {
@@ -2262,14 +1502,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         token: data.token,
       });
       setSyncStatus('synced');
-
-      if (user) {
-        void syncWorkspaceToFirestore(user, data.workspace);
-        void syncManagedCustomerToFirestore(user, data.customer);
-      }
       return { customer: data.customer, workspace: data.workspace };
     },
-    [syncManagedCustomerToFirestore, syncWorkspaceToFirestore, user]
+    []
   );
 
   const updateManagedCustomer: AppContextValue['updateManagedCustomer'] = useCallback(
@@ -2314,12 +1549,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return nextWs;
           })
         );
-        if (user) {
-          void syncManagedCustomerToFirestore(user, custSnapshot);
-        }
       }
     },
-    [session.token, syncCustomerToServer, syncManagedCustomerToFirestore, syncWorkspaceToServer, user]
+    [session.token, syncCustomerToServer, syncWorkspaceToServer]
   );
 
   const deactivateManagedCustomer = useCallback(
@@ -2350,12 +1582,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return nextWs;
           })
         );
-        if (user) {
-          void syncManagedCustomerToFirestore(user, snap);
-        }
       }
     },
-    [session.token, syncCustomerToServer, syncManagedCustomerToFirestore, syncWorkspaceToServer, user]
+    [session.token, syncCustomerToServer, syncWorkspaceToServer]
   );
 
   const reactivateManagedCustomer = useCallback(
@@ -2386,12 +1615,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return nextWs;
           })
         );
-        if (user) {
-          void syncManagedCustomerToFirestore(user, snap);
-        }
       }
     },
-    [session.token, syncCustomerToServer, syncManagedCustomerToFirestore, syncWorkspaceToServer, user]
+    [session.token, syncCustomerToServer, syncWorkspaceToServer]
   );
 
   const activeCustomer = useMemo(() => {
@@ -2454,14 +1680,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (session.token || (typeof navigator !== 'undefined' && !navigator.onLine)) {
             void syncWorkspaceToServer(session.token, target);
           }
-          if (user) {
-            void syncWorkspaceToFirestore(user, target);
-          }
         }
         return next;
       });
     },
-    [session.token, syncWorkspaceToFirestore, syncWorkspaceToServer, user]
+    [session.token, syncWorkspaceToServer]
   );
 
   const switchTenant = useCallback(
@@ -2544,25 +1767,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      if (user) {
-        void upsertOrderToFirestore(ws.tenant.id, result.order);
-        const oldMap = new Map(ws.products.map((p) => [p.id, p.stockQty]));
-        for (const p of result.updatedProducts) {
-          if (oldMap.get(p.id) !== p.stockQty) {
-            void upsertProductToFirestore(ws.tenant.id, p);
-          }
-        }
-      }
-
       return result.order;
     },
     [
       activeWorkspace,
       makeActivityLog,
+      regionalTaxRegistry,
       updateWorkspaceById,
-      upsertOrderToFirestore,
-      upsertProductToFirestore,
-      user,
     ]
   );
 
@@ -2601,13 +1812,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      if (user) {
-        void upsertOrderToFirestore(ws.tenant.id, result.order);
-      }
-
       return result.order;
     },
-    [updateWorkspaceById, upsertOrderToFirestore, user, workspaces]
+    [regionalTaxRegistry, updateWorkspaceById, workspaces]
   );
 
   const finalizeQrOrderViaWebhook: AppContextValue['finalizeQrOrderViaWebhook'] = useCallback(
@@ -2672,16 +1879,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         journalEntries: [...newJournals, ...prev.journalEntries],
       }));
 
-      if (user) {
-        void upsertOrderToFirestore(ws.tenant.id, paidOrder);
-        const oldMap = new Map(ws.products.map((p) => [p.id, p.stockQty]));
-        for (const p of checkoutStock.updatedProducts) {
-          if (oldMap.get(p.id) !== p.stockQty) {
-            void upsertProductToFirestore(ws.tenant.id, p);
-          }
-        }
-      }
-
       // Trigger Cashier Auto-Print Queue
       if (ws.tenant.settings.autoPrintQrOrders) {
         setAutoPrintQueue((q) => [
@@ -2697,7 +1894,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       return paidOrder;
     },
-    [updateWorkspaceById, upsertOrderToFirestore, upsertProductToFirestore, user, workspaces]
+    [updateWorkspaceById, workspaces]
   );
 
   const dismissAutoPrint = useCallback((id: string) => {
@@ -2716,22 +1913,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const updateKitchenStatus = useCallback(
     (tenantId: string, orderId: string, status: KitchenStatus) => {
-      const targetWs = workspaces.find((w) => w.tenant.id === tenantId);
-      const existingOrder = targetWs?.orders.find((o) => o.id === orderId);
       updateWorkspaceById(tenantId, (prev) => ({
         ...prev,
         orders: prev.orders.map((o) => (o.id === orderId ? { ...o, kitchenStatus: status } : o)),
       }));
-      if (user && existingOrder) {
-        void upsertOrderToFirestore(tenantId, { ...existingOrder, kitchenStatus: status });
-      }
       void fetch(`/api/kitchen/tickets/${orderId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kitchenStatus: status }),
       }).catch(() => {});
     },
-    [updateWorkspaceById, upsertOrderToFirestore, user, workspaces]
+    [updateWorkspaceById]
   );
 
   const recordOperationalExpense: AppContextValue['recordOperationalExpense'] = useCallback(
@@ -3498,21 +2690,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ],
       }));
 
-      if (user) {
-        for (const item of po.items) {
-          const updatedProd = updatedProductMap.get(item.productId);
-          if (updatedProd) {
-            void upsertProductToFirestore(ws.tenant.id, updatedProd);
-          }
-        }
-      }
-
       return {
         itemCount: newMovements.length,
         totalPurchaseValue: totalPurchase.toFixed(4),
       };
     },
-    [activeWorkspace, makeActivityLog, session.fullName, updateWorkspaceById, upsertProductToFirestore, user]
+    [activeWorkspace, makeActivityLog, session.fullName, updateWorkspaceById]
   );
 
   const updateReceiptDesign: AppContextValue['updateReceiptDesign'] = useCallback(
@@ -3633,25 +2816,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ...(prev.activityLogs ?? []),
         ],
       }));
-      if (user) {
-        void upsertProductToFirestore(ws.tenant.id, created);
-      }
       return created;
     },
-    [activeWorkspace, makeActivityLog, session.fullName, updateWorkspaceById, upsertProductToFirestore, user]
+    [activeWorkspace, makeActivityLog, session.fullName, updateWorkspaceById]
   );
 
   const updateProduct: AppContextValue['updateProduct'] = useCallback(
     (productId, patch) => {
       const ws = activeWorkspace;
       const existing = ws.products.find((p) => p.id === productId);
-      let updatedTarget: Product | null = null;
       updateWorkspaceById(ws.tenant.id, (prev) => {
-        const updatedProducts = prev.products.map((p) => {
-          if (p.id !== productId) return p;
-          updatedTarget = { ...p, ...patch };
-          return updatedTarget;
-        });
+        const updatedProducts = prev.products.map((p) =>
+          p.id !== productId ? p : { ...p, ...patch }
+        );
         // If a raw material's average cost changed, automatically recalculate dependent menu HPP
         const touched = updatedProducts.find((p) => p.id === productId);
         const logEntry = makeActivityLog(
@@ -3683,11 +2860,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           activityLogs: [logEntry, ...(prev.activityLogs ?? [])],
         };
       });
-      if (user && existing) {
-        void upsertProductToFirestore(ws.tenant.id, updatedTarget ?? { ...existing, ...patch });
-      }
     },
-    [activeWorkspace, makeActivityLog, updateWorkspaceById, upsertProductToFirestore, user]
+    [activeWorkspace, makeActivityLog, updateWorkspaceById]
   );
 
   const deleteProduct = useCallback(
@@ -3709,11 +2883,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ...(prev.activityLogs ?? []),
         ],
       }));
-      if (user) {
-        void deleteProductFromFirestore(ws.tenant.id, productId);
-      }
     },
-    [activeWorkspace, deleteProductFromFirestore, makeActivityLog, updateWorkspaceById, user]
+    [activeWorkspace, makeActivityLog, updateWorkspaceById]
   );
 
   const restockInventoryItem: AppContextValue['restockInventoryItem'] = useCallback(
@@ -3801,14 +2972,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
       });
 
-      if (user) {
-        void upsertProductToFirestore(ws.tenant.id, {
-          ...target,
-          stockQty: calc.newQty,
-          costPriceAvg: calc.newAvgCost,
-        });
-      }
-
       return calc;
     },
     [
@@ -3816,8 +2979,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       makeActivityLog,
       session.fullName,
       updateWorkspaceById,
-      upsertProductToFirestore,
-      user,
     ]
   );
 
@@ -3871,21 +3032,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ...(prev.activityLogs ?? []),
         ],
       }));
-
-      if (user) {
-        void upsertProductToFirestore(ws.tenant.id, {
-          ...target,
-          stockQty: actualQty.toFixed(4),
-        });
-      }
     },
     [
       activeWorkspace,
       makeActivityLog,
       session.fullName,
       updateWorkspaceById,
-      upsertProductToFirestore,
-      user,
     ]
   );
 
@@ -3948,15 +3100,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ],
       }));
 
-      if (user) {
-        for (const p of ws.products) {
-          const nextQty = updatedQtyMap.get(p.id);
-          if (nextQty !== undefined) {
-            void upsertProductToFirestore(ws.tenant.id, { ...p, stockQty: nextQty });
-          }
-        }
-      }
-
       return {
         adjustedCount: preview.changedCount,
         netValuationDelta: preview.netValuationDelta,
@@ -3968,8 +3111,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       makeActivityLog,
       session.fullName,
       updateWorkspaceById,
-      upsertProductToFirestore,
-      user,
     ]
   );
 
@@ -6237,16 +5378,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value: AppContextValue = {
     route,
     navigate,
-    user,
-    authReady,
-    authLoading,
-    realtimeInventoryCount: inventoryHook.items.length,
-    realtimeOrderCount: ordersHook.items.length,
-    signInWithGoogle,
-    signInWithFirebaseEmail,
-    signUpWithFirebaseEmail,
-    linkActiveWorkspaceToGoogleCloud,
-    signOutUser,
     workspaces,
     visibleWorkspaces,
     activeTenantId: activeWorkspace.tenant.id,

@@ -74,37 +74,53 @@ describe('Universal S3 Storage Adapter — validation & key partitioning', () =>
     assert.equal(key.includes('..'), false);
   });
 
-  it('resolves S3_* config and falls back to R2_* aliases seamlessly', () => {
+  it('resolves Neon Object Storage AWS_* env vars with forcePathStyle and rejects placeholders', () => {
     const emptyEnv: NodeJS.ProcessEnv = {};
     assert.equal(isS3StorageConfigured(emptyEnv), false);
 
-    const r2Env: NodeJS.ProcessEnv = {
-      R2_ACCOUNT_ID: 'acc123',
-      R2_BUCKET_NAME: 'kasirakun-media',
-      R2_ACCESS_KEY_ID: 'key123',
-      R2_SECRET_ACCESS_KEY: 'secret456',
-      R2_PUBLIC_BASE_URL: 'https://cdn.kasirakun.id/',
+    // Placeholders from .env.example should be treated as unconfigured
+    const placeholderEnv: NodeJS.ProcessEnv = {
+      AWS_ENDPOINT_URL_S3: 'https://br-xxxx.storage.c-1.ap-southeast-1.aws.neon.tech',
+      AWS_REGION: 'ap-southeast-1',
+      AWS_ACCESS_KEY_ID: 'nak_live_xxxx',
+      AWS_SECRET_ACCESS_KEY: 'nsk_live_xxxx',
+      S3_BUCKET: 'kasirakun-assets',
     };
-    const cfg = resolveS3StorageConfig(r2Env);
-    assert.ok(cfg);
-    assert.equal(cfg.endpoint, 'https://acc123.r2.cloudflarestorage.com');
-    assert.equal(cfg.region, 'auto');
-    assert.equal(cfg.bucket, 'kasirakun-media');
+    assert.equal(isS3StorageConfigured(placeholderEnv), false);
+
+    // Real Neon Object Storage env vars
+    const neonEnv: NodeJS.ProcessEnv = {
+      AWS_ENDPOINT_URL_S3: 'https://br-cool-darkness-1234.storage.c-1.ap-southeast-1.aws.neon.tech',
+      AWS_REGION: 'ap-southeast-1',
+      AWS_ACCESS_KEY_ID: 'nak_live_real123456',
+      AWS_SECRET_ACCESS_KEY: 'nsk_live_realsecret789',
+      S3_BUCKET: 'kasirakun-assets',
+    };
+    const neonCfg = resolveS3StorageConfig(neonEnv);
+    assert.ok(neonCfg);
     assert.equal(
-      buildPublicObjectUrl(cfg, 'tenant-1/products/1-abc.jpg'),
-      'https://cdn.kasirakun.id/tenant-1/products/1-abc.jpg',
+      neonCfg.endpoint,
+      'https://br-cool-darkness-1234.storage.c-1.ap-southeast-1.aws.neon.tech',
+    );
+    assert.equal(neonCfg.region, 'ap-southeast-1');
+    assert.equal(neonCfg.bucket, 'kasirakun-assets');
+    assert.equal(neonCfg.forcePathStyle, true);
+    assert.equal(
+      buildPublicObjectUrl(neonCfg, 'tenant-1/products/1-abc.jpg'),
+      'https://br-cool-darkness-1234.storage.c-1.ap-southeast-1.aws.neon.tech/kasirakun-assets/tenant-1/products/1-abc.jpg',
     );
 
-    const biznetEnv: NodeJS.ProcessEnv = {
+    // Backward-compatible S3_* fallback
+    const legacyS3Env: NodeJS.ProcessEnv = {
       S3_ENDPOINT: 'https://nos.wjv-1.neo.id',
       S3_REGION: 'idn',
       S3_BUCKET: 'umkm-assets',
       S3_ACCESS_KEY_ID: 'neo-key',
       S3_SECRET_ACCESS_KEY: 'neo-secret',
     };
-    const biznetCfg = resolveS3StorageConfig(biznetEnv);
-    assert.ok(biznetCfg);
-    assert.equal(biznetCfg.forcePathStyle, true);
+    const legacyCfg = resolveS3StorageConfig(legacyS3Env);
+    assert.ok(legacyCfg);
+    assert.equal(legacyCfg.forcePathStyle, true);
   });
 
   it('returns graceful unconfigured response instead of crashing when S3 env is missing', async () => {

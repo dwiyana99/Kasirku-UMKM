@@ -124,10 +124,6 @@ export function getProviderRegisterLink(provider: PaymentGatewayProvider): strin
   switch (provider) {
     case 'MIDTRANS':
       return 'https://dashboard.midtrans.com/register';
-    case 'DUITKU':
-      return 'https://passport.duitku.com/register';
-    case 'TRIPAY':
-      return 'https://tripay.co.id/register';
     case 'MANUAL_ONLY':
       return 'https://kasirakun.id/panduan-transfer-manual';
     default:
@@ -139,10 +135,6 @@ export function getProviderDisplayName(provider: PaymentGatewayProvider): string
   switch (provider) {
     case 'MIDTRANS':
       return 'Midtrans';
-    case 'DUITKU':
-      return 'Duitku';
-    case 'TRIPAY':
-      return 'Tripay';
     case 'MANUAL_ONLY':
       return 'Transfer Manual (Kode Unik)';
     case 'SIMULATOR':

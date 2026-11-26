@@ -148,7 +148,7 @@ export const ADDON_DEFINITIONS: AddOnDefinition[] = [
     name: 'Pembayaran Non-Tunai (QRIS Dinamis, E-Wallet, VA & Layar Pelanggan)',
     shortLabel: 'Bayar Non-Tunai',
     description:
-      'Terima QRIS Dinamis, GoPay, ShopeePay, DANA, OVO, Virtual Account & Transfer Bank via Midtrans/Duitku/Tripay + Layar Pelanggan kasir otomatis.',
+      'Terima QRIS Dinamis, GoPay, ShopeePay, DANA, OVO, Virtual Account & Transfer Bank via Midtrans + Layar Pelanggan kasir otomatis.',
     monthlyPrice: '25000.0000',
     includedInPlans: ['BASIC', 'PRO', 'EXPERT'],
   },

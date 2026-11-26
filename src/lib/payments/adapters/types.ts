@@ -1,5 +1,5 @@
 /**
- * Payment Gateway Adapter Pattern Types (Midtrans, Duitku, Tripay, Simulator)
+ * Payment Gateway Adapter Pattern Types (Midtrans, Simulator, Manual)
  */
 
 import type {

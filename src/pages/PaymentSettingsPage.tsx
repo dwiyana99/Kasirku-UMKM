@@ -49,7 +49,7 @@ import type {
 } from '../types/domain';
 
 interface ClientPaymentConfig extends TenantPaymentConfig {
-  webhookUrls?: Record<'MIDTRANS' | 'DUITKU' | 'TRIPAY', string>;
+  webhookUrls?: Record<'MIDTRANS', string>;
 }
 
 const PROVIDER_CARDS: Array<{
@@ -62,23 +62,9 @@ const PROVIDER_CARDS: Array<{
   {
     code: 'MIDTRANS',
     title: 'Midtrans',
-    badge: 'Populer & GoPay Direct',
+    badge: 'Resmi & Populer',
     desc: 'QRIS Dinamis, Direct GoPay App-to-App, ShopeePay, dan VA BCA/Mandiri/BRI/BNI/Permata.',
-    bestFor: 'Restoran, Kedai Makan, Retail & Barbershop',
-  },
-  {
-    code: 'DUITKU',
-    title: 'Duitku',
-    badge: 'Lengkap DANA & OVO Push',
-    desc: 'QRIS Dinamis, Direct DANA, OVO Push-to-Pay (notifikasi langsung ke HP), dan VA Bank.',
-    bestFor: 'UMKM Perorangan (KTP) & Self-Order',
-  },
-  {
-    code: 'TRIPAY',
-    title: 'Tripay',
-    badge: 'Daftar Cepat UMKM',
-    desc: 'Favorit UMKM Indonesia dengan QRIS, E-Wallet, dan Virtual Account semua bank besar.',
-    bestFor: 'Warung, Toko Retail, Kost & Freelance',
+    bestFor: 'Restoran, Kedai Makan, Retail, Kost & Jasa UMKM',
   },
   {
     code: 'MANUAL_ONLY',
@@ -99,18 +85,18 @@ const PROVIDER_CARDS: Array<{
 const TUTORIAL_STEPS = [
   {
     step: 1,
-    title: 'Daftar Akun Merchant Resmi',
-    desc: 'Daftar sendiri di website resmi Midtrans, Duitku, atau Tripay memakai KTP/NIB & rekening pencairan milik Anda. Dana penjualan langsung cair ke rekening Anda, bukan ke KasirAkun.',
+    title: 'Daftar Akun Merchant Midtrans',
+    desc: 'Daftar di dashboard resmi Midtrans memakai KTP/NIB & rekening pencairan milik Anda. Dana penjualan langsung cair ke rekening Anda, bukan ke KasirAkun.',
   },
   {
     step: 2,
-    title: 'Salin API Key dari Dashboard Provider',
-    desc: 'Setelah akun aktif, buka menu Settings → Access Keys / API Keys di dashboard provider, lalu salin Merchant Code, Server Key / API Key, dan Client/Private Key.',
+    title: 'Salin Server Key & Client Key',
+    desc: 'Setelah akun aktif, buka menu Settings → Access Keys di dashboard Midtrans, lalu salin Server Key dan Client Key.',
   },
   {
     step: 3,
     title: 'Tempel URL Webhook Otomatis',
-    desc: 'Salin URL Webhook di bawah ini lalu tempel ke menu Notification / Callback URL di dashboard provider agar setiap pembayaran QRIS/VA otomatis lunas dan masuk jurnal.',
+    desc: 'Salin URL Webhook di bawah ini lalu tempel ke menu Settings → Configuration → Payment Notification URL di dashboard Midtrans agar QRIS/VA otomatis lunas.',
   },
   {
     step: 4,
@@ -173,7 +159,7 @@ export const PaymentSettingsPage: React.FC = () => {
   // Assistance Request Modal state
   const [assistModalOpen, setAssistModalOpen] = useState(false);
   const [assistRequests, setAssistRequests] = useState<PaymentSetupAssistanceRequest[]>([]);
-  const [assistProvider, setAssistProvider] = useState<'MIDTRANS' | 'DUITKU' | 'TRIPAY' | 'MANUAL_ONLY'>('MIDTRANS');
+  const [assistProvider, setAssistProvider] = useState<'MIDTRANS' | 'MANUAL_ONLY'>('MIDTRANS');
   const [assistHasAccount, setAssistHasAccount] = useState(false);
   const [assistBankName, setAssistBankName] = useState('BCA');
   const [assistAccountHolder, setAssistAccountHolder] = useState(session.fullName || '');
@@ -330,7 +316,7 @@ export const PaymentSettingsPage: React.FC = () => {
     }
   };
 
-  const handleCopyWebhook = async (key: 'MIDTRANS' | 'DUITKU' | 'TRIPAY', url: string) => {
+  const handleCopyWebhook = async (key: 'MIDTRANS', url: string) => {
     try {
       await navigator.clipboard.writeText(url);
       setCopiedWebhook(key);
@@ -481,11 +467,10 @@ export const PaymentSettingsPage: React.FC = () => {
     );
   }
 
-  const activeWebhookProvider: 'MIDTRANS' | 'DUITKU' | 'TRIPAY' =
-    provider === 'DUITKU' || provider === 'TRIPAY' ? provider : 'MIDTRANS';
+  const activeWebhookProvider = 'MIDTRANS' as const;
   const activeWebhookUrl =
-    config?.webhookUrls?.[activeWebhookProvider] ||
-    `${window.location.origin}/api/webhooks/payment/${activeWebhookProvider.toLowerCase()}/${tenant.id}`;
+    config?.webhookUrls?.MIDTRANS ||
+    `${window.location.origin}/api/webhooks/payment/midtrans/${tenant.id}`;
 
   return (
     <div className="space-y-6 pb-10">
@@ -507,9 +492,8 @@ export const PaymentSettingsPage: React.FC = () => {
             </span>
           </div>
           <p className="text-sm text-slate-600">
-            Hubungkan <strong>Midtrans</strong>, <strong>Duitku</strong>, atau <strong>Tripay</strong>{' '}
-            milik toko Anda sendiri agar QRIS Dinamis, GoPay, DANA, OVO, ShopeePay, dan VA otomatis
-            lunas &amp; cair langsung ke rekening Anda.
+            Hubungkan akun <strong>Midtrans</strong> milik toko Anda sendiri agar QRIS Dinamis,
+            GoPay, ShopeePay, dan Virtual Account otomatis lunas &amp; cair langsung ke rekening Anda.
           </p>
         </div>
 
@@ -663,7 +647,7 @@ export const PaymentSettingsPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {PROVIDER_CARDS.map((card) => {
               const selected = provider === card.code;
               return (
@@ -712,24 +696,9 @@ export const PaymentSettingsPage: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {(provider === 'DUITKU' || provider === 'TRIPAY') && (
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Merchant Code
-                    </label>
-                    <input
-                      type="text"
-                      value={merchantCode}
-                      onChange={(e) => setMerchantCode(e.target.value)}
-                      placeholder={provider === 'DUITKU' ? 'Contoh: DS12345' : 'Contoh: T12345'}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                    />
-                  </div>
-                )}
-
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {provider === 'MIDTRANS' ? 'Server Key' : 'API Key'}
+                    Server Key Midtrans
                     {config?.maskedServerKey && (
                       <span className="ml-2 font-mono font-normal text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
                         Tersimpan: {config.maskedServerKey}
@@ -743,9 +712,7 @@ export const PaymentSettingsPage: React.FC = () => {
                     placeholder={
                       config?.hasServerKey
                         ? 'Biarkan kosong jika tidak ingin mengganti kunci yang tersimpan'
-                        : provider === 'MIDTRANS'
-                          ? 'SB-Mid-server-xxxx atau Mid-server-xxxx'
-                          : 'Masukkan API Key rahasia dari dashboard provider'
+                        : 'SB-Mid-server-xxxx atau Mid-server-xxxx'
                     }
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                   />
@@ -754,7 +721,7 @@ export const PaymentSettingsPage: React.FC = () => {
                 {provider === 'MIDTRANS' && (
                   <div className="sm:col-span-2">
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Client Key
+                      Client Key Midtrans
                       {config?.maskedClientKey && (
                         <span className="ml-2 font-mono font-normal text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
                           Tersimpan: {config.maskedClientKey}
@@ -766,26 +733,6 @@ export const PaymentSettingsPage: React.FC = () => {
                       value={clientKeyInput}
                       onChange={(e) => setClientKeyInput(e.target.value)}
                       placeholder="SB-Mid-client-xxxx atau Mid-client-xxxx"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                    />
-                  </div>
-                )}
-
-                {provider === 'TRIPAY' && (
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Private Key (Untuk Verifikasi Webhook HMAC-SHA256)
-                      {config?.maskedPrivateKey && (
-                        <span className="ml-2 font-mono font-normal text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                          Tersimpan: {config.maskedPrivateKey}
-                        </span>
-                      )}
-                    </label>
-                    <input
-                      type="password"
-                      value={privateKeyInput}
-                      onChange={(e) => setPrivateKeyInput(e.target.value)}
-                      placeholder="Masukkan Private Key Tripay"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                     />
                   </div>
@@ -1059,7 +1006,7 @@ export const PaymentSettingsPage: React.FC = () => {
               Rekonsiliasi Pencairan Dana Settlement (H+1 / H+2)
             </h2>
             <p className="text-xs text-slate-600 mt-0.5">
-              Saat dana QRIS/VA dari Midtrans/Duitku/Tripay masuk ke rekening bank Anda, catat di sini
+              Saat dana QRIS/VA dari Midtrans masuk ke rekening bank Anda, catat di sini
               agar saldo otomatis pindah dari <strong>Piutang PG (1103)</strong> ke{' '}
               <strong>Bank Utama (1102)</strong>.
             </p>
@@ -1211,7 +1158,7 @@ export const PaymentSettingsPage: React.FC = () => {
                   Minta Tolong Master Admin Bantu Setting
                 </h3>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Bingung daftar Midtrans/Duitku/Tripay atau pasang API Key? Tim kami siap pandu sampai QRIS aktif!
+                  Bingung daftar Midtrans atau pasang API Key? Tim kami siap pandu sampai QRIS aktif!
                 </p>
               </div>
               <button
@@ -1235,7 +1182,7 @@ export const PaymentSettingsPage: React.FC = () => {
                 </p>
                 <p>
                   <strong>JANGAN PERNAH</strong> membagikan foto KTP, PIN ATM, Password m-Banking,
-                  Password login Midtrans/Duitku/Tripay, ataupun <strong>Kode OTP</strong> kepada
+                  Password login Midtrans, ataupun <strong>Kode OTP</strong> kepada
                   siapa pun termasuk Master Admin. Tim kami hanya membantu panduan langkah demi
                   langkah &amp; pemasangan API Key.
                 </p>
@@ -1252,14 +1199,12 @@ export const PaymentSettingsPage: React.FC = () => {
                     value={assistProvider}
                     onChange={(e) =>
                       setAssistProvider(
-                        e.target.value as 'MIDTRANS' | 'DUITKU' | 'TRIPAY' | 'MANUAL_ONLY'
+                        e.target.value as 'MIDTRANS' | 'MANUAL_ONLY'
                       )
                     }
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm"
                   >
                     <option value="MIDTRANS">Midtrans (QRIS + GoPay + VA)</option>
-                    <option value="DUITKU">Duitku (QRIS + DANA + OVO + VA)</option>
-                    <option value="TRIPAY">Tripay (Favorit UMKM)</option>
                     <option value="MANUAL_ONLY">Transfer Manual Kode Unik</option>
                   </select>
                 </div>

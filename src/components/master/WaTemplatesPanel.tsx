@@ -219,7 +219,7 @@ export const WaTemplatesPanel: React.FC<WaTemplatesPanelProps> = ({ authToken })
             Template Pesan WhatsApp Custom
           </h2>
           <p className="text-xs text-slate-600">
-            Atur isi pesan WA profesional untuk panduan aktivasi Midtrans/Duitku/Tripay &amp; persetujuan Demo.
+            Atur isi pesan WA profesional untuk panduan aktivasi Midtrans &amp; persetujuan Demo.
             Klik chip variabel agar otomatis terisi data UMKM saat kirim WA!
           </p>
         </div>

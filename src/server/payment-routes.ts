@@ -1,5 +1,5 @@
 /**
- * Express Routes for Multi-Provider Payment Gateway (Midtrans, Duitku, Tripay, Simulator, Manual),
+ * Express Routes for Payment Gateway (Midtrans, Simulator, Manual),
  * Real-Time Customer Facing Display, Universal Webhook + Double-Entry Ledger Posting,
  * H+1 Settlement Reconciliation, Payment Setup Assistance Queue, and Master Admin Custom WA Templates.
  */
@@ -69,13 +69,13 @@ export interface PaymentRoutesDeps {
   >;
 }
 
-const PROVIDERS_ENUM = ['SIMULATOR', 'MIDTRANS', 'DUITKU', 'TRIPAY', 'MANUAL_ONLY'] as const;
+const PROVIDERS_ENUM = ['SIMULATOR', 'MIDTRANS', 'MANUAL_ONLY'] as const;
 
 function sanitizePaymentConfigForClient(
   config: TenantPaymentConfig,
   originBase: string
 ): Omit<TenantPaymentConfig, 'encryptedServerKey' | 'encryptedClientKey' | 'encryptedPrivateKey'> & {
-  webhookUrls: Record<'MIDTRANS' | 'DUITKU' | 'TRIPAY', string>;
+  webhookUrls: Record<'MIDTRANS', string>;
 } {
   const {
     encryptedServerKey: _es,
@@ -90,8 +90,6 @@ function sanitizePaymentConfigForClient(
     hasPrivateKey: Boolean(config.encryptedPrivateKey),
     webhookUrls: {
       MIDTRANS: `${originBase}/api/webhooks/payment/midtrans/${config.tenantId}`,
-      DUITKU: `${originBase}/api/webhooks/payment/duitku/${config.tenantId}`,
-      TRIPAY: `${originBase}/api/webhooks/payment/tripay/${config.tenantId}`,
     },
   };
 }
@@ -786,10 +784,7 @@ export function mountPaymentAndWaRoutes(app: express.Express, deps: PaymentRoute
       // Graceful fallback to Simulator if live provider selected but keys not filled yet (e.g. Demo mode)
       const hasRequiredLiveKey =
         effectiveProvider === 'SIMULATOR' ||
-        (effectiveProvider === 'MIDTRANS' && Boolean(decrypted.serverKey)) ||
-        (effectiveProvider === 'DUITKU' && Boolean(decrypted.merchantCode && decrypted.serverKey)) ||
-        (effectiveProvider === 'TRIPAY' &&
-          Boolean(decrypted.merchantCode && decrypted.serverKey && decrypted.privateKey));
+        (effectiveProvider === 'MIDTRANS' && Boolean(decrypted.serverKey));
 
       const chosenAdapter = getPaymentAdapter(hasRequiredLiveKey ? effectiveProvider : 'SIMULATOR');
       try {
@@ -1216,7 +1211,7 @@ export function mountPaymentAndWaRoutes(app: express.Express, deps: PaymentRoute
 
   const assistRequestSchema = z.object({
     tenantId: z.string().min(1),
-    preferredProvider: z.enum(['MIDTRANS', 'DUITKU', 'TRIPAY', 'MANUAL_ONLY']),
+    preferredProvider: z.enum(['MIDTRANS', 'MANUAL_ONLY']),
     hasExistingAccount: z.boolean().default(false),
     settlementBankName: z.string().min(2).max(60),
     settlementAccountHolder: z.string().min(2).max(120),

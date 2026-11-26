@@ -80,13 +80,17 @@ export type AddOnModuleCode =
   | 'ADDON_AI_ASSISTANT';
 
 export type PostgresProviderCode = 'CURRENT_LOCAL_FIRESTORE' | 'SUPABASE_POSTGRES' | 'NEON_POSTGRES';
-export type StorageProviderCode = 'CURRENT_LOCAL_FIRESTORE' | 'SUPABASE_STORAGE' | 'CLOUDFLARE_R2';
+export type StorageProviderCode =
+  | 'CURRENT_LOCAL_FIRESTORE'
+  | 'NEON_OBJECT_STORAGE'
+  | 'SUPABASE_STORAGE'
+  | 'CLOUDFLARE_R2';
 
 export interface InfraMigrationConfig {
   activeDbProvider: PostgresProviderCode;
   activeStorageProvider: StorageProviderCode;
   targetDbProvider: 'SUPABASE_POSTGRES' | 'NEON_POSTGRES';
-  targetStorageProvider: 'SUPABASE_STORAGE' | 'CLOUDFLARE_R2';
+  targetStorageProvider: 'NEON_OBJECT_STORAGE' | 'SUPABASE_STORAGE' | 'CLOUDFLARE_R2';
   pgHostPreview: string;
   pgDatabaseName: string;
   pgSslRequired: boolean;

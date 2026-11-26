@@ -2,7 +2,7 @@
  * Client-side product, receipt, and landing image upload helper.
  * - Validates JPG, PNG, or WebP and enforces a strict 3 MB cap matching `/api/upload`.
  * - When online & authenticated, attempts to upload directly to Universal S3 Object Storage
- *   via `POST /api/upload` (Neon Storage / Cloudflare R2 / Biznet Gio NEO).
+ *   via `POST /api/upload` (Neon Object Storage / AWS S3 / MinIO).
  * - If S3 is not yet configured or the device is offline, gracefully falls back to
  *   compressed JPEG DataURL so POS, Catalog, and Landing Page workflows remain unbroken.
  */

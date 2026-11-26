@@ -1226,7 +1226,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
         });
-        const data = (await res.json()) as {
+        const rawText = await res.text();
+        let data: {
           authenticated?: boolean;
           accountScope?: AccountScope;
           email?: string;
@@ -1235,9 +1236,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           customers?: ManagedCustomerAccount[];
           workspaces?: TenantWorkspaceData[];
           error?: string;
-        };
+        } = {};
+        try {
+          data = rawText ? (JSON.parse(rawText) as typeof data) : {};
+        } catch {
+          return {
+            ok: false,
+            error: `Server autentikasi mengembalikan respons tidak valid (HTTP ${res.status}). Pastikan endpoint /api aktif di Vercel.`,
+          };
+        }
         if (!res.ok || !data.authenticated) {
-          return { ok: false, error: data.error || 'Login Master Admin gagal.' };
+          return { ok: false, error: data.error || `Login Master Admin gagal (HTTP ${res.status}).` };
         }
         if (Array.isArray(data.customers)) {
           setCustomers(data.customers);

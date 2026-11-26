@@ -290,7 +290,9 @@ describe('Vercel Serverless Runtime Compatibility', () => {
     process.env.KASIRAKUN_SERVERLESS_ONLY = '1';
     process.env.KASIRAKUN_DATA_ROOT = tempRoot;
     const http = await import('node:http');
-    const { default: vercelHandler } = await import('../../api/index.ts');
+    const { default: vercelIndexHandler } = await import('../../api/index.ts');
+    const { default: vercelHandler } = await import('../../api/[...route].ts');
+    assert.equal(typeof vercelIndexHandler, 'function');
 
     const srv = http.createServer((req, res) => {
       void vercelHandler(req, res);

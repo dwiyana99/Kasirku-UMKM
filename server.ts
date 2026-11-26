@@ -2628,6 +2628,10 @@ export async function createExpressApp(
   });
   app.use(createSubdomainRewriteMiddleware());
 
+  app.all('/api/*', (_req, res) => {
+    return res.status(404).json({ error: 'Endpoint API tidak ditemukan.' });
+  });
+
   const isProd = process.env.NODE_ENV === 'production';
   const shouldEnableVite = options.enableVite ?? (!isProd && !process.env.VERCEL);
   const shouldServeStatic = options.serveStatic ?? (isProd && !process.env.VERCEL);

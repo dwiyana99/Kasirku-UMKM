@@ -208,7 +208,7 @@ function buildPublicLandingPayload(params: {
 
 function appendAuditLogToWorkspace(
   tenantDb: PartitionedTenantDatabase,
-  scope: 'DEMO' | 'REAL',
+  scope: 'DEMO' | 'REAL' | 'SIMULATION',
   ownerAccountId: string,
   workspace: TenantWorkspaceData,
   log: Omit<AuditLog, 'id' | 'createdAt'>

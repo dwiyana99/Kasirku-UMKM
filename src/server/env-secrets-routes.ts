@@ -16,6 +16,12 @@ import {
   encryptNeonVaultSecret,
   maskSecretKey,
 } from '../lib/payments/crypto.ts';
+import {
+  buildEnvironmentDiagnosticReport,
+  HOST_SPECIFIC_ENV_KEYS,
+  isPlaceholderEnvValue,
+  type DiagnosticLayerEntry,
+} from '../lib/configSync.ts';
 import { resetBetterAuthCache } from '../lib/auth.ts';
 import { getPrismaClient, resetPrismaClientCache } from '../lib/prisma.ts';
 import { resetS3ClientCache } from '../lib/storage/s3-client.ts';
@@ -333,22 +339,7 @@ interface MountEnvSecretsDeps {
   saveJsonFile: (filePath: string, data: unknown) => void;
 }
 
-const HOST_SPECIFIC_KEYS = new Set(['BETTER_AUTH_URL']);
-
-function isPlaceholderEnvValue(val: string): boolean {
-  const s = val.trim();
-  if (!s) return true;
-  return (
-    s.includes('YOUR_') ||
-    s.includes('USER:PASSWORD') ||
-    s.includes('REPLACE_WITH_') ||
-    s.includes('PASSWORD@ep-xxx') ||
-    s.includes('<PASSWORD>') ||
-    s.includes('<ISI_') ||
-    s === 'nak_live_xxxx' ||
-    s === 'nsk_live_xxxx'
-  );
-}
+const HOST_SPECIFIC_KEYS = HOST_SPECIFIC_ENV_KEYS;
 
 export function parseBulkEnvText(
   rawText: string,
@@ -816,6 +807,99 @@ export function mountMasterEnvSecretsRoutes(
       neonVaultSync: syncInfo,
       lastCheckedAt: new Date().toISOString(),
     });
+  });
+
+  // GET /api/master/env-secrets/diagnostic — Transparent side-by-side comparison across Runtime, Neon Vault, and Local Vault
+  app.get('/api/master/env-secrets/diagnostic', async (req, res) => {
+    const session = extractSessionFromRequest(req);
+    if (!session || session.role !== 'MASTER_ADMIN') {
+      return res.status(403).json({
+        error: 'Hanya Master Admin yang dapat menjalankan Environment Diagnostic.',
+      });
+    }
+
+    const vault = readVault();
+    const localVaultEntries: Record<string, DiagnosticLayerEntry> = {};
+    for (const [k, rec] of Object.entries(vault)) {
+      try {
+        const { plain } = decryptVaultRecord(rec);
+        if (plain && !isPlaceholderEnvValue(plain)) {
+          localVaultEntries[k] = {
+            value: plain,
+            updatedAt: rec.updatedAt,
+            updatedBy: rec.updatedBy,
+          };
+        }
+      } catch {
+        // Ignore unreadable entries
+      }
+    }
+
+    const neonVaultEntries: Record<string, DiagnosticLayerEntry> = {};
+    let neonConnected = false;
+    const prisma = getPrismaClient();
+    const activeDbUrl = (process.env.DATABASE_URL || '').trim();
+    if (prisma && activeDbUrl && !isPlaceholderEnvValue(activeDbUrl)) {
+      try {
+        const neonRows = await prisma.masterEnvVaultItem.findMany();
+        neonConnected = true;
+        for (const row of neonRows) {
+          try {
+            const { plaintext } = decryptNeonVaultSecret(row.encryptedValue, activeDbUrl);
+            if (plaintext && !isPlaceholderEnvValue(plaintext)) {
+              neonVaultEntries[row.key] = {
+                value: plaintext,
+                updatedAt: row.updatedAt.toISOString(),
+                updatedBy: row.updatedBy,
+              };
+            }
+          } catch {
+            // Skip rows with incompatible cipher
+          }
+        }
+      } catch {
+        neonConnected = false;
+      }
+    }
+
+    const standardSet = new Set(STANDARD_ENV_CATALOG.map((c) => c.key));
+    const descriptors = [
+      ...STANDARD_ENV_CATALOG.map((c) => ({
+        key: c.key,
+        label: c.label,
+        serviceName: c.serviceName,
+        category: c.category,
+        isSecret: c.isSecret,
+      })),
+      ...Array.from(
+        new Set([...Object.keys(localVaultEntries), ...Object.keys(neonVaultEntries)]),
+      )
+        .filter((k) => !standardSet.has(k))
+        .map((k) => ({
+          key: k,
+          label: vault[k]?.label || k,
+          serviceName: vault[k]?.serviceName || 'Custom Key',
+          category: vault[k]?.category || 'SECURITY_CUSTOM',
+          isSecret: vault[k]?.isSecret ?? true,
+        })),
+    ];
+
+    const requestHost =
+      (typeof req.headers['x-forwarded-host'] === 'string'
+        ? req.headers['x-forwarded-host'].split(',')[0].trim()
+        : '') ||
+      (typeof req.headers.host === 'string' ? req.headers.host : '');
+
+    const report = buildEnvironmentDiagnosticReport({
+      descriptors,
+      runtimeEnv: process.env,
+      neonVaultEntries,
+      localVaultEntries,
+      neonConnected,
+      requestHost,
+    });
+
+    return res.status(200).json(report);
   });
 
   // PUT /api/master/env-secrets — Save/update standard or custom key, encrypt AES-256-GCM, and auto-sync to process.env + Neon

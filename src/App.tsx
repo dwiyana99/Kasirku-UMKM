@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { IdleTimeoutGuard } from './components/IdleTimeoutGuard';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './pages/LandingPage';
@@ -270,6 +271,7 @@ export default function App() {
         <Suspense fallback={<RouteLoadingFallback />}>
           <AppRouter />
         </Suspense>
+        <IdleTimeoutGuard />
         <OfflineIndicator />
       </AppProvider>
     </ErrorBoundary>

@@ -118,6 +118,9 @@ export interface ProvisionOnboardedCustomerInput {
   invoice: SubscriptionInvoice;
   fullName: string;
   email: string;
+  username?: string;
+  accountScope?: 'REAL' | 'SIMULATION';
+  idleTimeoutMinutes?: number;
   passwordDemo: string;
   phone: string;
   businessName: string;
@@ -155,16 +158,20 @@ export function provisionOnboardedCustomer(
 
   const now = new Date().toISOString();
   const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  const tenantId = `real-tnt-${suffix}`;
-  const customerId = `real-cust-${suffix}`;
-  const slug = `${slugifyBusinessName(input.businessName)}-${suffix.slice(-4)}`;
+  const targetScope: 'REAL' | 'SIMULATION' =
+    input.accountScope === 'SIMULATION' ? 'SIMULATION' : 'REAL';
+  const tenantId = targetScope === 'SIMULATION' ? `sim-tnt-${suffix}` : `real-tnt-${suffix}`;
+  const customerId = targetScope === 'SIMULATION' ? `cust-sim-${suffix}` : `real-cust-${suffix}`;
+  const slug = `${targetScope === 'SIMULATION' ? 'sim-' : ''}${slugifyBusinessName(input.businessName)}-${suffix.slice(-4)}`;
   const activeModules = normalizeSelectedModules(input.invoice.selectedModules);
   const effectivePlan = input.invoice.planCode ?? 'BASIC';
   const effectiveAddOns = input.invoice.selectedAddOns ?? [];
 
   const pricing = calculateSubscriptionPricing(activeModules, input.invoice.billingCycle);
   const monthlyMrr =
-    input.invoice.billingCycle === 'ANNUAL'
+    targetScope === 'SIMULATION'
+      ? '0.0000'
+      : input.invoice.billingCycle === 'ANNUAL'
       ? new Decimal(input.invoice.subtotalAmount || pricing.subtotal)
           .div(12)
           .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
@@ -246,25 +253,32 @@ export function provisionOnboardedCustomer(
     tenantId,
   }));
 
-  const capitalDec = Decimal.max(new Decimal('1000000'), new Decimal(input.initialCapital || '15000000'));
+  const rawCapital = String(input.initialCapital ?? '').trim();
+  const parsedCapital = rawCapital === '' ? new Decimal(0) : new Decimal(rawCapital || '0');
+  const capitalDec = parsedCapital.greaterThan(0) ? parsedCapital : new Decimal(0);
   const cashPortion = capitalDec.times('0.30').toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
   const bankPortion = capitalDec.minus(cashPortion);
 
-  const openingJe = buildJournalEntry({
-    id: `je-open-${tenantId}`,
-    tenantId,
-    entryNumber: `OPN-${now.slice(0, 10).replace(/-/g, '')}-0001`,
-    entryDate: now.slice(0, 10),
-    sourceModule: 'OPENING',
-    sourceId: null,
-    description: `Saldo Awal Modal Usaha — ${input.businessName.trim()}`,
-    accounts,
-    draftLines: [
-      { accountCode: '1101', debit: cashPortion.toFixed(4), credit: '0', memo: 'Kas tunai awal kasir' },
-      { accountCode: '1102', debit: bankPortion.toFixed(4), credit: '0', memo: 'Saldo bank operasional awal' },
-      { accountCode: '3101', debit: '0', credit: capitalDec.toFixed(4), memo: 'Modal disetor pemilik' },
-    ],
-  });
+  const initialJournalEntries =
+    capitalDec.greaterThan(0)
+      ? [
+          buildJournalEntry({
+            id: `je-open-${tenantId}`,
+            tenantId,
+            entryNumber: `OPN-${now.slice(0, 10).replace(/-/g, '')}-0001`,
+            entryDate: now.slice(0, 10),
+            sourceModule: 'OPENING',
+            sourceId: null,
+            description: `Saldo Awal Modal Usaha — ${input.businessName.trim()}`,
+            accounts,
+            draftLines: [
+              { accountCode: '1101', debit: cashPortion.toFixed(4), credit: '0', memo: 'Kas tunai awal kasir' },
+              { accountCode: '1102', debit: bankPortion.toFixed(4), credit: '0', memo: 'Saldo bank operasional awal' },
+              { accountCode: '3101', debit: '0', credit: capitalDec.toFixed(4), memo: 'Modal disetor pemilik' },
+            ],
+          }),
+        ]
+      : [];
 
   const tenant: Tenant = {
     id: tenantId,
@@ -280,7 +294,7 @@ export function provisionOnboardedCustomer(
     cumulativeTurnoverPriorMonths: '0.0000',
     serviceChargeRate: input.vertical === 'RESTORAN' ? '0.05' : '0',
     activeModules,
-    accountScope: 'REAL',
+    accountScope: targetScope,
     ownerAccountId: customerId,
     settings: {
       autoPrintQrOrders: input.autoPrintQrOrders,
@@ -295,12 +309,22 @@ export function provisionOnboardedCustomer(
   const validUntilDate = new Date();
   validUntilDate.setDate(validUntilDate.getDate() + (input.invoice.billingCycle === 'ANNUAL' ? 365 : 30));
 
+  const normalizedUsername = input.username
+    ? input.username
+        .trim()
+        .toLowerCase()
+        .replace(/^@+/, '')
+        .replace(/[^a-z0-9._-]/g, '')
+        .slice(0, 32) || undefined
+    : undefined;
+
   const customer: ManagedCustomerAccount = {
     id: customerId,
     fullName: input.fullName.trim(),
+    username: normalizedUsername,
     email: input.email.trim().toLowerCase(),
-    passwordDemo: input.passwordDemo.trim() || 'User2026!',
-    phone: input.phone.trim() || '081200000000',
+    passwordDemo: (input.passwordDemo ?? '').trim() || 'User2026!',
+    phone: (input.phone ?? '').trim() || '081200000000',
     role: 'OWNER',
     status: 'ACTIVE',
     billingCycle: input.invoice.billingCycle,
@@ -311,16 +335,25 @@ export function provisionOnboardedCustomer(
     maxTenantsAllowed:
       activeModules.includes('MULTI_BRANCH') || effectiveAddOns.includes('ADDON_EXTRA_BRANCH')
         ? 10
+        : targetScope === 'SIMULATION'
+        ? 3
         : 1,
     tenantIds: [tenantId],
     primaryTenantId: tenantId,
-    accountScope: 'REAL',
+    accountScope: targetScope,
     isDemoAccount: false,
     onboardingCompleted: true,
     lastInvoiceNumber: input.invoice.invoiceNumber,
     lastPaidAt: input.invoice.paidAt || now,
     validUntil: validUntilDate.toISOString(),
-    adminNotes: `Self-registered via Onboarding Wizard (${effectivePlan} · ${input.invoice.paymentMethod})`,
+    idleTimeoutMinutes:
+      typeof input.idleTimeoutMinutes === 'number' && input.idleTimeoutMinutes > 0
+        ? Math.round(input.idleTimeoutMinutes)
+        : 0,
+    adminNotes:
+      targetScope === 'SIMULATION'
+        ? `Simulasi usaha dari awal (Onboarding Rp 0 · ${effectivePlan})`
+        : `Self-registered via Onboarding Wizard (${effectivePlan} · ${input.invoice.paymentMethod})`,
     createdAt: now,
   };
 
@@ -356,7 +389,7 @@ export function provisionOnboardedCustomer(
     expenses: [],
     fixedAssets: [],
     customFields,
-    journalEntries: [openingJe],
+    journalEntries: initialJournalEntries,
     branches: [defaultBranch],
     branchStocks: products.map((p) => ({
       id: `bs-${defaultBranch.id}-${p.id}`,
@@ -394,6 +427,7 @@ export interface MasterCustomerSettingsPatch {
   billingCycle?: BillingCycle;
   activeModules?: FeatureModule['code'][];
   maxTenantsAllowed?: number;
+  idleTimeoutMinutes?: number;
   adminNotes?: string;
 }
 
@@ -414,7 +448,16 @@ export function applyMasterCustomerUpdate(
     status: patch.status ?? customer.status,
     billingCycle: nextCycle,
     activeModules: nextModules,
-    monthlyRecurringRevenue: pricing.effectiveMonthlyMrr,
+    monthlyRecurringRevenue:
+      customer.accountScope === 'SIMULATION' || customer.accountScope === 'DEMO' || customer.isDemoAccount
+        ? '0.0000'
+        : pricing.effectiveMonthlyMrr,
+    idleTimeoutMinutes:
+      patch.idleTimeoutMinutes !== undefined
+        ? patch.idleTimeoutMinutes <= 0
+          ? 0
+          : Math.min(1440, Math.max(5, Math.round(patch.idleTimeoutMinutes)))
+        : customer.idleTimeoutMinutes,
     maxTenantsAllowed:
       patch.maxTenantsAllowed !== undefined
         ? Math.max(1, Math.min(100, patch.maxTenantsAllowed))

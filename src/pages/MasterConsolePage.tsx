@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   ArrowUpRight,
-  Building2,
   Check,
   CheckCircle2,
   Database,
@@ -14,7 +13,6 @@ import {
   Menu,
   MessageSquareText,
   Play,
-  Plus,
   Settings2,
   ShieldCheck,
   UserCheck,
@@ -37,6 +35,10 @@ import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { useApp } from '../context/AppContext';
 import { FEATURE_MODULES } from '../data/seedData';
 import { formatRupiah } from '../lib/pos/checkout-service';
+import {
+  formatIdleTimeoutLabel,
+  IDLE_TIMEOUT_PRESETS,
+} from '../lib/auth/session-timeout';
 import {
   calculatePlatformMrrSummary,
   calculateSubscriptionPricing,
@@ -67,11 +69,11 @@ const STATUS_META: Record<
   },
   DEACTIVATED: {
     label: 'Nonaktif',
-    badgeClass: 'bg-slate-200 text-slate-700 border-slate-300',
+    badgeClass: 'bg-stone-200 text-stone-700 border-stone-300',
   },
   PENDING_PAYMENT: {
     label: 'Menunggu Bayar',
-    badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+    badgeClass: 'bg-stone-100 text-stone-700 border-stone-200',
   },
 };
 
@@ -82,6 +84,7 @@ export function MasterConsolePage() {
     customers,
     workspaces,
     updateManagedCustomer,
+    updateTenantStaffIdleTimeout,
     deactivateManagedCustomer,
     reactivateManagedCustomer,
     impersonateCustomer,
@@ -116,6 +119,7 @@ export function MasterConsolePage() {
   const [editBillingCycle, setEditBillingCycle] = useState<BillingCycle>('MONTHLY');
   const [editModules, setEditModules] = useState<FeatureModule['code'][]>(['POS_BASIC']);
   const [editMaxTenants, setEditMaxTenants] = useState('3');
+  const [editIdleTimeoutMinutes, setEditIdleTimeoutMinutes] = useState<number>(0);
   const [editNotes, setEditNotes] = useState('');
   // Per-user tenant operational settings
   const [editTaxEntity, setEditTaxEntity] = useState<TaxEntityType>('WP_OP');
@@ -148,6 +152,7 @@ export function MasterConsolePage() {
     setEditBillingCycle(cust.billingCycle);
     setEditModules(cust.activeModules);
     setEditMaxTenants(String(cust.maxTenantsAllowed));
+    setEditIdleTimeoutMinutes(cust.idleTimeoutMinutes ?? 0);
     setEditNotes(cust.adminNotes);
 
     if (ws) {
@@ -194,6 +199,7 @@ export function MasterConsolePage() {
         billingCycle: editBillingCycle,
         activeModules: editModules,
         maxTenantsAllowed: Number(editMaxTenants) || 1,
+        idleTimeoutMinutes: editIdleTimeoutMinutes,
         adminNotes: editNotes,
       },
       {
@@ -276,31 +282,31 @@ export function MasterConsolePage() {
         'Kelola template pesan WA dinamis dengan variabel otomatis & live preview untuk seluruh tim support.',
     },
     ENV_SECRETS: {
-      title: 'Pengaturan API & Secret Key Server',
+      title: 'API, Secret & Diagnostik Lingkungan',
       subtitle:
-        'Peta 16 variabel produksi Vercel: Neon PostgreSQL, Neon Object Storage, Better Auth & Google OAuth, Midtrans, dan Fonnte.',
+        'Kelola variabel API serta bandingkan kesiapan runtime Vercel, Brankas Neon, dan konfigurasi lokal secara transparan.',
     },
     INFRA_MIGRATION: {
-      title: 'Migrasi Database, Storage & Sinkronisasi Otomatis',
+      title: 'Migrasi Database, Storage & Sinkronisasi',
       subtitle:
-        'Kelola kesiapan Neon PostgreSQL, Neon Object Storage, Better Auth & Google OAuth, Midtrans, dan Fonnte untuk deployment Vercel & VPS.',
+        'Kelola kesiapan Neon PostgreSQL, Object Storage, Better Auth, Google OAuth, dan pemindahan server ke VPS atau cloud lain.',
     },
   };
 
   const renderSidebarContent = (isMobile = false) => (
     <div className="flex flex-col h-full">
       {/* Brand Header */}
-      <div className="h-16 px-5 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
+      <div className="h-16 px-5 border-b border-stone-200 flex items-center justify-between gap-2 shrink-0">
         <button
           type="button"
-          onClick={() => navigate('/')}
+          onClick={() => setMasterTab('CUSTOMERS')}
           className="flex items-center gap-2.5 text-left"
         >
-          <span className="w-8 h-8 rounded-lg bg-slate-900 text-emerald-400 flex items-center justify-center shrink-0">
-            <ShieldCheck className="w-4 h-4" />
+          <span className="w-8 h-8 rounded-lg bg-stone-900 text-emerald-400 flex items-center justify-center shrink-0">
+            <ShieldCheck className="w-4 h-4" strokeWidth={1.75} />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-bold text-slate-900 leading-tight truncate">KasirAkun</p>
+            <p className="text-sm font-bold text-stone-900 leading-tight truncate">KasirAkun</p>
             <p className="text-[11px] text-emerald-700 font-semibold leading-tight">
               Konsol Master Admin
             </p>
@@ -311,22 +317,22 @@ export function MasterConsolePage() {
             type="button"
             onClick={() => setMobileMenuOpen(false)}
             aria-label="Tutup menu master"
-            className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg"
+            className="p-1.5 text-stone-500 hover:text-stone-900 rounded-lg"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" strokeWidth={1.75} />
           </button>
         )}
       </div>
 
-      {/* Grouped Navigation */}
+      {/* Clean 3-Group Master Navigation */}
       <nav
         aria-label="Navigasi Master Admin"
         data-testid="master-sidebar-nav"
         className="flex-1 overflow-y-auto px-3 py-5 space-y-6"
       >
         <div className="space-y-1">
-          <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">
-            Operasional SaaS
+          <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">
+            Pelanggan &amp; Akun
           </p>
           <button
             type="button"
@@ -335,17 +341,17 @@ export function MasterConsolePage() {
               setMasterTab('CUSTOMERS');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'CUSTOMERS'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <span className="flex items-center gap-2.5 min-w-0">
-              <Users className="w-4 h-4 shrink-0 text-emerald-700" />
-              <span className="truncate">Pelanggan &amp; User</span>
+              <Users className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
+              <span className="truncate">Pelanggan &amp; Langganan</span>
             </span>
-            <span className="text-[11px] font-mono tabular-nums text-slate-500">
+            <span className="text-[11px] font-mono tabular-nums text-stone-500">
               {customers.length}
             </span>
           </button>
@@ -357,18 +363,40 @@ export function MasterConsolePage() {
               setMasterTab('ACCOUNTS');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'ACCOUNTS'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <span className="flex items-center gap-2.5 min-w-0">
               <UserCheck className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
-              <span className="truncate">Manajemen Akun Login</span>
+              <span className="truncate">Akun Login &amp; Simulasi</span>
             </span>
           </button>
 
+          <button
+            type="button"
+            data-testid="master-tab-demo-control"
+            onClick={() => {
+              setMasterTab('DEMO_CONTROL');
+              setMobileMenuOpen(false);
+            }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
+              masterTab === 'DEMO_CONTROL'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
+            }`}
+          >
+            <Play className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
+            <span className="truncate">Kontrol Demo &amp; Jadwal</span>
+          </button>
+        </div>
+
+        <div className="space-y-1">
+          <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">
+            Layanan UMKM
+          </p>
           <button
             type="button"
             data-testid="master-tab-landing-pages"
@@ -376,10 +404,10 @@ export function MasterConsolePage() {
               setMasterTab('LANDING_PAGES');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'LANDING_PAGES'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <span className="flex items-center gap-2.5 min-w-0">
@@ -395,32 +423,15 @@ export function MasterConsolePage() {
 
           <button
             type="button"
-            data-testid="master-tab-demo-control"
-            onClick={() => {
-              setMasterTab('DEMO_CONTROL');
-              setMobileMenuOpen(false);
-            }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
-              masterTab === 'DEMO_CONTROL'
-                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Play className="w-4 h-4 shrink-0 text-emerald-700" />
-            <span className="truncate">Kontrol Demo &amp; Jadwal</span>
-          </button>
-
-          <button
-            type="button"
             data-testid="master-tab-regional-tax"
             onClick={() => {
               setMasterTab('REGIONAL_TAX');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'REGIONAL_TAX'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <Landmark className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
@@ -434,10 +445,10 @@ export function MasterConsolePage() {
               setMasterTab('CONTRACT_TEMPLATES');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'CONTRACT_TEMPLATES'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <FileSignature className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
@@ -451,10 +462,10 @@ export function MasterConsolePage() {
               setMasterTab('PAYMENT_ASSIST');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'PAYMENT_ASSIST'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <Wrench className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
@@ -468,20 +479,20 @@ export function MasterConsolePage() {
               setMasterTab('WA_TEMPLATES');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-xl transition-colors ${
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'WA_TEMPLATES'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
-            <MessageSquareText className="w-4 h-4 shrink-0 text-emerald-700" />
-            <span className="truncate">Template Pesan WA Custom</span>
+            <MessageSquareText className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
+            <span className="truncate">Template Pesan WA</span>
           </button>
         </div>
 
         <div className="space-y-1">
           <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">
-            Infrastruktur &amp; Cloud
+            Sistem &amp; Cloud
           </p>
           <button
             type="button"
@@ -490,14 +501,14 @@ export function MasterConsolePage() {
               setMasterTab('ENV_SECRETS');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-lg transition-colors ${
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'ENV_SECRETS'
-                ? 'bg-emerald-50 text-emerald-900 border-l-2 border-emerald-600'
-                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <KeyRound className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
-            <span className="truncate">Pengaturan API &amp; Secret Key</span>
+            <span className="truncate">API, Secret &amp; Diagnostik</span>
           </button>
           <button
             type="button"
@@ -506,52 +517,30 @@ export function MasterConsolePage() {
               setMasterTab('INFRA_MIGRATION');
               setMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold rounded-lg transition-colors ${
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
               masterTab === 'INFRA_MIGRATION'
-                ? 'bg-emerald-50 text-emerald-900 border-l-2 border-emerald-600'
-                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80'
+                : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900 border border-transparent'
             }`}
           >
             <Database className="w-4 h-4 shrink-0 text-emerald-700" strokeWidth={1.75} />
             <span className="truncate">Migrasi DB, Storage &amp; Sync</span>
           </button>
         </div>
-
-        <div className="space-y-1 pt-2 border-t border-slate-100">
-          <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">
-            Pintasan Cepat
-          </p>
-          <button
-            type="button"
-            onClick={() => navigate('/onboarding?mode=real')}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-xl transition-colors"
-          >
-            <Plus className="w-4 h-4 shrink-0 text-slate-500" />
-            <span className="truncate">Pendaftaran Akun Real</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/demo')}
-            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-xl transition-colors"
-          >
-            <Building2 className="w-4 h-4 shrink-0 text-slate-500" />
-            <span className="truncate">Lihat Halaman Coba Gratis</span>
-          </button>
-        </div>
       </nav>
 
       {/* Sidebar Account Footer */}
-      <div className="p-4 border-t border-slate-200 space-y-2 shrink-0">
+      <div className="p-4 border-t border-stone-200 space-y-2 shrink-0">
         <button
           type="button"
           onClick={() => setAccountModalOpen(true)}
           data-testid="master-account-btn"
-          className="w-full flex items-center gap-2.5 px-3 py-2 text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors"
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors"
         >
-          <UserCog className="w-4 h-4 text-emerald-700 shrink-0" />
+          <UserCog className="w-4 h-4 text-emerald-700 shrink-0" strokeWidth={1.75} />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-slate-900 truncate">Akun Master</p>
-            <p className="text-[11px] text-slate-500 truncate">{session.email}</p>
+            <p className="text-xs font-semibold text-stone-900 truncate">Akun Master</p>
+            <p className="text-[11px] text-stone-500 truncate">{session.email}</p>
           </div>
         </button>
         <button
@@ -562,19 +551,19 @@ export function MasterConsolePage() {
           }}
           data-testid="master-logout-btn"
           aria-label="Keluar Master Admin"
-          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors"
+          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors"
         >
-          <LogOut className="w-3.5 h-3.5" />
-          <span>Keluar Master</span>
+          <LogOut className="w-3.5 h-3.5" strokeWidth={1.75} />
+          <span>Keluar</span>
         </button>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex">
+    <div className="min-h-screen bg-[#FAFAF9] text-stone-900 flex">
       {/* Desktop Master Sidebar */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200 z-30">
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-stone-200 z-30">
         {renderSidebarContent(false)}
       </aside>
 
@@ -582,7 +571,7 @@ export function MasterConsolePage() {
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
-            className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs"
+            className="fixed inset-0 bg-stone-900/50 backdrop-blur-xs"
             onClick={() => setMobileMenuOpen(false)}
           />
           <aside className="relative w-72 max-w-[85vw] bg-white h-full shadow-xl z-10 flex flex-col">
@@ -594,28 +583,28 @@ export function MasterConsolePage() {
       {/* Main Content Wrapper */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
         {/* Clean Top Header Bar */}
-        <header className="sticky top-0 z-20 h-16 bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
+        <header className="sticky top-0 z-20 h-16 bg-white border-b border-stone-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="Buka navigasi master"
-              className="lg:hidden p-2 -ml-2 text-slate-600 hover:text-slate-900 rounded-lg"
+              className="lg:hidden p-2 -ml-2 text-stone-600 hover:text-stone-900 rounded-lg"
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-5 h-5" strokeWidth={1.75} />
             </button>
             <div className="min-w-0">
-              <h1 className="text-sm sm:text-base font-bold text-slate-900 truncate leading-tight">
+              <h1 className="text-sm sm:text-base font-bold text-stone-900 truncate leading-tight">
                 {sectionTitleMap[masterTab].title}
               </h1>
-              <p className="text-xs text-slate-500 hidden md:block truncate">
+              <p className="text-xs text-stone-500 hidden md:block truncate">
                 {sectionTitleMap[masterTab].subtitle}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-mono text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg">
+            <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-mono tabular-nums text-stone-600 bg-stone-100 px-3 py-1.5 rounded-lg">
               MRR: <strong className="text-emerald-700">{formatRupiah(summary.totalMrr)}</strong>
             </span>
           </div>
@@ -667,6 +656,7 @@ export function MasterConsolePage() {
               currentMasterEmail={session.email}
               onOpenEnvSecrets={() => setMasterTab('ENV_SECRETS')}
               onImpersonateCustomer={(custId) => impersonateCustomer(custId)}
+              onStartSimulationFlow={() => navigate('/onboarding?mode=simulation')}
               onAccountsMutated={refreshMasterBootstrap}
             />
           ) : masterTab === 'LANDING_PAGES' ? (
@@ -692,7 +682,7 @@ export function MasterConsolePage() {
           <section
             className={`${
               selectedCustomer ? 'xl:col-span-7' : 'xl:col-span-12'
-            } bg-white border border-slate-200 rounded-2xl overflow-hidden`}
+            } bg-white border border-stone-200 rounded-xl overflow-hidden`}
           >
             <DataTable
               data={filteredCustomers}
@@ -700,12 +690,13 @@ export function MasterConsolePage() {
               defaultPageSize={10}
               pageSizeOptions={[10, 25, 50, 100]}
               searchable
-              searchPlaceholder="Cari nama user, email, usaha, atau no. invoice..."
+              searchPlaceholder="Cari nama user, email, username, usaha, atau no. invoice..."
               searchFn={(cust, q) => {
                 const ws = workspaces.find((w) => w.tenant.id === cust.primaryTenantId);
                 return (
                   cust.fullName.toLowerCase().includes(q) ||
                   cust.email.toLowerCase().includes(q) ||
+                  (cust.username?.toLowerCase().includes(q) ?? false) ||
                   cust.lastInvoiceNumber.toLowerCase().includes(q) ||
                   (ws?.tenant.name.toLowerCase().includes(q) ?? false)
                 );
@@ -715,7 +706,7 @@ export function MasterConsolePage() {
               rowClassName={(cust) =>
                 cust.id === selectedCustomerId
                   ? 'bg-emerald-50/50 transition-colors'
-                  : 'hover:bg-slate-50 transition-colors'
+                  : 'hover:bg-stone-50 transition-colors'
               }
               filterControls={
                 <div className="flex items-center gap-1 overflow-x-auto">
@@ -726,8 +717,8 @@ export function MasterConsolePage() {
                       onClick={() => setStatusFilter(st)}
                       className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg whitespace-nowrap transition-colors ${
                         statusFilter === st
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                          ? 'bg-stone-900 text-white'
+                          : 'bg-stone-100 text-stone-600 hover:text-stone-900'
                       }`}
                     >
                       {st === 'ALL'
@@ -747,22 +738,29 @@ export function MasterConsolePage() {
                 [
                   {
                     key: 'user',
-                    header: 'Pembeli / User UMKM',
+                    header: 'Pemilik Usaha / User',
                     sortValue: (cust) => cust.fullName,
                     csvHeader: 'Nama & Email',
                     csvValue: (cust) => `${cust.fullName} (${cust.email})`,
                     render: (cust) => (
                       <div>
                         <div className="flex items-center gap-2">
-                          <p className="font-semibold text-slate-900">{cust.fullName}</p>
-                          {cust.isDemoAccount && (
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-900 text-white">
+                          <p className="font-semibold text-stone-900">{cust.fullName}</p>
+                          {cust.accountScope === 'SIMULATION' ? (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">
+                              SIMULASI
+                            </span>
+                          ) : cust.isDemoAccount ? (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-stone-900 text-white">
                               DEMO
                             </span>
-                          )}
+                          ) : null}
                         </div>
-                        <p className="text-xs text-slate-500 font-mono">{cust.email}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
+                        <p className="text-xs text-stone-500 font-mono">
+                          {cust.email}
+                          {cust.username ? ` · @${cust.username}` : ''}
+                        </p>
+                        <p className="text-[11px] text-stone-400 mt-0.5">
                           Inv: {cust.lastInvoiceNumber}
                         </p>
                       </div>
@@ -1143,7 +1141,7 @@ export function MasterConsolePage() {
                   <div>
                     <label
                       htmlFor="edit-admin-notes"
-                      className="block text-xs font-medium text-slate-700 mb-1"
+                      className="block text-xs font-medium text-stone-700 mb-1"
                     >
                       Catatan Internal Master Admin
                     </label>
@@ -1152,9 +1150,127 @@ export function MasterConsolePage() {
                       rows={2}
                       value={editNotes}
                       onChange={(e) => setEditNotes(e.target.value)}
-                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg"
+                      className="w-full px-3 py-2 text-xs border border-stone-200 rounded-lg"
                     />
                   </div>
+                </div>
+
+                {/* 3b. Batas Waktu Sesi (Auto-Logout Pemilik & Pegawai UMKM) */}
+                <div className="space-y-3 pt-2 border-t border-stone-100">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500">
+                    3b. Batas Waktu Sesi (Auto-Logout Pemilik &amp; Pegawai)
+                  </h3>
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label htmlFor="master-owner-timeout" className="text-xs font-semibold text-stone-800">
+                        Akun Pemilik ({selectedCustomer.fullName})
+                      </label>
+                      <span className="font-mono text-[11px] text-stone-600">
+                        {formatIdleTimeoutLabel(editIdleTimeoutMinutes)}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        id="master-owner-timeout"
+                        data-testid="master-customer-timeout-select"
+                        value={
+                          IDLE_TIMEOUT_PRESETS.some((p) => p.minutes === editIdleTimeoutMinutes)
+                            ? String(editIdleTimeoutMinutes)
+                            : 'CUSTOM'
+                        }
+                        onChange={(e) =>
+                          setEditIdleTimeoutMinutes(
+                            e.target.value === 'CUSTOM' ? 45 : Number(e.target.value)
+                          )
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-stone-200 rounded-lg"
+                      >
+                        {IDLE_TIMEOUT_PRESETS.map((p) => (
+                          <option key={p.minutes} value={String(p.minutes)}>
+                            {p.label}
+                          </option>
+                        ))}
+                        <option value="CUSTOM">Kustom (Menit)...</option>
+                      </select>
+                      <input
+                        type="number"
+                        min={0}
+                        max={1440}
+                        value={editIdleTimeoutMinutes}
+                        onChange={(e) =>
+                          setEditIdleTimeoutMinutes(Math.max(0, Number(e.target.value) || 0))
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-white border border-stone-200 rounded-lg"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Per-Staff Timeout Overrides across this Customer's Tenants */}
+                  {(() => {
+                    const staffEntries = selectedCustomer.tenantIds.flatMap((tid) => {
+                      const ws = workspaces.find((w) => w.tenant.id === tid);
+                      return (ws?.staffAccounts ?? []).map((staff) => ({
+                        tenantId: tid,
+                        tenantName: ws?.tenant.name ?? tid,
+                        staff,
+                      }));
+                    });
+                    if (staffEntries.length === 0) {
+                      return (
+                        <p className="text-[11px] text-stone-500">
+                          Belum ada akun pegawai/sub-user pada usaha ini.
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-semibold text-stone-600">
+                          Pegawai / Sub-User ({staffEntries.length} akun)
+                        </p>
+                        {staffEntries.map(({ tenantId, staff }) => (
+                          <div
+                            key={staff.id}
+                            className="flex items-center justify-between gap-2 px-3 py-2 bg-white border border-stone-200 rounded-lg text-xs"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-semibold text-stone-800 truncate">
+                                {staff.fullName}{' '}
+                                <span className="font-normal text-stone-500">({staff.roleTitle})</span>
+                              </p>
+                              <p className="text-[10px] font-mono text-stone-500 truncate">
+                                {staff.email}
+                              </p>
+                            </div>
+                            <select
+                              aria-label={`Auto-logout ${staff.fullName}`}
+                              data-testid={`master-staff-timeout-${staff.id}`}
+                              value={
+                                IDLE_TIMEOUT_PRESETS.some(
+                                  (p) => p.minutes === (staff.idleTimeoutMinutes ?? 0)
+                                )
+                                  ? String(staff.idleTimeoutMinutes ?? 0)
+                                  : '0'
+                              }
+                              onChange={(e) => {
+                                const mins = Number(e.target.value);
+                                updateTenantStaffIdleTimeout(tenantId, staff.id, mins);
+                                setSaveFeedback(
+                                  `Auto-logout pegawai ${staff.fullName} diubah menjadi ${formatIdleTimeoutLabel(mins)}.`
+                                );
+                              }}
+                              className="px-2 py-1 text-[11px] bg-stone-50 border border-stone-200 rounded-md shrink-0"
+                            >
+                              {IDLE_TIMEOUT_PRESETS.map((p) => (
+                                <option key={p.minutes} value={String(p.minutes)}>
+                                  {p.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* 4. Associated Tenants & Account Deactivation Lifecycle */}

@@ -68,10 +68,16 @@ export function resolveAccountScope(
   customer?: Pick<ManagedCustomerAccount, 'isDemoAccount' | 'accountScope' | 'id'> | null,
   tenantId?: string
 ): AccountScope {
-  if (customer?.accountScope === 'DEMO' || customer?.accountScope === 'REAL') {
+  if (
+    customer?.accountScope === 'DEMO' ||
+    customer?.accountScope === 'REAL' ||
+    customer?.accountScope === 'SIMULATION'
+  ) {
     return customer.accountScope;
   }
   if (customer?.isDemoAccount) return 'DEMO';
+  if (customer?.id?.startsWith('cust-sim-') || customer?.id?.startsWith('sim-')) return 'SIMULATION';
+  if (tenantId?.startsWith('sim-')) return 'SIMULATION';
   if (customer?.id?.startsWith('cust-demo-') || customer?.id?.startsWith('demo-')) return 'DEMO';
   if (tenantId?.startsWith('demo-')) return 'DEMO';
   return 'REAL';
@@ -149,6 +155,7 @@ export class PartitionedTenantDatabase {
   private ensureDirs(): void {
     fs.mkdirSync(path.join(this.rootDir, 'demo'), { recursive: true });
     fs.mkdirSync(path.join(this.rootDir, 'real'), { recursive: true });
+    fs.mkdirSync(path.join(this.rootDir, 'simulation'), { recursive: true });
   }
 
   private getCustomersIndexPath(scope: AccountScope): string {
@@ -271,7 +278,11 @@ export class PartitionedTenantDatabase {
     if (scope) {
       return this.readJsonSafe<PartitionedDbSnapshot>(this.getCustomersIndexPath(scope))?.customers ?? [];
     }
-    return [...this.listCustomers('DEMO'), ...this.listCustomers('REAL')];
+    return [
+      ...this.listCustomers('DEMO'),
+      ...this.listCustomers('REAL'),
+      ...this.listCustomers('SIMULATION'),
+    ];
   }
 
   public upsertCustomer(customer: ManagedCustomerAccount): ManagedCustomerAccount {
@@ -294,6 +305,69 @@ export class PartitionedTenantDatabase {
   public findCustomerByEmail(email: string): ManagedCustomerAccount | null {
     const norm = email.trim().toLowerCase();
     return this.listCustomers().find((c) => c.email.trim().toLowerCase() === norm) ?? null;
+  }
+
+  public findCustomerByUsernameOrEmail(identifier: string): ManagedCustomerAccount | null {
+    const norm = identifier.trim().toLowerCase().replace(/^@/, '');
+    if (!norm) return null;
+    const all = this.listCustomers();
+    // Exact email or explicit username match first
+    const exact = all.find(
+      (c) =>
+        c.email.trim().toLowerCase() === norm ||
+        (c.username && c.username.trim().toLowerCase() === norm),
+    );
+    if (exact) return exact;
+    // Fallback for legacy seeded accounts that don't have an explicit username stored yet
+    if (!norm.includes('@')) {
+      return (
+        all.find(
+          (c) =>
+            !c.username &&
+            c.email.trim().toLowerCase().split('@')[0] === norm,
+        ) ?? null
+      );
+    }
+    return null;
+  }
+
+  public findCustomerByPhoneAndBusiness(
+    phone: string,
+    businessName?: string,
+  ): Array<{ customer: ManagedCustomerAccount; businessName: string }> {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 7) return [];
+    const suffix = digits.slice(-8);
+    const bizQuery = (businessName || '').trim().toLowerCase();
+    const workspaces = this.listAllWorkspaces();
+    const wsByTenant = new Map(workspaces.map((w) => [w.tenant.id, w]));
+
+    const hits: Array<{ customer: ManagedCustomerAccount; businessName: string }> = [];
+    for (const c of this.listCustomers()) {
+      const custDigits = (c.phone || '').replace(/\D/g, '');
+      if (!custDigits || !custDigits.endsWith(suffix)) continue;
+      const ws = wsByTenant.get(c.primaryTenantId);
+      const bName = ws?.tenant.name || c.fullName;
+      if (bizQuery && !bName.toLowerCase().includes(bizQuery) && !c.fullName.toLowerCase().includes(bizQuery)) {
+        continue;
+      }
+      hits.push({ customer: c, businessName: bName });
+    }
+    return hits;
+  }
+
+  public isUsernameTaken(username: string, excludeId?: string): boolean {
+    const norm = username.trim().toLowerCase().replace(/^@/, '');
+    if (!norm) return false;
+    const masterHit = this.listMasterAccounts().find(
+      (m) => m.id !== excludeId && m.username?.trim().toLowerCase() === norm,
+    );
+    if (masterHit) return true;
+    const custHit = this.listCustomers().find(
+      (c) => c.id !== excludeId && c.username?.trim().toLowerCase() === norm,
+    );
+    if (custHit) return true;
+    return false;
   }
 
   public findCustomerById(customerId: string): ManagedCustomerAccount | null {
@@ -343,7 +417,7 @@ export class PartitionedTenantDatabase {
   }
 
   public listAllWorkspaces(scope?: AccountScope): TenantWorkspaceData[] {
-    const scopes: AccountScope[] = scope ? [scope] : ['DEMO', 'REAL'];
+    const scopes: AccountScope[] = scope ? [scope] : ['DEMO', 'REAL', 'SIMULATION'];
     const result: TenantWorkspaceData[] = [];
     for (const sc of scopes) {
       const scopeDir = path.join(this.rootDir, sc.toLowerCase());
@@ -361,7 +435,7 @@ export class PartitionedTenantDatabase {
     ownerAccountId: string;
     workspace: TenantWorkspaceData;
   } | null {
-    for (const sc of ['DEMO', 'REAL'] as const) {
+    for (const sc of ['DEMO', 'REAL', 'SIMULATION'] as const) {
       const scopeDir = path.join(this.rootDir, sc.toLowerCase());
       if (!fs.existsSync(scopeDir)) continue;
       for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
@@ -379,15 +453,15 @@ export class PartitionedTenantDatabase {
     return null;
   }
 
-  public findStaffLogin(email: string, password: string): {
+  public findStaffLogin(identifier: string, password: string): {
     scope: AccountScope;
     ownerAccountId: string;
     workspace: TenantWorkspaceData;
     staff: NonNullable<TenantWorkspaceData['staffAccounts']>[number];
     ownerAccount: ManagedCustomerAccount | null;
   } | null {
-    const norm = email.trim().toLowerCase();
-    for (const sc of ['DEMO', 'REAL'] as const) {
+    const norm = identifier.trim().toLowerCase().replace(/^@/, '');
+    for (const sc of ['DEMO', 'REAL', 'SIMULATION'] as const) {
       const scopeDir = path.join(this.rootDir, sc.toLowerCase());
       if (!fs.existsSync(scopeDir)) continue;
       for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
@@ -395,7 +469,10 @@ export class PartitionedTenantDatabase {
         const ownerWorkspaces = this.listWorkspacesForOwner(sc, entry.name);
         for (const ws of ownerWorkspaces) {
           const staff = (ws.staffAccounts ?? []).find(
-            (s) => s.email.trim().toLowerCase() === norm && s.password === password
+            (s) =>
+              (s.email.trim().toLowerCase() === norm ||
+                (s.username && s.username.trim().toLowerCase() === norm)) &&
+              s.password === password,
           );
           if (staff) {
             const ownerAccount = this.findCustomerById(entry.name);
@@ -419,7 +496,7 @@ export class PartitionedTenantDatabase {
 
   public deleteCustomer(customerId: string): boolean {
     let deleted = false;
-    for (const sc of ['DEMO', 'REAL'] as const) {
+    for (const sc of ['DEMO', 'REAL', 'SIMULATION'] as const) {
       const existing = this.listCustomers(sc);
       const target = existing.find((c) => c.id === customerId);
       if (!target) continue;
@@ -445,15 +522,15 @@ export class PartitionedTenantDatabase {
     return true;
   }
 
-  public findStaffByEmail(email: string): {
+  public findStaffByEmail(identifier: string): {
     scope: AccountScope;
     ownerAccountId: string;
     workspace: TenantWorkspaceData;
     staff: NonNullable<TenantWorkspaceData['staffAccounts']>[number];
     ownerAccount: ManagedCustomerAccount | null;
   } | null {
-    const norm = email.trim().toLowerCase();
-    for (const sc of ['DEMO', 'REAL'] as const) {
+    const norm = identifier.trim().toLowerCase().replace(/^@/, '');
+    for (const sc of ['DEMO', 'REAL', 'SIMULATION'] as const) {
       const scopeDir = path.join(this.rootDir, sc.toLowerCase());
       if (!fs.existsSync(scopeDir)) continue;
       for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
@@ -461,7 +538,9 @@ export class PartitionedTenantDatabase {
         const ownerWorkspaces = this.listWorkspacesForOwner(sc, entry.name);
         for (const ws of ownerWorkspaces) {
           const staff = (ws.staffAccounts ?? []).find(
-            (s) => s.email.trim().toLowerCase() === norm
+            (s) =>
+              s.email.trim().toLowerCase() === norm ||
+              (s.username && s.username.trim().toLowerCase() === norm),
           );
           if (staff) {
             const ownerAccount = this.findCustomerById(entry.name);
@@ -500,6 +579,28 @@ export class PartitionedTenantDatabase {
   public findMasterAccountByEmail(email: string): MasterAdminAccountRecord | null {
     const norm = email.trim().toLowerCase();
     return this.listMasterAccounts().find((m) => m.email.trim().toLowerCase() === norm) ?? null;
+  }
+
+  public findMasterAccountByUsernameOrEmail(identifier: string): MasterAdminAccountRecord | null {
+    const norm = identifier.trim().toLowerCase().replace(/^@/, '');
+    if (!norm) return null;
+    const all = this.listMasterAccounts();
+    const exact = all.find(
+      (m) =>
+        m.email.trim().toLowerCase() === norm ||
+        (m.username && m.username.trim().toLowerCase() === norm),
+    );
+    if (exact) return exact;
+    if (!norm.includes('@')) {
+      return (
+        all.find(
+          (m) =>
+            !m.username &&
+            m.email.trim().toLowerCase().split('@')[0] === norm,
+        ) ?? null
+      );
+    }
+    return null;
   }
 
   public findMasterAccountById(id: string): MasterAdminAccountRecord | null {

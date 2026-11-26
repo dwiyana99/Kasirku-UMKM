@@ -422,9 +422,6 @@ export function buildSidebarNavGroups(input: BuildSidebarInput): SidebarNavGroup
     ...(plan !== 'LITE' || isMaster
       ? [{ path: '/activity-log', label: 'Log Aktivitas', iconKey: 'activity' as const }]
       : []),
-    ...(isMaster
-      ? [{ path: '/master-admin', label: 'Master Admin Console', iconKey: 'master' as const }]
-      : []),
   ];
 
   const filterAllowed = (items: SidebarNavItem[]): SidebarNavItem[] =>

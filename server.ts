@@ -69,10 +69,21 @@ import {
 import {
   buildInitialMasterAdminAccounts,
   hashAccountPassword,
+  maskEmailForRecovery,
+  maskUsernameForRecovery,
+  normalizeUsername,
   resolveBetterAuthLoginTarget,
   sanitizeCustomerForApi,
+  suggestUsernameFromEmail,
   verifyAccountPassword,
 } from './src/lib/auth/account-management.ts';
+import { PasswordRecoveryManager } from './src/lib/auth/password-recovery.ts';
+import {
+  DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_STAFF_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+  normalizeIdleTimeoutMinutes,
+} from './src/lib/auth/session-timeout.ts';
 import {
   hydrateAllPostgresWorkspacesForMaster,
   hydrateUserFromPostgresByEmail,
@@ -363,9 +374,28 @@ interface StoredSubscriptionInvoice {
 const subscriptionInvoices = new Map<string, StoredSubscriptionInvoice>();
 const verifiedSubscriptionRefs = new Map<string, StoredSubscriptionInvoice>();
 
+const passwordRecoveryManager = new PasswordRecoveryManager();
+
 const masterLoginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6),
+  email: z.string().trim().min(3, 'Masukkan email atau username Anda.').max(255),
+  password: z.string().min(6, 'Kata sandi minimal 6 karakter.'),
+});
+
+const forgotPasswordRequestSchema = z.object({
+  identifier: z.string().trim().min(3, 'Masukkan email atau username akun Anda.').max(255),
+  role: z.enum(['CUSTOMER', 'MASTER_ADMIN']).optional().default('CUSTOMER'),
+});
+
+const resetPasswordConfirmSchema = z.object({
+  identifier: z.string().trim().min(3).max(255),
+  role: z.enum(['CUSTOMER', 'MASTER_ADMIN']).optional().default('CUSTOMER'),
+  code: z.string().trim().min(6, 'Kode pemulihan harus 6 digit.').max(12),
+  newPassword: z.string().min(6, 'Kata sandi baru minimal 6 karakter.').max(120),
+});
+
+const recoverAccountSchema = z.object({
+  phone: z.string().trim().min(7, 'Masukkan nomor WhatsApp/HP yang terdaftar.').max(30),
+  businessName: z.string().trim().max(150).optional().default(''),
 });
 
 const subscriptionCheckoutSchema = z.object({
@@ -471,6 +501,9 @@ export async function createExpressApp(
     const reqOrigin = extractRequestOrigin(req);
     const authInstance = getBetterAuthInstance(reqOrigin);
     if (!authInstance) {
+      if (reqPath === '/api/auth/sign-out' || reqPath === '/api/auth/sign-out/') {
+        return res.status(200).json({ ok: true, signedOut: true });
+      }
       return res.status(503).json({
         error:
           'Layanan Better Auth (PostgreSQL Neon) belum terhubung. Atur DATABASE_URL dan BETTER_AUTH_SECRET di Vercel atau Master Admin > Pengaturan API.',
@@ -850,8 +883,13 @@ export async function createExpressApp(
           accountScope: 'REAL',
           authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
           email: emailNorm,
+          username: masterAcc?.username,
           fullName: masterAcc?.fullName || dbUser?.fullName || resolvedIdentity.fullName || 'Master Admin',
           phone: masterAcc?.phone || '',
+          idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+            masterAcc?.idleTimeoutMinutes,
+            DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+          ),
           token,
           customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
           workspaces: tenantDb.listAllWorkspaces(),
@@ -875,6 +913,10 @@ export async function createExpressApp(
           role: 'CUSTOMER',
           accountScope: scope,
           authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
+          idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+            cust.idleTimeoutMinutes,
+            DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+          ),
           token,
           customer: sanitizeCustomerForApi(cust),
           workspaces,
@@ -898,6 +940,10 @@ export async function createExpressApp(
           role: 'STAFF',
           accountScope: hit.scope,
           authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
+          idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+            hit.staff.idleTimeoutMinutes,
+            DEFAULT_STAFF_IDLE_TIMEOUT_MINUTES,
+          ),
           token,
           staff: hit.staff,
           ownerAccount: hit.ownerAccount ? sanitizeCustomerForApi(hit.ownerAccount) : null,
@@ -925,12 +971,13 @@ export async function createExpressApp(
   app.post('/api/auth/master-login', async (req, res) => {
     const parsed = masterLoginSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Format email atau kata sandi tidak valid.' });
+      return res.status(400).json({ error: 'Format email/username atau kata sandi tidak valid.' });
     }
-    const emailNorm = parsed.data.email.trim().toLowerCase();
+    const identifierNorm = parsed.data.email.trim().toLowerCase().replace(/^@/, '');
     const password = parsed.data.password;
 
-    const masterAcc = tenantDb.findMasterAccountByEmail(emailNorm);
+    const masterAcc = tenantDb.findMasterAccountByUsernameOrEmail(identifierNorm);
+    const resolvedEmail = masterAcc ? masterAcc.email.trim().toLowerCase() : identifierNorm;
     let verified = false;
     let displayName = 'Master Pemilik KasirAkun';
     let masterPhone = '';
@@ -951,13 +998,13 @@ export async function createExpressApp(
       displayName = masterAcc.fullName;
       masterPhone = masterAcc.phone;
       masterId = masterAcc.id;
-    } else {
+    } else if (identifierNorm.includes('@')) {
       // Fallback check against PostgreSQL Better Auth user if created directly in Neon DB
       const prismaClient = getPrismaClient();
       if (prismaClient) {
         try {
           const pgMaster = await prismaClient.user.findUnique({
-            where: { email: emailNorm },
+            where: { email: resolvedEmail },
             include: {
               authAccounts: {
                 where: { providerId: 'credential' },
@@ -979,7 +1026,7 @@ export async function createExpressApp(
     }
 
     if (!verified) {
-      return res.status(401).json({ error: 'Email atau kata sandi Master Admin tidak sesuai.' });
+      return res.status(401).json({ error: 'Email/username atau kata sandi Master Admin tidak sesuai.' });
     }
 
     if (masterAcc) {
@@ -993,7 +1040,7 @@ export async function createExpressApp(
       role: 'MASTER_ADMIN',
       accountScope: 'REAL',
       ownerAccountId: masterId,
-      email: emailNorm,
+      email: resolvedEmail,
       allowedTenantIds: [],
       issuedAt: Date.now(),
     });
@@ -1002,26 +1049,31 @@ export async function createExpressApp(
       authenticated: true,
       role: 'MASTER_ADMIN',
       accountScope: 'REAL',
-      email: emailNorm,
+      email: resolvedEmail,
+      username: masterAcc?.username,
       fullName: displayName,
       phone: masterPhone,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        masterAcc?.idleTimeoutMinutes,
+        DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+      ),
       token,
       customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
       workspaces: tenantDb.listAllWorkspaces(),
     });
   });
 
-  // 0a-2. Customer / Demo / Staff Login (Strict Per-User & DEMO vs REAL Partition Isolation)
+  // 0a-2. Customer / Simulation / Demo / Staff Login (Email OR Username, Strict Partition Isolation)
   app.post('/api/auth/login', async (req, res) => {
     const parsed = masterLoginSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Format email atau kata sandi tidak valid.' });
+      return res.status(400).json({ error: 'Format email/username atau kata sandi tidak valid.' });
     }
-    const emailNorm = parsed.data.email.trim().toLowerCase();
+    const identifierNorm = parsed.data.email.trim().toLowerCase().replace(/^@/, '');
     const password = parsed.data.password;
 
-    // 1. Check Customer / Demo Owner accounts
-    const customer = tenantDb.findCustomerByEmail(emailNorm);
+    // 1. Check Customer / Simulation / Demo Owner accounts by email OR username
+    const customer = tenantDb.findCustomerByUsernameOrEmail(identifierNorm);
     if (customer) {
       const passwordOk = await verifyAccountPassword(
         password,
@@ -1063,6 +1115,10 @@ export async function createExpressApp(
           authenticated: true,
           role: 'CUSTOMER',
           accountScope: scope,
+          idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+            customer.idleTimeoutMinutes,
+            DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+          ),
           token,
           customer: sanitizeCustomerForApi(customer),
           workspaces,
@@ -1070,8 +1126,8 @@ export async function createExpressApp(
       }
     }
 
-    // 2. Check Staff accounts within any tenant
-    const staffHit = tenantDb.findStaffLogin(emailNorm, password);
+    // 2. Check Staff accounts within any tenant (email OR username)
+    const staffHit = tenantDb.findStaffLogin(identifierNorm, password);
     if (staffHit) {
       if (!staffHit.staff.isActive) {
         return res.status(403).json({
@@ -1101,6 +1157,10 @@ export async function createExpressApp(
         authenticated: true,
         role: 'STAFF',
         accountScope: staffHit.scope,
+        idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+          staffHit.staff.idleTimeoutMinutes,
+          DEFAULT_STAFF_IDLE_TIMEOUT_MINUTES,
+        ),
         token,
         staff: staffHit.staff,
         ownerAccount: staffHit.ownerAccount ? sanitizeCustomerForApi(staffHit.ownerAccount) : null,
@@ -1109,7 +1169,9 @@ export async function createExpressApp(
     }
 
     // 3. Cold-start fallback: verify against Neon PostgreSQL (e.g. Vercel ephemeral /tmp)
-    const hydrated = await hydrateUserFromPostgresByEmail(emailNorm);
+    const hydrated = identifierNorm.includes('@')
+      ? await hydrateUserFromPostgresByEmail(identifierNorm)
+      : null;
     if (hydrated?.found && hydrated.passwordHash) {
       const pgPasswordOk = await verifyAccountPassword(password, hydrated.passwordHash);
       if (pgPasswordOk) {
@@ -1136,6 +1198,10 @@ export async function createExpressApp(
             authenticated: true,
             role: 'CUSTOMER',
             accountScope: scope,
+            idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+              hydrated.customer.idleTimeoutMinutes,
+              DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+            ),
             token,
             customer: sanitizeCustomerForApi(hydrated.customer),
             workspaces: hydrated.workspaces,
@@ -1144,10 +1210,292 @@ export async function createExpressApp(
       }
     }
 
-    return res.status(401).json({ error: 'Email atau kata sandi tidak cocok.' });
+    return res.status(401).json({ error: 'Email/username atau kata sandi tidak cocok.' });
   });
 
-  // 0a-3. Persist Newly Onboarded REAL Customer + Workspace into `.data/db/real/` (+ Neon PostgreSQL)
+  // 0a-2a. Update Own Session Idle Timeout (Master Admin or UMKM Owner)
+  const updateSessionTimeoutSchema = z.object({
+    idleTimeoutMinutes: z.number().min(0).max(1440),
+  });
+
+  app.patch('/api/auth/session-timeout', async (req, res) => {
+    const session = extractSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Autentikasi diperlukan untuk mengubah batas waktu sesi.' });
+    }
+    const parsed = updateSessionTimeoutSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Masukkan durasi 0 (nonaktif) atau antara 5 hingga 1440 menit.',
+      });
+    }
+    const normalizedMinutes = normalizeIdleTimeoutMinutes(parsed.data.idleTimeoutMinutes, 0);
+
+    if (session.role === 'MASTER_ADMIN') {
+      const existingMaster =
+        tenantDb.findMasterAccountById(session.ownerAccountId) ??
+        tenantDb.findMasterAccountByEmail(session.email);
+      if (existingMaster) {
+        tenantDb.upsertMasterAccount({
+          ...existingMaster,
+          idleTimeoutMinutes: normalizedMinutes,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        idleTimeoutMinutes: normalizedMinutes,
+      });
+    }
+
+    if (session.role === 'CUSTOMER') {
+      const existingCustomer = tenantDb.findCustomerById(session.ownerAccountId);
+      if (!existingCustomer) {
+        return res.status(404).json({ error: 'Akun pemilik usaha tidak ditemukan.' });
+      }
+      const updatedCustomer: ManagedCustomerAccount = {
+        ...existingCustomer,
+        idleTimeoutMinutes: normalizedMinutes,
+      };
+      tenantDb.upsertCustomer(updatedCustomer);
+      await syncCustomerUpdateToPostgres(updatedCustomer);
+      const scope = resolveAccountScope(updatedCustomer);
+      const primaryWs = tenantDb.getWorkspace(scope, updatedCustomer.id, updatedCustomer.primaryTenantId);
+      if (primaryWs) {
+        await syncTenantWorkspaceToPostgres({
+          email: updatedCustomer.email,
+          customer: updatedCustomer,
+          workspace: primaryWs,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        idleTimeoutMinutes: normalizedMinutes,
+        customer: sanitizeCustomerForApi(updatedCustomer),
+      });
+    }
+
+    return res.status(403).json({
+      error: 'Batas waktu sesi pegawai diatur oleh Pemilik Usaha atau Master Admin.',
+    });
+  });
+
+  // 0a-2b. Forgot Password — Issue hashed 6-digit recovery code (15-min TTL, optional WA Fonnte delivery)
+  app.post('/api/auth/forgot-password', async (req, res) => {
+    const parsed = forgotPasswordRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message || 'Masukkan email atau username akun Anda.',
+      });
+    }
+    const { identifier, role } = parsed.data;
+    const norm = identifier.trim().toLowerCase().replace(/^@/, '');
+
+    const targetAccount =
+      role === 'MASTER_ADMIN'
+        ? (() => {
+            const m = tenantDb.findMasterAccountByUsernameOrEmail(norm);
+            return m
+              ? {
+                  id: m.id,
+                  email: m.email,
+                  phone: m.phone,
+                  scope: 'REAL' as const,
+                  fullName: m.fullName,
+                }
+              : null;
+          })()
+        : (() => {
+            const c = tenantDb.findCustomerByUsernameOrEmail(norm);
+            return c
+              ? {
+                  id: c.id,
+                  email: c.email,
+                  phone: c.phone,
+                  scope: resolveAccountScope(c),
+                  fullName: c.fullName,
+                }
+              : null;
+          })();
+
+    if (!targetAccount) {
+      // Uniform safe response to prevent user enumeration
+      return res.status(200).json({
+        ok: true,
+        deliveryChannel: 'NONE',
+        message:
+          'Jika email atau username terdaftar, kode pemulihan 6 digit telah diproses. Periksa WhatsApp terdaftar atau hubungi Master Admin.',
+      });
+    }
+
+    const issuedRes = passwordRecoveryManager.issueChallenge({
+      accountRole: role,
+      accountId: targetAccount.id,
+      email: targetAccount.email,
+    });
+    if (!issuedRes.ok) {
+      return res.status(429).json({
+        error: issuedRes.error,
+        retryAfterSec: issuedRes.retryAfterSec,
+      });
+    }
+
+    const { code, ttlMinutes } = issuedRes.issued;
+    const fonnteToken = (process.env.FONNTE_TOKEN || '').trim();
+    let waSent = false;
+    if (fonnteToken && targetAccount.phone && targetAccount.phone.replace(/\D/g, '').length >= 9) {
+      try {
+        const cleanDigits = targetAccount.phone.replace(/\D/g, '');
+        const waTarget = cleanDigits.startsWith('0')
+          ? `62${cleanDigits.slice(1)}`
+          : cleanDigits.startsWith('62')
+          ? cleanDigits
+          : `62${cleanDigits}`;
+        const waRes = await fetch('https://api.fonnte.com/send', {
+          method: 'POST',
+          headers: { Authorization: fonnteToken },
+          body: new URLSearchParams({
+            target: waTarget,
+            message: `[KasirAkun UMKM] Kode reset kata sandi untuk ${targetAccount.fullName}: ${code}. Berlaku ${ttlMinutes} menit. Jangan berikan kode ini ke siapa pun.`,
+            countryCode: '62',
+          }),
+        });
+        waSent = waRes.ok;
+      } catch {
+        waSent = false;
+      }
+    }
+
+    const isSandboxOrLocal = !process.env.VERCEL || targetAccount.scope !== 'REAL';
+    return res.status(200).json({
+      ok: true,
+      deliveryChannel: waSent ? 'WHATSAPP' : isSandboxOrLocal ? 'PREVIEW_ASSIST' : 'MASTER_ADMIN',
+      maskedEmail: maskEmailForRecovery(targetAccount.email),
+      ttlMinutes,
+      // Only return preview code for non-production/sandbox environments when WA Fonnte is not active
+      ...(!waSent && isSandboxOrLocal ? { previewCode: code } : {}),
+      message: waSent
+        ? `Kode pemulihan 6 digit telah dikirim ke WhatsApp terdaftar untuk ${maskEmailForRecovery(targetAccount.email)} (berlaku ${ttlMinutes} menit).`
+        : isSandboxOrLocal
+        ? `Kode pemulihan 6 digit siap digunakan (berlaku ${ttlMinutes} menit). Hubungkan FONNTE_TOKEN di Master Admin agar kode terkirim otomatis via WhatsApp.`
+        : `Permintaan reset kata sandi tercatat untuk ${maskEmailForRecovery(targetAccount.email)}. Aktifkan WhatsApp Fonnte atau hubungi Master Admin untuk verifikasi reset.`,
+    });
+  });
+
+  // 0a-2c. Confirm Password Reset using verified 6-digit single-use recovery code
+  app.post('/api/auth/reset-password-confirm', async (req, res) => {
+    const parsed = resetPasswordConfirmSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message || 'Data reset kata sandi tidak lengkap.',
+      });
+    }
+    const { identifier, role, code, newPassword } = parsed.data;
+    const norm = identifier.trim().toLowerCase().replace(/^@/, '');
+
+    if (role === 'MASTER_ADMIN') {
+      const master = tenantDb.findMasterAccountByUsernameOrEmail(norm);
+      if (!master) {
+        return res.status(400).json({ error: 'Kode pemulihan tidak cocok atau sudah kedaluwarsa.' });
+      }
+      const verified = passwordRecoveryManager.verifyAndConsume({
+        accountRole: 'MASTER_ADMIN',
+        email: master.email,
+        code,
+      });
+      if (!verified.ok) {
+        return res.status(400).json({ error: verified.error });
+      }
+      const nextHash = await hashAccountPassword(newPassword);
+      tenantDb.upsertMasterAccount({
+        ...master,
+        passwordHash: nextHash,
+        allowPasswordLogin: true,
+        updatedAt: new Date().toISOString(),
+      });
+      await syncUserAccountToPostgres({
+        email: master.email,
+        fullName: master.fullName,
+        phone: master.phone,
+        passwordHash: nextHash,
+        isSuperAdmin: true,
+        accountStatus: master.status,
+        maxTenantsAllowed: 100,
+      });
+      return res.status(200).json({
+        ok: true,
+        message: 'Kata sandi Master Admin berhasil diperbarui. Silakan masuk dengan sandi baru Anda.',
+      });
+    }
+
+    const customer = tenantDb.findCustomerByUsernameOrEmail(norm);
+    if (!customer) {
+      return res.status(400).json({ error: 'Kode pemulihan tidak cocok atau sudah kedaluwarsa.' });
+    }
+    const verified = passwordRecoveryManager.verifyAndConsume({
+      accountRole: 'CUSTOMER',
+      email: customer.email,
+      code,
+    });
+    if (!verified.ok) {
+      return res.status(400).json({ error: verified.error });
+    }
+
+    const nextHash = await hashAccountPassword(newPassword);
+    const isDemo = customer.isDemoAccount || customer.accountScope === 'DEMO';
+    tenantDb.upsertCustomer({
+      ...customer,
+      passwordHash: nextHash,
+      passwordDemo: isDemo ? newPassword : '••••••••',
+      allowPasswordLogin: true,
+    });
+    await syncUserAccountToPostgres({
+      email: customer.email,
+      fullName: customer.fullName,
+      phone: customer.phone,
+      passwordHash: nextHash,
+      isSuperAdmin: false,
+      accountStatus: customer.status,
+      maxTenantsAllowed: customer.maxTenantsAllowed,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      message: 'Kata sandi baru berhasil disimpan. Silakan masuk menggunakan email/username dan sandi baru.',
+    });
+  });
+
+  // 0a-2d. Recover Forgotten Account (Email / Username hint via registered WhatsApp + business name)
+  app.post('/api/auth/recover-account', (req, res) => {
+    const parsed = recoverAccountSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message || 'Masukkan nomor WhatsApp/HP terdaftar.',
+      });
+    }
+    const matches = tenantDb.findCustomerByPhoneAndBusiness(
+      parsed.data.phone,
+      parsed.data.businessName,
+    );
+    if (matches.length === 0) {
+      return res.status(404).json({
+        error:
+          'Tidak ditemukan akun yang cocok dengan nomor WhatsApp tersebut. Pastikan nomor sesuai atau hubungi Master Admin.',
+      });
+    }
+    return res.status(200).json({
+      ok: true,
+      accounts: matches.slice(0, 3).map(({ customer, businessName }) => ({
+        businessName,
+        accountScope: resolveAccountScope(customer),
+        maskedEmail: maskEmailForRecovery(customer.email),
+        maskedUsername: customer.username ? maskUsernameForRecovery(customer.username) : null,
+        googleLoginEnabled: customer.allowGoogleLogin !== false,
+      })),
+    });
+  });
+
+  // 0a-3. Persist Newly Onboarded REAL or SIMULATION Customer + Workspace into isolated partition (+ Neon PostgreSQL)
   app.post('/api/auth/register-onboarded', async (req, res) => {
     const body = req.body as {
       customer?: ManagedCustomerAccount;
@@ -1165,30 +1513,49 @@ export async function createExpressApp(
       });
     }
 
+    const targetScope: 'REAL' | 'SIMULATION' =
+      body.customer.accountScope === 'SIMULATION' ||
+      body.workspace.tenant.accountScope === 'SIMULATION'
+        ? 'SIMULATION'
+        : 'REAL';
+
+    let resolvedUsername =
+      normalizeUsername(body.customer.username) || suggestUsernameFromEmail(emailNorm);
+    if (tenantDb.isUsernameTaken(resolvedUsername, body.customer.id)) {
+      resolvedUsername = `${resolvedUsername.slice(0, 24)}_${Date.now().toString(36).slice(-4)}`;
+    }
+
     const rawPass = body.customer.passwordDemo?.trim() || `Ka-${Date.now().toString(36)}`;
     const passwordHash = await hashAccountPassword(rawPass);
 
-    const realCustomer: ManagedCustomerAccount = {
+    const nextCustomer: ManagedCustomerAccount = {
       ...body.customer,
+      username: resolvedUsername,
       email: emailNorm,
       passwordDemo: '••••••••',
       passwordHash,
       allowGoogleLogin: true,
       allowPasswordLogin: true,
-      accountScope: 'REAL',
+      accountScope: targetScope,
       isDemoAccount: false,
+      monthlyRecurringRevenue:
+        targetScope === 'SIMULATION' ? '0.0000' : body.customer.monthlyRecurringRevenue,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        body.customer.idleTimeoutMinutes,
+        DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      ),
     };
-    const realWorkspace: TenantWorkspaceData = {
+    const nextWorkspace: TenantWorkspaceData = {
       ...body.workspace,
       tenant: {
         ...body.workspace.tenant,
-        accountScope: 'REAL',
-        ownerAccountId: realCustomer.id,
+        accountScope: targetScope,
+        ownerAccountId: nextCustomer.id,
       },
     };
 
-    const savedCustomer = tenantDb.upsertCustomer(realCustomer);
-    const savedWorkspace = tenantDb.saveWorkspace('REAL', savedCustomer.id, realWorkspace);
+    const savedCustomer = tenantDb.upsertCustomer(nextCustomer);
+    const savedWorkspace = tenantDb.saveWorkspace(targetScope, savedCustomer.id, nextWorkspace);
 
     const pgSync = await syncUserAccountToPostgres({
       email: savedCustomer.email,
@@ -1209,7 +1576,7 @@ export async function createExpressApp(
 
     const token = signSessionToken({
       role: 'CUSTOMER',
-      accountScope: 'REAL',
+      accountScope: targetScope,
       ownerAccountId: savedCustomer.id,
       email: savedCustomer.email,
       allowedTenantIds: savedCustomer.tenantIds,
@@ -1219,7 +1586,11 @@ export async function createExpressApp(
     return res.status(201).json({
       authenticated: true,
       role: 'CUSTOMER',
-      accountScope: 'REAL',
+      accountScope: targetScope,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        savedCustomer.idleTimeoutMinutes,
+        DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      ),
       token,
       customer: sanitizeCustomerForApi(savedCustomer),
       workspace: savedWorkspace,
@@ -1246,9 +1617,16 @@ export async function createExpressApp(
           tenantDb.saveWorkspace(scope, ws.tenant.ownerAccountId || 'real-owner', ws);
         }
       }
+      const masterRec =
+        tenantDb.findMasterAccountById(session.ownerAccountId) ??
+        tenantDb.findMasterAccountByEmail(session.email);
       return res.status(200).json({
         role: 'MASTER_ADMIN',
         accountScope: 'REAL',
+        idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+          masterRec?.idleTimeoutMinutes,
+          DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+        ),
         customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
         workspaces: tenantDb.listAllWorkspaces(),
       });
@@ -1287,6 +1665,10 @@ export async function createExpressApp(
       return res.status(200).json({
         role: 'CUSTOMER',
         accountScope: scope,
+        idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+          customer.idleTimeoutMinutes,
+          DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+        ),
         customers: [sanitizeCustomerForApi(customer)],
         workspaces,
       });
@@ -1305,9 +1687,14 @@ export async function createExpressApp(
         return res.status(404).json({ error: 'Workspace usaha tidak ditemukan.' });
       }
       const owner = tenantDb.findCustomerById(session.ownerAccountId);
+      const staffRec = (ws.staffAccounts ?? []).find((s) => s.id === session.staffId);
       return res.status(200).json({
         role: 'STAFF',
         accountScope: session.accountScope,
+        idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+          staffRec?.idleTimeoutMinutes,
+          DEFAULT_STAFF_IDLE_TIMEOUT_MINUTES,
+        ),
         customers: owner ? [sanitizeCustomerForApi(owner)] : [],
         workspaces: [ws],
       });

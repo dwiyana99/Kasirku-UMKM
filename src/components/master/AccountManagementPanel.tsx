@@ -17,6 +17,12 @@ import {
   Users,
 } from 'lucide-react';
 import { ModalShell } from '../ui/ModalShell';
+import {
+  DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+  formatIdleTimeoutLabel,
+  IDLE_TIMEOUT_PRESETS,
+} from '../../lib/auth/session-timeout';
 import { ACTIVE_VERTICAL_DEFINITIONS } from '../../lib/verticals/vertical-registry';
 import type {
   BillingCycle,
@@ -46,6 +52,7 @@ interface AuthInfraStatus {
 interface AccountsApiResponse {
   masterAccounts: MasterAdminAccountSummary[];
   realAccounts: CustomerAccountRow[];
+  simulationAccounts?: CustomerAccountRow[];
   demoAccounts: CustomerAccountRow[];
   authInfraStatus: AuthInfraStatus;
   ok?: boolean;
@@ -53,13 +60,14 @@ interface AccountsApiResponse {
   error?: string;
 }
 
-type AccountScopeFilter = 'ALL' | 'REAL' | 'DEMO' | 'MASTER';
-type AccountTypeKey = 'MASTER' | 'REAL' | 'DEMO';
+type AccountScopeFilter = 'ALL' | 'REAL' | 'SIMULATION' | 'DEMO' | 'MASTER';
+type AccountTypeKey = 'MASTER' | 'REAL' | 'SIMULATION' | 'DEMO';
 
 interface UnifiedAccountItem {
   id: string;
   accountType: AccountTypeKey;
   fullName: string;
+  username?: string;
   email: string;
   phone: string;
   status: string;
@@ -73,6 +81,7 @@ interface UnifiedAccountItem {
   demoExpiresAt?: string | null;
   demoPasswordHint?: string;
   maxTenantsAllowed?: number;
+  idleTimeoutMinutes: number;
   notes: string;
   lastLoginAt?: string | null;
   createdAt: string;
@@ -117,12 +126,14 @@ export function AccountManagementPanel({
   currentMasterEmail,
   onOpenEnvSecrets,
   onImpersonateCustomer,
+  onStartSimulationFlow,
   onAccountsMutated,
 }: {
   authToken?: string;
   currentMasterEmail: string;
   onOpenEnvSecrets: () => void;
   onImpersonateCustomer: (customerId: string) => void;
+  onStartSimulationFlow?: () => void;
   onAccountsMutated: () => Promise<void>;
 }) {
   const [loading, setLoading] = useState(true);
@@ -133,8 +144,10 @@ export function AccountManagementPanel({
 
   const [masterAccounts, setMasterAccounts] = useState<MasterAdminAccountSummary[]>([]);
   const [realAccounts, setRealAccounts] = useState<CustomerAccountRow[]>([]);
+  const [simulationAccounts, setSimulationAccounts] = useState<CustomerAccountRow[]>([]);
   const [demoAccounts, setDemoAccounts] = useState<CustomerAccountRow[]>([]);
   const [infraStatus, setInfraStatus] = useState<AuthInfraStatus | null>(null);
+  const [resettingSimId, setResettingSimId] = useState<string | null>(null);
 
   const [scopeFilter, setScopeFilter] = useState<AccountScopeFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,11 +158,13 @@ export function AccountManagementPanel({
   const [createError, setCreateError] = useState('');
   const [newType, setNewType] = useState<AccountTypeKey>('REAL');
   const [newFullName, setNewFullName] = useState('');
+  const [newUsername, setNewUsername] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newAllowGoogle, setNewAllowGoogle] = useState(true);
   const [newAllowPassword, setNewAllowPassword] = useState(true);
+  const [newIdleTimeout, setNewIdleTimeout] = useState<number>(DEFAULT_USER_IDLE_TIMEOUT_MINUTES);
   const [newBusinessName, setNewBusinessName] = useState('');
   const [newVertical, setNewVertical] = useState<BusinessVertical>('WARUNG_SEMBAKO');
   const [newPlan, setNewPlan] = useState<SubscriptionPlanCode>('PRO');
@@ -162,10 +177,12 @@ export function AccountManagementPanel({
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
   const [editFullName, setEditFullName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editStatus, setEditStatus] = useState<string>('ACTIVE');
   const [editAllowGoogle, setEditAllowGoogle] = useState(true);
   const [editAllowPassword, setEditAllowPassword] = useState(true);
+  const [editIdleTimeout, setEditIdleTimeout] = useState<number>(0);
   const [editNewPassword, setEditNewPassword] = useState('');
   const [editPlan, setEditPlan] = useState<SubscriptionPlanCode>('PRO');
   const [editExtendDemoDays, setEditExtendDemoDays] = useState('');
@@ -186,6 +203,7 @@ export function AccountManagementPanel({
   const applyServerPayload = useCallback((data: AccountsApiResponse) => {
     setMasterAccounts(data.masterAccounts || []);
     setRealAccounts(data.realAccounts || []);
+    setSimulationAccounts(data.simulationAccounts || []);
     setDemoAccounts(data.demoAccounts || []);
     if (data.authInfraStatus) {
       setInfraStatus(data.authInfraStatus);
@@ -222,12 +240,14 @@ export function AccountManagementPanel({
       id: m.id,
       accountType: 'MASTER',
       fullName: m.fullName,
+      username: m.username,
       email: m.email,
       phone: m.phone,
       status: m.status,
       allowGoogleLogin: m.allowGoogleLogin,
       allowPasswordLogin: m.allowPasswordLogin,
       isPrimaryOwner: m.isPrimaryOwner,
+      idleTimeoutMinutes: m.idleTimeoutMinutes ?? DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
       notes: m.notes,
       lastLoginAt: m.lastLoginAt,
       createdAt: m.createdAt,
@@ -237,6 +257,7 @@ export function AccountManagementPanel({
       id: c.id,
       accountType: 'REAL',
       fullName: c.fullName,
+      username: c.username,
       email: c.email,
       phone: c.phone,
       status: c.status,
@@ -248,6 +269,28 @@ export function AccountManagementPanel({
       subscriptionPlan: c.subscriptionPlan || 'BASIC',
       billingCycle: c.billingCycle,
       maxTenantsAllowed: c.maxTenantsAllowed,
+      idleTimeoutMinutes: c.idleTimeoutMinutes ?? DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      notes: c.adminNotes,
+      createdAt: c.createdAt,
+    }));
+
+    const sims: UnifiedAccountItem[] = simulationAccounts.map((c) => ({
+      id: c.id,
+      accountType: 'SIMULATION',
+      fullName: c.fullName,
+      username: c.username,
+      email: c.email,
+      phone: c.phone,
+      status: c.status,
+      allowGoogleLogin: c.allowGoogleLogin ?? true,
+      allowPasswordLogin: c.allowPasswordLogin ?? true,
+      isPrimaryOwner: false,
+      businessName: c.businessName,
+      vertical: c.vertical,
+      subscriptionPlan: c.subscriptionPlan || 'PRO',
+      billingCycle: c.billingCycle,
+      maxTenantsAllowed: c.maxTenantsAllowed,
+      idleTimeoutMinutes: c.idleTimeoutMinutes ?? DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
       notes: c.adminNotes,
       createdAt: c.createdAt,
     }));
@@ -256,6 +299,7 @@ export function AccountManagementPanel({
       id: c.id,
       accountType: 'DEMO',
       fullName: c.fullName,
+      username: c.username,
       email: c.email,
       phone: c.phone,
       status: c.status,
@@ -269,12 +313,13 @@ export function AccountManagementPanel({
       demoExpiresAt: c.demoExpiresAt,
       demoPasswordHint: c.passwordDemo,
       maxTenantsAllowed: c.maxTenantsAllowed,
+      idleTimeoutMinutes: c.idleTimeoutMinutes ?? DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
       notes: c.adminNotes,
       createdAt: c.createdAt,
     }));
 
-    return [...masters, ...reals, ...demos];
-  }, [demoAccounts, masterAccounts, realAccounts]);
+    return [...masters, ...reals, ...sims, ...demos];
+  }, [demoAccounts, masterAccounts, realAccounts, simulationAccounts]);
 
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -284,6 +329,7 @@ export function AccountManagementPanel({
       return (
         row.fullName.toLowerCase().includes(q) ||
         row.email.toLowerCase().includes(q) ||
+        (row.username || '').toLowerCase().includes(q) ||
         (row.businessName || '').toLowerCase().includes(q) ||
         (row.phone || '').toLowerCase().includes(q)
       );
@@ -331,14 +377,20 @@ export function AccountManagementPanel({
   const resetCreateForm = (defaultType: AccountTypeKey = 'REAL') => {
     setNewType(defaultType);
     setNewFullName('');
+    setNewUsername('');
     setNewEmail('');
     setNewPhone('');
     setNewPassword('');
     setNewAllowGoogle(true);
     setNewAllowPassword(true);
+    setNewIdleTimeout(
+      defaultType === 'MASTER'
+        ? DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES
+        : DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+    );
     setNewBusinessName('');
     setNewVertical('WARUNG_SEMBAKO');
-    setNewPlan(defaultType === 'DEMO' ? 'PRO' : 'BASIC');
+    setNewPlan(defaultType === 'DEMO' || defaultType === 'SIMULATION' ? 'PRO' : 'BASIC');
     setNewCycle('MONTHLY');
     setNewDemoDays('7');
     setNewNotes('');
@@ -355,11 +407,11 @@ export function AccountManagementPanel({
       return;
     }
     if (newAllowPassword && newPassword.length < 6) {
-      setCreateError('Kata sandi minimal 6 karakter saat Login Email & Sandi diaktifkan.');
+      setCreateError('Kata sandi minimal 6 karakter saat Login Email/Username & Sandi diaktifkan.');
       return;
     }
     if (!newAllowPassword && !newAllowGoogle) {
-      setCreateError('Aktifkan minimal satu metode login (Email & Sandi atau Google OAuth).');
+      setCreateError('Aktifkan minimal satu metode login (Email/Username & Sandi atau Google OAuth).');
       return;
     }
 
@@ -371,11 +423,13 @@ export function AccountManagementPanel({
         body: JSON.stringify({
           accountType: newType,
           fullName: newFullName.trim(),
+          username: newUsername.trim() || undefined,
           email: newEmail.trim().toLowerCase(),
           phone: newPhone.trim(),
           password: newPassword || undefined,
           allowGoogleLogin: newAllowGoogle,
           allowPasswordLogin: newAllowPassword,
+          idleTimeoutMinutes: Math.max(0, Math.min(1440, Math.round(newIdleTimeout || 0))),
           notes: newNotes.trim(),
           businessName: newType === 'MASTER' ? undefined : newBusinessName.trim() || undefined,
           vertical: newType === 'MASTER' ? undefined : newVertical,
@@ -403,10 +457,12 @@ export function AccountManagementPanel({
   const openEditModal = (item: UnifiedAccountItem) => {
     setEditTarget(item);
     setEditFullName(item.fullName);
+    setEditUsername(item.username || '');
     setEditPhone(item.phone || '');
     setEditStatus(item.status);
     setEditAllowGoogle(item.allowGoogleLogin);
     setEditAllowPassword(item.allowPasswordLogin);
+    setEditIdleTimeout(item.idleTimeoutMinutes);
     setEditNewPassword('');
     setEditPlan(item.subscriptionPlan || 'PRO');
     setEditExtendDemoDays('');
@@ -425,7 +481,7 @@ export function AccountManagementPanel({
       return;
     }
     if (!editAllowGoogle && !editAllowPassword) {
-      setEditError('Aktifkan minimal satu metode login (Google OAuth atau Email & Sandi).');
+      setEditError('Aktifkan minimal satu metode login (Google OAuth atau Email/Username & Sandi).');
       return;
     }
 
@@ -433,10 +489,12 @@ export function AccountManagementPanel({
     try {
       const body: Record<string, unknown> = {
         fullName: editFullName.trim(),
+        username: editUsername.trim(),
         phone: editPhone.trim(),
         status: editStatus as CustomerAccountStatus,
         allowGoogleLogin: editAllowGoogle,
         allowPasswordLogin: editAllowPassword,
+        idleTimeoutMinutes: Math.max(0, Math.min(1440, Math.round(editIdleTimeout || 0))),
         notes: editNotes.trim(),
       };
       if (editNewPassword.trim()) {
@@ -470,6 +528,33 @@ export function AccountManagementPanel({
       setEditError('Gagal menghubungi server saat menyimpan akun.');
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  const handleResetSimulation = async (item: UnifiedAccountItem) => {
+    setResettingSimId(item.id);
+    setError('');
+    setFeedback('');
+    try {
+      const res = await fetch(
+        `/api/master/accounts/simulation/${encodeURIComponent(item.id)}/reset`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+        },
+      );
+      const data = (await res.json()) as AccountsApiResponse;
+      if (!res.ok) {
+        setError(data.error || 'Gagal mereset data akun simulasi.');
+        return;
+      }
+      applyServerPayload(data);
+      setFeedback(data.message || `Data simulasi ${item.businessName || item.email} berhasil direset.`);
+      await onAccountsMutated();
+    } catch {
+      setError('Gagal menghubungi server saat mereset akun simulasi.');
+    } finally {
+      setResettingSimId(null);
     }
   };
 
@@ -684,6 +769,7 @@ export function AccountManagementPanel({
               [
                 { id: 'ALL', label: `Semua (${unifiedRows.length})` },
                 { id: 'REAL', label: `Akun Real (${realAccounts.length})` },
+                { id: 'SIMULATION', label: `Akun Simulasi (${simulationAccounts.length})` },
                 { id: 'DEMO', label: `Akun Demo (${demoAccounts.length})` },
                 { id: 'MASTER', label: `Master Admin (${masterAccounts.length})` },
               ] as const
@@ -714,10 +800,21 @@ export function AccountManagementPanel({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari nama, email, usaha..."
+                placeholder="Cari nama, username, email..."
                 className="w-full sm:w-64 pl-8 pr-3 py-2 text-xs bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
               />
             </div>
+            {onStartSimulationFlow && (
+              <button
+                type="button"
+                data-testid="start-simulation-from-scratch-btn"
+                onClick={onStartSimulationFlow}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-stone-800 bg-stone-100 hover:bg-stone-200 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
+              >
+                <ArrowUpRight className="w-3.5 h-3.5" strokeWidth={1.75} />
+                <span>Mulai Simulasi Dari Awal</span>
+              </button>
+            )}
             <button
               type="button"
               data-testid="add-login-account-btn"
@@ -725,6 +822,8 @@ export function AccountManagementPanel({
                 resetCreateForm(
                   scopeFilter === 'MASTER'
                     ? 'MASTER'
+                    : scopeFilter === 'SIMULATION'
+                    ? 'SIMULATION'
                     : scopeFilter === 'DEMO'
                     ? 'DEMO'
                     : 'REAL',
@@ -795,6 +894,11 @@ export function AccountManagementPanel({
                           )}
                         </div>
                         <p className="font-mono text-[11px] text-stone-600 mt-0.5">{row.email}</p>
+                        {row.username && (
+                          <p className="font-mono text-[11px] text-emerald-700 mt-0.5">
+                            Username: @{row.username}
+                          </p>
+                        )}
                         {row.phone && (
                           <p className="font-mono tabular-nums text-[11px] text-stone-400 mt-0.5">
                             WA/HP: {row.phone}
@@ -808,6 +912,8 @@ export function AccountManagementPanel({
                             className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
                               row.accountType === 'MASTER'
                                 ? 'bg-stone-900 text-white border-stone-900'
+                                : row.accountType === 'SIMULATION'
+                                ? 'bg-stone-100 text-stone-900 border-stone-300'
                                 : row.accountType === 'DEMO'
                                 ? 'bg-amber-50 text-amber-900 border-amber-300'
                                 : 'bg-emerald-50 text-emerald-900 border-emerald-200'
@@ -815,6 +921,8 @@ export function AccountManagementPanel({
                           >
                             {row.accountType === 'MASTER'
                               ? 'MASTER ADMIN'
+                              : row.accountType === 'SIMULATION'
+                              ? 'AKUN SIMULASI'
                               : row.accountType === 'DEMO'
                               ? 'AKUN DEMO'
                               : 'AKUN REAL'}
@@ -834,6 +942,11 @@ export function AccountManagementPanel({
                             <p className="font-medium text-stone-800">
                               {row.businessName || 'Usaha UMKM'}
                             </p>
+                            {row.accountType === 'SIMULATION' && (
+                              <p className="text-[11px] text-stone-500">
+                                Ruang kerja terisolasi setara Real (Rp 0 MRR)
+                              </p>
+                            )}
                             {row.accountType === 'DEMO' && row.demoExpiresAt && (
                               <p className="text-[11px] text-stone-500 tabular-nums">
                                 Berlaku s/d {formatIndoDateShort(row.demoExpiresAt)}
@@ -851,7 +964,7 @@ export function AccountManagementPanel({
                               row.allowPasswordLogin ? 'text-stone-800 font-medium' : 'text-stone-400'
                             }
                           >
-                            Email &amp; Sandi: {row.allowPasswordLogin ? 'Aktif' : 'Nonaktif'}
+                            Email / Username: {row.allowPasswordLogin ? 'Aktif' : 'Nonaktif'}
                           </p>
                           <p
                             className={
@@ -859,6 +972,9 @@ export function AccountManagementPanel({
                             }
                           >
                             Google OAuth: {row.allowGoogleLogin ? 'Diizinkan' : 'Diblokir'}
+                          </p>
+                          <p className="text-stone-500 font-mono tabular-nums">
+                            Auto-Logout: {formatIdleTimeoutLabel(row.idleTimeoutMinutes)}
                           </p>
                         </div>
                       </td>
@@ -883,6 +999,18 @@ export function AccountManagementPanel({
                             <span>Edit / Sandi</span>
                           </button>
 
+                          {row.accountType === 'SIMULATION' && (
+                            <button
+                              type="button"
+                              disabled={resettingSimId === row.id}
+                              onClick={() => void handleResetSimulation(row)}
+                              title="Reset transaksi & stok simulasi kembali bersih"
+                              className="px-2.5 py-1.5 text-[11px] font-semibold text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors disabled:opacity-60"
+                            >
+                              {resettingSimId === row.id ? 'Mereset...' : 'Reset Data'}
+                            </button>
+                          )}
+
                           {!isCurrentActor && (
                             <button
                               type="button"
@@ -903,7 +1031,7 @@ export function AccountManagementPanel({
                             <button
                               type="button"
                               onClick={() => onImpersonateCustomer(row.id)}
-                              aria-label={`Buka Workspace ${row.email}`}
+                              aria-label={`Buka Ruang Kerja ${row.email}`}
                               title="Masuk ke Ruang Kerja Usaha ini"
                               className="p-1.5 text-stone-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
                             >
@@ -938,8 +1066,8 @@ export function AccountManagementPanel({
         onClose={() => setCreateOpen(false)}
         headerId="create-account-modal-title"
         testId="create-account-modal"
-        title="Tambah Akun Login Baru (Demo / Real / Master)"
-        subtitle="Akun otomatis tersinkron ke ruang kerja aplikasi & database Neon PostgreSQL / Better Auth."
+        title="Tambah Akun Login Baru (Real / Simulasi / Demo / Master)"
+        subtitle="Akun langsung bisa dipakai login via Google OAuth maupun Username/Email + Sandi."
         maxWidthClass="max-w-xl"
       >
         <form onSubmit={handleCreateAccount} className="p-6 space-y-4">
@@ -954,19 +1082,27 @@ export function AccountManagementPanel({
             <span className="block text-xs font-semibold text-stone-700 mb-1.5">
               Tipe Akun Login
             </span>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(
                 [
-                  { id: 'REAL', label: 'Akun Real', desc: 'Usaha Asli' },
-                  { id: 'DEMO', label: 'Akun Demo', desc: 'Uji Coba UMKM' },
-                  { id: 'MASTER', label: 'Master Admin', desc: 'Pengelola SaaS' },
+                  { id: 'REAL', label: 'Akun Real', desc: 'Usaha berbayar' },
+                  { id: 'SIMULATION', label: 'Akun Simulasi', desc: 'Setara Real, Rp 0' },
+                  { id: 'DEMO', label: 'Akun Demo', desc: 'Uji coba terbatas' },
+                  { id: 'MASTER', label: 'Master Admin', desc: 'Pengelola sistem' },
                 ] as const
               ).map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
                   data-testid={`new-account-type-${opt.id.toLowerCase()}`}
-                  onClick={() => setNewType(opt.id)}
+                  onClick={() => {
+                    setNewType(opt.id);
+                    setNewIdleTimeout(
+                      opt.id === 'MASTER'
+                        ? DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES
+                        : DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+                    );
+                  }}
                   className={`p-3 rounded-lg border text-left transition-colors ${
                     newType === opt.id
                       ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
@@ -996,16 +1132,17 @@ export function AccountManagementPanel({
               />
             </div>
             <div>
-              <label htmlFor="new-acc-phone" className="block text-xs font-semibold text-stone-700 mb-1">
-                No. WhatsApp / HP
+              <label htmlFor="new-acc-username" className="block text-xs font-semibold text-stone-700 mb-1">
+                Username Login (Opsional)
               </label>
               <input
-                id="new-acc-phone"
+                id="new-acc-username"
                 type="text"
-                value={newPhone}
-                onChange={(e) => setNewPhone(e.target.value)}
-                placeholder="0812-xxxx-xxxx"
-                className="w-full px-3 py-2 text-sm font-mono tabular-nums border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
+                data-testid="input-new-account-username"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))}
+                placeholder="contoh: toko_berkah (otomatis jika kosong)"
+                className="w-full px-3 py-2 text-sm font-mono border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
               />
             </div>
           </div>
@@ -1026,20 +1163,34 @@ export function AccountManagementPanel({
               />
             </div>
             <div>
-              <label htmlFor="new-acc-pass" className="block text-xs font-semibold text-stone-700 mb-1">
-                Kata Sandi {newAllowPassword ? '*' : '(Opsional)'}
+              <label htmlFor="new-acc-phone" className="block text-xs font-semibold text-stone-700 mb-1">
+                No. WhatsApp / HP (Untuk pemulihan akun)
               </label>
               <input
-                id="new-acc-pass"
-                type="password"
-                required={newAllowPassword}
-                minLength={6}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Minimal 6 karakter"
-                className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
+                id="new-acc-phone"
+                type="text"
+                value={newPhone}
+                onChange={(e) => setNewPhone(e.target.value)}
+                placeholder="0812-xxxx-xxxx"
+                className="w-full px-3 py-2 text-sm font-mono tabular-nums border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
               />
             </div>
+          </div>
+
+          <div>
+            <label htmlFor="new-acc-pass" className="block text-xs font-semibold text-stone-700 mb-1">
+              Kata Sandi {newAllowPassword ? '*' : '(Opsional)'}
+            </label>
+            <input
+              id="new-acc-pass"
+              type="password"
+              required={newAllowPassword}
+              minLength={6}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Minimal 6 karakter"
+              className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
+            />
           </div>
 
           {newType !== 'MASTER' && (
@@ -1126,8 +1277,58 @@ export function AccountManagementPanel({
                   </div>
                 )}
               </div>
+
+              {newType === 'SIMULATION' && (
+                <p className="pt-1 text-[11px] text-stone-600 leading-relaxed">
+                  Akun Simulasi selalu dimulai <strong>100% kosong</strong> (0 produk, 0 transaksi,
+                  modal Rp 0) seperti usaha baru pertama kali — tanpa data dummy dan Rp 0 tagihan.
+                </p>
+              )}
             </div>
           )}
+
+          <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="new-acc-timeout" className="text-xs font-semibold text-stone-800">
+                Batas Waktu Sesi (Auto-Logout Tidak Aktif)
+              </label>
+              <span className="font-mono text-[11px] text-stone-600">
+                {formatIdleTimeoutLabel(newIdleTimeout)}
+              </span>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-2.5">
+              <select
+                id="new-acc-timeout"
+                value={
+                  IDLE_TIMEOUT_PRESETS.some((p) => p.minutes === newIdleTimeout)
+                    ? String(newIdleTimeout)
+                    : 'CUSTOM'
+                }
+                onChange={(e) =>
+                  setNewIdleTimeout(e.target.value === 'CUSTOM' ? 45 : Number(e.target.value))
+                }
+                className="w-full px-3 py-2 text-xs bg-white border border-stone-200 rounded-lg"
+              >
+                {IDLE_TIMEOUT_PRESETS.map((p) => (
+                  <option key={p.minutes} value={String(p.minutes)}>
+                    {p.label}
+                  </option>
+                ))}
+                <option value="CUSTOM">Durasi Kustom (Menit)...</option>
+              </select>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={newIdleTimeout}
+                  onChange={(e) => setNewIdleTimeout(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-full px-3 py-2 text-xs font-mono tabular-nums bg-white border border-stone-200 rounded-lg"
+                />
+                <span className="text-[11px] text-stone-500 shrink-0">menit (0 = mati)</span>
+              </div>
+            </div>
+          </div>
 
           <div className="grid sm:grid-cols-2 gap-3 text-xs">
             <label className="flex items-start gap-2 p-3 rounded-lg border border-stone-200 cursor-pointer">
@@ -1229,17 +1430,31 @@ export function AccountManagementPanel({
                 />
               </div>
               <div>
-                <label htmlFor="edit-acc-phone" className="block text-xs font-semibold text-stone-700 mb-1">
-                  No. WhatsApp / HP
+                <label htmlFor="edit-acc-username" className="block text-xs font-semibold text-stone-700 mb-1">
+                  Username Login
                 </label>
                 <input
-                  id="edit-acc-phone"
+                  id="edit-acc-username"
                   type="text"
-                  value={editPhone}
-                  onChange={(e) => setEditPhone(e.target.value)}
+                  value={editUsername}
+                  onChange={(e) => setEditUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))}
+                  placeholder="username_akun"
                   className="w-full px-3 py-2 text-xs font-mono border border-stone-200 rounded-lg"
                 />
               </div>
+            </div>
+
+            <div>
+              <label htmlFor="edit-acc-phone" className="block text-xs font-semibold text-stone-700 mb-1">
+                No. WhatsApp / HP
+              </label>
+              <input
+                id="edit-acc-phone"
+                type="text"
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                className="w-full px-3 py-2 text-xs font-mono border border-stone-200 rounded-lg"
+              />
             </div>
 
             <div className="grid sm:grid-cols-2 gap-3">
@@ -1334,6 +1549,50 @@ export function AccountManagementPanel({
                 />
                 <span className="font-medium text-stone-800">Izinkan Google OAuth</span>
               </label>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="edit-acc-timeout" className="text-xs font-semibold text-stone-800">
+                  Batas Waktu Sesi (Auto-Logout Tidak Aktif)
+                </label>
+                <span className="font-mono text-[11px] text-stone-600">
+                  {formatIdleTimeoutLabel(editIdleTimeout)}
+                </span>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-2.5">
+                <select
+                  id="edit-acc-timeout"
+                  data-testid="edit-account-timeout-select"
+                  value={
+                    IDLE_TIMEOUT_PRESETS.some((p) => p.minutes === editIdleTimeout)
+                      ? String(editIdleTimeout)
+                      : 'CUSTOM'
+                  }
+                  onChange={(e) =>
+                    setEditIdleTimeout(e.target.value === 'CUSTOM' ? 45 : Number(e.target.value))
+                  }
+                  className="w-full px-3 py-2 text-xs bg-white border border-stone-200 rounded-lg"
+                >
+                  {IDLE_TIMEOUT_PRESETS.map((p) => (
+                    <option key={p.minutes} value={String(p.minutes)}>
+                      {p.label}
+                    </option>
+                  ))}
+                  <option value="CUSTOM">Durasi Kustom (Menit)...</option>
+                </select>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={editIdleTimeout}
+                    onChange={(e) => setEditIdleTimeout(Math.max(0, Number(e.target.value) || 0))}
+                    className="w-full px-3 py-2 text-xs font-mono tabular-nums bg-white border border-stone-200 rounded-lg"
+                  />
+                  <span className="text-[11px] text-stone-500 shrink-0">menit (0 = mati)</span>
+                </div>
+              </div>
             </div>
 
             <div>

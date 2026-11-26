@@ -12,7 +12,9 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { fromNodeHeaders } from 'better-auth/node';
 import { getPrismaClient, isDatabaseConfigured } from './prisma.ts';
+import { getStandardEnvValue } from './configSync.ts';
 import type { SignedSessionPayload } from './db/tenant-db.ts';
+import type { AccountScope } from '../types/domain.ts';
 
 const EPHEMERAL_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
 
@@ -61,13 +63,11 @@ export function resolveBaseUrl(
   }
 
   const explicit = (
-    env.BETTER_AUTH_URL ||
-    env.NEXT_PUBLIC_APP_URL ||
-    env.APP_URL ||
+    getStandardEnvValue('BETTER_AUTH_URL', { env }) ||
+    getStandardEnvValue('NEXT_PUBLIC_APP_URL', { env }) ||
+    getStandardEnvValue('APP_URL', { env }) ||
     ''
-  )
-    .trim()
-    .replace(/\/+$/, '');
+  ).replace(/\/+$/, '');
   if (explicit) return explicit;
 
   const vercelProdUrl = (env.VERCEL_PROJECT_PRODUCTION_URL || '')
@@ -148,23 +148,17 @@ export function buildTrustedOrigins(
 }
 
 export function isGoogleOAuthConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  const clientId = (env.GOOGLE_CLIENT_ID || '').trim();
-  const clientSecret = (env.GOOGLE_CLIENT_SECRET || '').trim();
-  return Boolean(
-    clientId &&
-      clientSecret &&
-      !clientId.includes('YOUR_') &&
-      !clientSecret.includes('YOUR_'),
-  );
+  const clientId = getStandardEnvValue('GOOGLE_CLIENT_ID', { env });
+  const clientSecret = getStandardEnvValue('GOOGLE_CLIENT_SECRET', { env });
+  return Boolean(clientId && clientSecret);
 }
 
 export function getAuthConfigurationStatus(
   env: NodeJS.ProcessEnv = process.env,
   requestOrigin?: string,
 ): AuthConfigurationStatus {
-  const secretRaw = (env.BETTER_AUTH_SECRET || '').trim();
-  const betterAuthSecretConfigured =
-    secretRaw.length >= 16 && !secretRaw.includes('REPLACE_WITH_');
+  const secretRaw = getStandardEnvValue('BETTER_AUTH_SECRET', { env });
+  const betterAuthSecretConfigured = secretRaw.length >= 16;
   const databaseConfigured = isDatabaseConfigured(env);
   const googleAuthConfigured = isGoogleOAuthConfigured(env);
 
@@ -292,11 +286,11 @@ export function getBetterAuthInstance(requestOrigin?: string): KasirAkunAuthInst
 
   const baseURL = resolveBaseUrl(process.env, requestOrigin);
   const secret =
-    (process.env.BETTER_AUTH_SECRET || '').trim() ||
-    (process.env.SESSION_SIGNING_SECRET || '').trim() ||
+    getStandardEnvValue('BETTER_AUTH_SECRET', { env: process.env }) ||
+    getStandardEnvValue('SESSION_SIGNING_SECRET', { env: process.env }) ||
     EPHEMERAL_FALLBACK_SECRET;
-  const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
-  const googleClientSecret = (process.env.GOOGLE_CLIENT_SECRET || '').trim();
+  const googleClientId = getStandardEnvValue('GOOGLE_CLIENT_ID', { env: process.env });
+  const googleClientSecret = getStandardEnvValue('GOOGLE_CLIENT_SECRET', { env: process.env });
   const hasGoogle = isGoogleOAuthConfigured();
   const trustedOrigins = buildTrustedOrigins(process.env, requestOrigin);
 
@@ -335,7 +329,7 @@ export interface UnifiedCurrentSession {
   fullName: string;
   role: 'MASTER_ADMIN' | 'TENANT_OWNER' | 'STAFF';
   allowedTenantIds: string[];
-  accountScope: 'REAL' | 'DEMO';
+  accountScope: AccountScope;
   needsOnboarding: boolean;
   authSource: 'better_auth' | 'bearer_token';
   image?: string | null;

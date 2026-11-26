@@ -26,8 +26,15 @@ import type {
   TenantWorkspaceData,
 } from '../../types/domain.ts';
 
+import {
+  DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+  normalizeIdleTimeoutMinutes,
+} from './session-timeout.ts';
+
 export interface MasterAdminAccountRecord {
   id: string;
+  username?: string;
   email: string;
   fullName: string;
   phone: string;
@@ -36,10 +43,49 @@ export interface MasterAdminAccountRecord {
   allowGoogleLogin: boolean;
   allowPasswordLogin: boolean;
   isPrimaryOwner: boolean;
+  idleTimeoutMinutes?: number;
   notes: string;
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+const USERNAME_REGEX = /^[a-z0-9._-]{3,32}$/;
+
+export function normalizeUsername(raw?: string | null): string | undefined {
+  if (!raw || typeof raw !== 'string') return undefined;
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9._-]/g, '');
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, 32);
+}
+
+export function isValidUsername(raw: string): boolean {
+  return USERNAME_REGEX.test(raw.trim().toLowerCase().replace(/^@+/, ''));
+}
+
+export function suggestUsernameFromEmail(email: string): string {
+  const local = (email.split('@')[0] || 'user')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '');
+  if (local.length >= 3) return local.slice(0, 28);
+  return `${local || 'user'}2026`.slice(0, 28);
+}
+
+export function maskEmailForRecovery(email: string): string {
+  const [local, domain] = email.trim().toLowerCase().split('@');
+  if (!local || !domain) return '***';
+  if (local.length <= 2) return `${local[0]}***@${domain}`;
+  return `${local.slice(0, 2)}***${local.slice(-1)}@${domain}`;
+}
+
+export function maskUsernameForRecovery(username: string): string {
+  const clean = username.trim().toLowerCase();
+  if (clean.length <= 3) return `${clean[0] || '*'}***`;
+  return `${clean.slice(0, 2)}***${clean.slice(-1)}`;
 }
 
 export async function hashAccountPassword(plainPassword: string): Promise<string> {
@@ -75,6 +121,7 @@ export function sanitizeMasterAdminAccount(
 ): MasterAdminAccountSummary {
   return {
     id: rec.id,
+    username: rec.username,
     email: rec.email,
     fullName: rec.fullName,
     phone: rec.phone,
@@ -83,6 +130,10 @@ export function sanitizeMasterAdminAccount(
     allowPasswordLogin: rec.allowPasswordLogin,
     isPrimaryOwner: rec.isPrimaryOwner,
     hasPassword: Boolean(rec.passwordHash && rec.passwordHash.trim().length > 0),
+    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+      rec.idleTimeoutMinutes,
+      DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+    ),
     notes: rec.notes,
     lastLoginAt: rec.lastLoginAt,
     createdAt: rec.createdAt,
@@ -103,6 +154,10 @@ export function sanitizeCustomerForApi(
       : cust.passwordDemo,
     allowGoogleLogin: cust.allowGoogleLogin ?? true,
     allowPasswordLogin: cust.allowPasswordLogin ?? true,
+    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+      cust.idleTimeoutMinutes,
+      DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+    ),
   };
   delete safe.passwordHash;
   return safe;
@@ -124,6 +179,7 @@ export async function buildInitialMasterAdminAccounts(params?: {
   const list: MasterAdminAccountRecord[] = [
     {
       id: 'master-primary-1',
+      username: 'master',
       email: primaryEmail,
       fullName: 'Master Pemilik KasirAkun',
       phone: '081100000001',
@@ -132,6 +188,7 @@ export async function buildInitialMasterAdminAccounts(params?: {
       allowGoogleLogin: true,
       allowPasswordLogin: true,
       isPrimaryOwner: true,
+      idleTimeoutMinutes: DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
       notes: 'Akun utama pengelola platform KasirAkun UMKM',
       lastLoginAt: null,
       createdAt: now,
@@ -142,6 +199,7 @@ export async function buildInitialMasterAdminAccounts(params?: {
   if (secondaryEmail && secondaryEmail !== primaryEmail) {
     list.push({
       id: 'master-owner-google',
+      username: suggestUsernameFromEmail(secondaryEmail),
       email: secondaryEmail,
       fullName: 'Pemilik Platform (Google & Email)',
       phone: '081100000002',
@@ -150,6 +208,7 @@ export async function buildInitialMasterAdminAccounts(params?: {
       allowGoogleLogin: true,
       allowPasswordLogin: true,
       isPrimaryOwner: true,
+      idleTimeoutMinutes: DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
       notes: 'Akun Google Pemilik Utama terhubung dengan konsol Master Admin',
       lastLoginAt: null,
       createdAt: now,
@@ -337,6 +396,7 @@ export function resolveBetterAuthLoginTarget(params: {
 export interface MasterProvisionCustomerInput {
   accountScope: AccountScope;
   fullName: string;
+  username?: string;
   email: string;
   password: string;
   phone?: string;
@@ -349,6 +409,7 @@ export interface MasterProvisionCustomerInput {
   demoDurationDays?: number;
   allowGoogleLogin?: boolean;
   allowPasswordLogin?: boolean;
+  idleTimeoutMinutes?: number;
   taxEntity?: TaxEntityType;
   notes?: string;
   passwordHash: string;
@@ -365,6 +426,7 @@ export function buildMasterProvisionedAccountAndWorkspace(
   const nowIso = now.toISOString();
   const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const emailNorm = input.email.trim().toLowerCase();
+  const normalizedUsername = normalizeUsername(input.username) || suggestUsernameFromEmail(emailNorm);
   const addOns: AddOnModuleCode[] =
     input.planCode === 'EXPERT'
       ? ['ADDON_EXTRA_BRANCH', 'ADDON_TAX_CORETAX', 'ADDON_ACCOUNTING_PRO']
@@ -455,6 +517,7 @@ export function buildMasterProvisionedAccountAndWorkspace(
     const customer: ManagedCustomerAccount = {
       id: custId,
       fullName: input.fullName.trim(),
+      username: normalizedUsername,
       email: emailNorm,
       passwordDemo: input.password,
       passwordHash: input.passwordHash,
@@ -481,6 +544,114 @@ export function buildMasterProvisionedAccountAndWorkspace(
       validUntil: expiresAt,
       adminNotes:
         input.notes?.trim() || `Akun Demo dibuat Master Admin (${durationDays} hari · ${input.planCode})`,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        input.idleTimeoutMinutes,
+        DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      ),
+      createdAt: nowIso,
+    };
+
+    return { customer, workspace };
+  }
+
+  // SIMULATION account provisioning — 100% clean-slate workspace (zero dummy data, Rp 0 opening capital)
+  // behaving identically to a brand-new REAL account in an isolated `simulation` partition with Rp 0 MRR.
+  if (input.accountScope === 'SIMULATION') {
+    const custId = `cust-sim-${suffix}`;
+    const tenantId = `sim-${suffix}`;
+    const validUntil = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
+
+    const simInv: SubscriptionInvoice = {
+      id: `inv-sim-${suffix}`,
+      invoiceNumber: `SIM-${nowIso.slice(0, 10).replace(/-/g, '')}-${suffix.slice(-4).toUpperCase()}`,
+      customerEmail: emailNorm,
+      billingCycle: input.billingCycle,
+      planCode: input.planCode,
+      selectedAddOns: addOns,
+      selectedModules: legacyModules,
+      subtotalAmount: '0.0000',
+      dppNilaiLain: '0.0000',
+      ppnAmount: '0.0000',
+      grandTotal: '0.0000',
+      paymentMethod: 'BANK_TRANSFER',
+      paymentStatus: 'VERIFIED_PAID',
+      gatewayRefId: `SIMULATION-PROVISION-${suffix}`,
+      paidAt: nowIso,
+      createdAt: nowIso,
+    };
+
+    const provisioned = provisionOnboardedCustomer({
+      invoice: simInv,
+      accountScope: 'SIMULATION',
+      username: normalizedUsername,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        input.idleTimeoutMinutes,
+        DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      ),
+      fullName: input.fullName.trim(),
+      email: emailNorm,
+      passwordDemo: input.password,
+      phone: input.phone?.trim() || '081200000000',
+      businessName: input.businessName.trim(),
+      vertical: input.vertical,
+      taxEntity: input.taxEntity || 'WP_OP',
+      isPkp: false,
+      npwp16: '3174010000000001',
+      nitku22: '3174010000000001000001',
+      address: 'Indonesia',
+      receiptFooter: `Terima kasih telah berkunjung ke ${input.businessName.trim()}!`,
+      thermalPaperWidth: '80mm',
+      autoPrintQrOrders: true,
+      tableCount: input.vertical === 'RESTORAN' || input.vertical === 'KEDAI_MAKAN' ? 4 : 0,
+      initialCapital: '0',
+      menuDrafts: [],
+      customFields: [],
+    });
+
+    const workspace = enforceWorkspacePlanEntitlements({
+      ...provisioned.workspace,
+      tenant: {
+        ...provisioned.workspace.tenant,
+        id: tenantId,
+        accountScope: 'SIMULATION',
+        ownerAccountId: custId,
+      },
+    });
+
+    const customer: ManagedCustomerAccount = {
+      id: custId,
+      fullName: input.fullName.trim(),
+      username: normalizedUsername,
+      email: emailNorm,
+      passwordDemo: '••••••••',
+      passwordHash: input.passwordHash,
+      allowGoogleLogin: input.allowGoogleLogin ?? true,
+      allowPasswordLogin: input.allowPasswordLogin ?? true,
+      phone: input.phone?.trim() || '081200000000',
+      role: 'OWNER',
+      status: input.status || 'ACTIVE',
+      billingCycle: input.billingCycle,
+      subscriptionPlan: input.planCode,
+      activeModules: legacyModules,
+      activeAddOns: addOns,
+      monthlyRecurringRevenue: '0.0000',
+      maxTenantsAllowed: Math.max(1, input.maxTenantsAllowed ?? 3),
+      tenantIds: [tenantId],
+      primaryTenantId: tenantId,
+      accountScope: 'SIMULATION',
+      isDemoAccount: false,
+      demoVertical: input.vertical,
+      demoExpiresAt: null,
+      onboardingCompleted: true,
+      lastInvoiceNumber: `SIM-${suffix.slice(-6).toUpperCase()}`,
+      lastPaidAt: nowIso,
+      validUntil,
+      adminNotes:
+        input.notes?.trim() || `Akun Simulasi bersih dari awal (tanpa data dummy · ${input.planCode})`,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        input.idleTimeoutMinutes,
+        DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      ),
       createdAt: nowIso,
     };
 
@@ -531,12 +702,17 @@ export function buildMasterProvisionedAccountAndWorkspace(
 
   const customer: ManagedCustomerAccount = {
     ...provisioned.customer,
+    username: normalizedUsername,
     passwordDemo: '••••••••',
     passwordHash: input.passwordHash,
     allowGoogleLogin: input.allowGoogleLogin ?? true,
     allowPasswordLogin: input.allowPasswordLogin ?? true,
     status: input.status || 'ACTIVE',
     maxTenantsAllowed: Math.max(1, input.maxTenantsAllowed ?? provisioned.customer.maxTenantsAllowed),
+    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+      input.idleTimeoutMinutes,
+      DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+    ),
     adminNotes:
       input.notes?.trim() || `Akun Usaha Asli dibuat via Master Admin (${input.planCode})`,
   };

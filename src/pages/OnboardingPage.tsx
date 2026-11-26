@@ -155,9 +155,16 @@ function parseInitialOnboardingQuery(): {
   planCode: SubscriptionPlanCode;
   addOns: AddOnModuleCode[];
   fromDemo: boolean;
+  isSimulationMode: boolean;
 } {
   if (typeof window === 'undefined') {
-    return { vertical: 'WARUNG_SEMBAKO', planCode: 'PRO', addOns: [], fromDemo: false };
+    return {
+      vertical: 'WARUNG_SEMBAKO',
+      planCode: 'PRO',
+      addOns: [],
+      fromDemo: false,
+      isSimulationMode: false,
+    };
   }
   const params = new URLSearchParams(window.location.search);
   const rawPlan = (params.get('plan') || '').toUpperCase() as SubscriptionPlanCode;
@@ -175,13 +182,15 @@ function parseInitialOnboardingQuery(): {
     .filter((s) => VALID_ADDON_CODES.has(s)) as AddOnModuleCode[];
 
   const fromDemo = params.get('from') === 'demo';
-  return { vertical, planCode, addOns: rawAddons, fromDemo };
+  const isSimulationMode = (params.get('mode') || '').toLowerCase() === 'simulation';
+  return { vertical, planCode, addOns: rawAddons, fromDemo, isSimulationMode };
 }
 
 export function OnboardingPage() {
   const { navigate, completeCustomerOnboarding, regionalTaxRegistry, oauthPendingUser } = useApp();
 
   const initialQuery = useMemo(() => parseInitialOnboardingQuery(), []);
+  const isSimulationMode = initialQuery.isSimulationMode;
   const isOAuthSource = useMemo(() => {
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).get('source') === 'oauth';
@@ -191,7 +200,7 @@ export function OnboardingPage() {
     'ALL'
   );
 
-  // Step 1: Real Hybrid Package (LITE Rp49k / BASIC Rp100k / PRO Rp199k / EXPERT Rp349k) & Modular Add-Ons
+  // Step 1: Real Hybrid Package (LITE / BASIC / PRO / EXPERT) & Modular Add-Ons
   const [vertical, setVertical] = useState<BusinessVertical>(initialQuery.vertical);
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('MONTHLY');
   const [planCode, setPlanCode] = useState<SubscriptionPlanCode>(initialQuery.planCode);
@@ -212,6 +221,7 @@ export function OnboardingPage() {
 
   // Step 3: User Account & Business Profile
   const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [passwordDemo, setPasswordDemo] = useState('');
   const [phone, setPhone] = useState('');
@@ -228,7 +238,7 @@ export function OnboardingPage() {
   const [isPkp, setIsPkp] = useState(false);
   const [npwp16, setNpwp16] = useState('');
   const [address, setAddress] = useState('');
-  const [initialCapital, setInitialCapital] = useState('25000000');
+  const [initialCapital, setInitialCapital] = useState(isSimulationMode ? '0' : '25000000');
   const [step3Error, setStep3Error] = useState('');
 
   useEffect(() => {
@@ -376,6 +386,37 @@ export function OnboardingPage() {
 
   const handleProceedToPayment = async () => {
     setPaymentError('');
+    if (isSimulationMode) {
+      const nowIso = new Date().toISOString();
+      const simSuffix = `${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .slice(2, 6)
+        .toUpperCase()}`;
+      const simInvoice: SubscriptionInvoice = {
+        id: `inv-sim-${simSuffix.toLowerCase()}`,
+        invoiceNumber: `SIM-${nowIso.slice(0, 10).replace(/-/g, '')}-${simSuffix.slice(-4)}`,
+        customerEmail: email.trim() || 'simulasi@usaha.id',
+        billingCycle,
+        planCode,
+        selectedAddOns,
+        selectedModules: selectedLegacyModules,
+        subtotalAmount: '0.0000',
+        dppNilaiLain: '0.0000',
+        ppnAmount: '0.0000',
+        grandTotal: '0.0000',
+        paymentMethod,
+        paymentStatus: 'PENDING_PAYMENT',
+        gatewayRefId: null,
+        paidAt: null,
+        createdAt: nowIso,
+      };
+      setInvoice(simInvoice);
+      setQrisString(`SIMULATION:${simInvoice.invoiceNumber}`);
+      setVaNumber(`SIM-VA-${simSuffix.slice(-6)}`);
+      setStep(2);
+      return;
+    }
+
     setCheckoutLoading(true);
     try {
       const res = await fetch('/api/subscriptions/checkout', {
@@ -411,8 +452,19 @@ export function OnboardingPage() {
   };
 
   const handleVerifyPaymentWebhook = async () => {
-    if (!invoice || !simWebhookBody || !simSignature) return;
+    if (!invoice) return;
     setPaymentError('');
+    if (isSimulationMode) {
+      const nowIso = new Date().toISOString();
+      setInvoice({
+        ...invoice,
+        paymentStatus: 'VERIFIED_PAID',
+        gatewayRefId: `SIM-VERIFIED-${Date.now().toString(36).toUpperCase()}`,
+        paidAt: nowIso,
+      });
+      return;
+    }
+    if (!simWebhookBody || !simSignature) return;
     setVerifyingPayment(true);
     try {
       const res = await fetch('/api/webhooks/subscription', {
@@ -565,6 +617,8 @@ export function OnboardingPage() {
     try {
       await completeCustomerOnboarding({
         invoice,
+        accountScope: isSimulationMode ? 'SIMULATION' : 'REAL',
+        username: username.trim() || undefined,
         fullName,
         email,
         passwordDemo,
@@ -580,13 +634,13 @@ export function OnboardingPage() {
         thermalPaperWidth,
         autoPrintQrOrders: isFnb ? autoPrintQrOrders : false,
         tableCount: isFnb ? Number(tableCount) || 4 : 0,
-        initialCapital,
+        initialCapital: initialCapital.trim() === '' ? '0' : initialCapital,
         menuDrafts: [],
         customFields,
         regionalTax,
         businessWhatsappNumber: phone.trim() || undefined,
       });
-      navigate(postOnboardingRoute);
+      navigate(isSimulationMode ? '/dashboard' : postOnboardingRoute);
     } catch (err) {
       setFinishError(err instanceof Error ? err.message : 'Gagal menyelesaikan setup akun.');
     }
@@ -596,30 +650,32 @@ export function OnboardingPage() {
 
   const stepsMeta: Array<{ num: StepNumber; label: string }> = [
     { num: 1, label: 'Pilih Paket' },
-    { num: 2, label: 'Bayar & Verifikasi' },
+    { num: 2, label: isSimulationMode ? 'Konfirmasi Simulasi' : 'Bayar & Verifikasi' },
     { num: 3, label: 'Buat Akun User' },
     { num: 4, label: 'Pengaturan Toko & Siap Pakai' },
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-16">
+    <div className="min-h-screen bg-[#FAFAF9] text-stone-900 pb-16">
       {/* Top Bar */}
-      <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-30 bg-white border-b border-stone-200 px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
         <button
           type="button"
           onClick={() => navigate('/')}
-          className="inline-flex items-center gap-2 text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900"
+          className="inline-flex items-center gap-2 text-xs sm:text-sm font-medium text-stone-600 hover:text-stone-900"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Beranda</span>
         </button>
-        <span className="text-sm sm:text-base font-bold tracking-tight text-slate-900">
-          Pembelian Paket &amp; Daftar Akun Usaha Asli
+        <span className="text-sm sm:text-base font-bold tracking-tight text-stone-900">
+          {isSimulationMode
+            ? 'Simulasi Usaha Dari Awal (Rp 0 · Data Bersih)'
+            : 'Pembelian Paket & Daftar Akun Usaha Asli'}
         </span>
         <button
           type="button"
           onClick={() => navigate('/login')}
-          className="text-xs sm:text-sm font-medium text-slate-600 hover:text-emerald-700 whitespace-nowrap"
+          className="text-xs sm:text-sm font-medium text-stone-600 hover:text-emerald-700 whitespace-nowrap"
         >
           Sudah Punya Akun? Login
         </button>
@@ -685,8 +741,28 @@ export function OnboardingPage() {
         {step === 1 && (
           <div className="grid lg:grid-cols-12 gap-6 items-start">
             <section className="lg:col-span-8 space-y-6">
+              {/* Simulation Clean-Slate Banner */}
+              {isSimulationMode && (
+                <div
+                  data-testid="onb-simulation-banner"
+                  className="p-4 rounded-xl bg-stone-900 text-stone-100 border border-stone-800 text-xs flex items-start gap-3"
+                >
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" strokeWidth={1.75} />
+                  <div>
+                    <p className="font-bold text-white">
+                      Mode Simulasi Penuh Dari Awal (100% Data Kosong, Tanpa Biaya)
+                    </p>
+                    <p className="text-stone-300 mt-0.5 leading-relaxed">
+                      Anda akan menjalani seluruh alur seperti pemilik usaha baru pertama kali:
+                      pilih jenis usaha &amp; paket, konfirmasi simulasi Rp 0, buat akun login (email,
+                      username, atau Google), lalu langsung masuk ke ruang kerja kosong tanpa data dummy.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Demo-to-Real Upgrade Banner */}
-              {initialQuery.fromDemo && (
+              {initialQuery.fromDemo && !isSimulationMode && (
                 <div
                   data-testid="onb-from-demo-banner"
                   className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-start gap-3"
@@ -705,14 +781,17 @@ export function OnboardingPage() {
               )}
 
               {/* Vertical Selector (All 22 UMKM Verticals) */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+              <div className="bg-white border border-stone-200 rounded-2xl p-6 space-y-4">
                 <div>
-                  <h1 className="text-xl font-bold text-slate-900">
-                    1. Pembelian Paket &amp; Pendaftaran Akun Usaha Asli
+                  <h1 className="text-xl font-bold text-stone-900">
+                    {isSimulationMode
+                      ? '1. Pilih Bidang Usaha & Paket Simulasi'
+                      : '1. Pembelian Paket & Pendaftaran Akun Usaha Asli'}
                   </h1>
-                  <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                    Pilih 1 dari 22 jenis usaha UMKM, pastikan paket berlangganan (LITE / BASIC /
-                    PRO / EXPERT) dan fitur tambahan sesuai kebutuhan, lalu lanjutkan ke pembayaran.
+                  <p className="text-xs sm:text-sm text-stone-500 mt-1">
+                    {isSimulationMode
+                      ? 'Pilih 1 dari 22 jenis usaha UMKM beserta paket (LITE / BASIC / PRO / EXPERT) untuk mencoba sistem dari nol tanpa data dummy.'
+                      : 'Pilih 1 dari 22 jenis usaha UMKM, pastikan paket berlangganan (LITE / BASIC / PRO / EXPERT) dan fitur tambahan sesuai kebutuhan, lalu lanjutkan ke pembayaran.'}
                   </p>
                 </div>
 
@@ -1069,14 +1148,22 @@ export function OnboardingPage() {
                   </span>
                 </div>
                 <div className="flex justify-between items-baseline pt-3 border-t border-slate-200">
-                  <span className="text-sm font-bold text-slate-900">Total Bayar</span>
+                  <span className="text-sm font-bold text-slate-900">
+                    {isSimulationMode ? 'Tagihan Simulasi' : 'Total Bayar'}
+                  </span>
                   <span
                     data-testid="onb-grand-total"
                     className="text-xl font-bold font-mono text-emerald-700 tabular-nums"
                   >
-                    {formatRupiah(pricing.grandTotal)}
+                    {isSimulationMode ? 'Rp 0' : formatRupiah(pricing.grandTotal)}
                   </span>
                 </div>
+                {isSimulationMode && (
+                  <p className="text-[11px] text-stone-500">
+                    Estimasi harga asli paket ini: {formatRupiah(pricing.grandTotal)} (tidak
+                    ditagihkan pada mode simulasi).
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -1115,7 +1202,13 @@ export function OnboardingPage() {
                 onClick={() => void handleProceedToPayment()}
                 className="w-full inline-flex items-center justify-center gap-2 py-3 px-4 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors disabled:opacity-60"
               >
-                <span>{checkoutLoading ? 'Membuat Tagihan...' : 'Lanjut ke Pembayaran'}</span>
+                <span>
+                  {checkoutLoading
+                    ? 'Membuat Tagihan...'
+                    : isSimulationMode
+                    ? 'Lanjut Konfirmasi Simulasi'
+                    : 'Lanjut ke Pembayaran'}
+                </span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </aside>
@@ -1233,16 +1326,19 @@ export function OnboardingPage() {
                   >
                     Ubah Paket
                   </button>
-                  <button
+                    <button
                     type="button"
+                    data-testid="onb-verify-payment-btn"
                     disabled={verifyingPayment}
                     onClick={() => void handleVerifyPaymentWebhook()}
-                    className="flex-1 inline-flex items-center justify-center gap-2 py-3 px-4 text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors disabled:opacity-60"
+                    className="flex-1 inline-flex items-center justify-center gap-2 py-3 px-4 text-sm font-semibold text-white bg-stone-900 hover:bg-stone-800 rounded-xl transition-colors disabled:opacity-60"
                   >
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
                     <span>
                       {verifyingPayment
                         ? 'Memverifikasi Pembayaran...'
+                        : isSimulationMode
+                        ? 'Konfirmasi Pembayaran Simulasi (Rp 0)'
                         : 'Simulasikan & Verifikasi Pembayaran Lunas'}
                     </span>
                   </button>
@@ -1254,31 +1350,36 @@ export function OnboardingPage() {
 
         {/* STEP 3: CREATE USER ACCOUNT & UMKM PROFILE */}
         {step === 3 && (
-          <section className="max-w-3xl mx-auto bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-6">
+          <section className="max-w-3xl mx-auto bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
               <div>
-                <h1 className="text-xl font-bold text-slate-900">
-                  3. Buat Akun User &amp; Profil Usaha UMKM
+                <h1 className="text-xl font-bold text-stone-900">
+                  {isSimulationMode
+                    ? '3. Buat Akun Simulasi & Profil Usaha Baru'
+                    : '3. Buat Akun User & Profil Usaha UMKM'}
                 </h1>
-                <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                  Akun ini otomatis terdaftar di Konsol Master dan terhubung dengan 29 akun CoA
-                  SAK EMKM.
+                <p className="text-xs sm:text-sm text-stone-500 mt-1">
+                  {isSimulationMode
+                    ? 'Ruang kerja simulasi dimulai 100% kosong tanpa data dummy dan dapat dipakai login via Email, Username, maupun Google.'
+                    : 'Akun ini otomatis terdaftar di Konsol Master dan terhubung dengan 29 akun CoA SAK EMKM.'}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={fillDemoAccountProfile}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg whitespace-nowrap shrink-0"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Isi Contoh Data Demo</span>
-              </button>
+              {!isSimulationMode && (
+                <button
+                  type="button"
+                  onClick={fillDemoAccountProfile}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg whitespace-nowrap shrink-0"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Isi Contoh Data Demo</span>
+                </button>
+              )}
             </div>
 
             <form onSubmit={handleContinueToCustomization} className="space-y-5">
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="onb-fullname" className="block text-xs font-medium text-slate-700 mb-1">
+                  <label htmlFor="onb-fullname" className="block text-xs font-medium text-stone-700 mb-1">
                     Nama Lengkap Pemilik *
                   </label>
                   <input
@@ -1288,7 +1389,7 @@ export function OnboardingPage() {
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="Contoh: Andi Wijaya"
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3.5 py-2.5 text-sm border border-stone-200 rounded-lg"
                   />
                 </div>
                 <div>
@@ -1347,11 +1448,26 @@ export function OnboardingPage() {
                     className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg"
                   />
                 </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="onb-username" className="block text-xs font-medium text-stone-700 mb-1">
+                    Username Login (Opsional)
+                  </label>
+                  <input
+                    id="onb-username"
+                    type="text"
+                    value={username}
+                    onChange={(e) =>
+                      setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))
+                    }
+                    placeholder="contoh: kedai_simulasi (otomatis dibuat dari email jika dikosongkan)"
+                    className="w-full px-3.5 py-2.5 text-sm font-mono border border-stone-200 rounded-lg"
+                  />
+                </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 grid sm:grid-cols-2 gap-4">
+              <div className="pt-4 border-t border-stone-100 grid sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
-                  <label htmlFor="onb-bizname" className="block text-xs font-medium text-slate-700 mb-1">
+                  <label htmlFor="onb-bizname" className="block text-xs font-medium text-stone-700 mb-1">
                     Nama Usaha / Toko / Restoran *
                   </label>
                   <input
@@ -1361,19 +1477,19 @@ export function OnboardingPage() {
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
                     placeholder="Contoh: Kedai Kopi & Toast Kita"
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3.5 py-2.5 text-sm border border-stone-200 rounded-lg"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="onb-taxentity" className="block text-xs font-medium text-slate-700 mb-1">
+                  <label htmlFor="onb-taxentity" className="block text-xs font-medium text-stone-700 mb-1">
                     Entitas Pajak (PP No. 20 Tahun 2026)
                   </label>
                   <select
                     id="onb-taxentity"
                     value={taxEntity}
                     onChange={(e) => setTaxEntity(e.target.value as TaxEntityType)}
-                    className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg bg-white"
+                    className="w-full px-3.5 py-2.5 text-sm border border-stone-200 rounded-lg bg-white"
                   >
                     <option value="WP_OP">WP Orang Pribadi (Bebas Rp500 Juta/thn)</option>
                     <option value="PT_PERORANGAN">PT Perorangan (0,5% selamanya ≤ Rp4,8M)</option>
@@ -1383,17 +1499,17 @@ export function OnboardingPage() {
                 </div>
 
                 <div>
-                  <label htmlFor="onb-capital" className="block text-xs font-medium text-slate-700 mb-1">
-                    Modal Awal Kas &amp; Bank (Rp, Jurnal Pembuka)
+                  <label htmlFor="onb-capital" className="block text-xs font-medium text-stone-700 mb-1">
+                    Modal Awal Kas &amp; Bank (Rp — isi 0 untuk mulai benar-benar kosong)
                   </label>
                   <input
                     id="onb-capital"
                     type="number"
-                    min={1000000}
+                    min={0}
                     step={500000}
                     value={initialCapital}
                     onChange={(e) => setInitialCapital(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-sm font-mono border border-slate-200 rounded-lg"
+                    className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums border border-stone-200 rounded-lg"
                   />
                 </div>
 

@@ -37,7 +37,7 @@ export function toDeterministicUuid(input: string): string {
 export function buildTenantSettingsPayload(params: {
   customer?: Pick<
     ManagedCustomerAccount,
-    'id' | 'accountScope' | 'subscriptionPlan' | 'billingCycle' | 'activeAddOns'
+    'id' | 'accountScope' | 'subscriptionPlan' | 'billingCycle' | 'activeAddOns' | 'username' | 'idleTimeoutMinutes'
   >;
   workspace: TenantWorkspaceData;
   existingSettings?: unknown;
@@ -57,6 +57,11 @@ export function buildTenantSettingsPayload(params: {
     ...prev,
     legacyTenantId: ws.tenant.id,
     legacyCustomerId: params.customer?.id ?? ws.tenant.ownerAccountId ?? prev.legacyCustomerId ?? null,
+    ownerUsername: params.customer?.username ?? prev.ownerUsername ?? null,
+    ownerIdleTimeoutMinutes:
+      params.customer?.idleTimeoutMinutes !== undefined
+        ? params.customer.idleTimeoutMinutes
+        : prev.ownerIdleTimeoutMinutes ?? 0,
     accountScope: params.customer?.accountScope ?? ws.tenant.accountScope ?? 'REAL',
     planCode: params.customer?.subscriptionPlan ?? ws.tenant.subscriptionPlan ?? 'BASIC',
     billingCycle: params.customer?.billingCycle ?? prev.billingCycle ?? 'MONTHLY',
@@ -411,20 +416,36 @@ function hydrateTenantRowToWorkspace(params: {
     t.settings && typeof t.settings === 'object' && !Array.isArray(t.settings)
       ? (t.settings as Record<string, unknown>)
       : {};
-  const scope = settingsObj.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
+  const scope: 'DEMO' | 'REAL' | 'SIMULATION' =
+    settingsObj.accountScope === 'DEMO'
+      ? 'DEMO'
+      : settingsObj.accountScope === 'SIMULATION'
+      ? 'SIMULATION'
+      : 'REAL';
   const planCode = (typeof settingsObj.planCode === 'string'
     ? settingsObj.planCode
     : t.planCode || 'BASIC') as SubscriptionPlanCode;
   const billingCycle = settingsObj.billingCycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY';
+  const ownerUsername =
+    typeof settingsObj.ownerUsername === 'string' && settingsObj.ownerUsername.trim()
+      ? settingsObj.ownerUsername.trim()
+      : undefined;
+  const ownerIdleTimeoutMinutes =
+    typeof settingsObj.ownerIdleTimeoutMinutes === 'number' &&
+    Number.isFinite(settingsObj.ownerIdleTimeoutMinutes)
+      ? settingsObj.ownerIdleTimeoutMinutes
+      : 0;
 
   const built = buildMasterProvisionedAccountAndWorkspace({
     accountScope: scope,
     fullName: params.ownerName,
+    username: ownerUsername,
     email: params.ownerEmail,
     password: '••••••••',
     phone: params.ownerPhone || '081200000000',
     allowGoogleLogin: true,
     allowPasswordLogin: true,
+    idleTimeoutMinutes: ownerIdleTimeoutMinutes,
     status:
       params.ownerStatus === 'SUSPENDED' || params.ownerStatus === 'TRIAL'
         ? params.ownerStatus
@@ -571,7 +592,7 @@ export async function hydrateUserFromPostgresByEmail(
 }
 
 export async function hydrateWorkspaceFromPostgresByTenantId(tenantId: string): Promise<{
-  scope: 'DEMO' | 'REAL';
+  scope: 'DEMO' | 'REAL' | 'SIMULATION';
   ownerAccountId: string;
   customer: ManagedCustomerAccount | null;
   workspace: TenantWorkspaceData;
@@ -623,7 +644,12 @@ export async function hydrateWorkspaceFromPostgresByTenantId(tenantId: string): 
       passwordHash: ownerUser?.authAccounts[0]?.password || ownerUser?.passwordHash || null,
     });
 
-    const scope = pair.workspace.tenant.accountScope === 'DEMO' ? 'DEMO' : 'REAL';
+    const scope: 'DEMO' | 'REAL' | 'SIMULATION' =
+      pair.workspace.tenant.accountScope === 'DEMO'
+        ? 'DEMO'
+        : pair.workspace.tenant.accountScope === 'SIMULATION'
+        ? 'SIMULATION'
+        : 'REAL';
     return {
       scope,
       ownerAccountId: pair.customer.id,
@@ -905,6 +931,7 @@ export async function syncAllAccountsToPostgres(params: {
   databaseConfigured: boolean;
   masterSynced: number;
   realSynced: number;
+  simulationSynced: number;
   demoSynced: number;
   failed: number;
 }> {
@@ -913,6 +940,7 @@ export async function syncAllAccountsToPostgres(params: {
       databaseConfigured: false,
       masterSynced: 0,
       realSynced: 0,
+      simulationSynced: 0,
       demoSynced: 0,
       failed: 0,
     };
@@ -920,6 +948,7 @@ export async function syncAllAccountsToPostgres(params: {
 
   let masterSynced = 0;
   let realSynced = 0;
+  let simulationSynced = 0;
   let demoSynced = 0;
   let failed = 0;
 
@@ -939,6 +968,7 @@ export async function syncAllAccountsToPostgres(params: {
 
   for (const c of params.customers) {
     const isDemo = Boolean(c.isDemoAccount || c.accountScope === 'DEMO');
+    const isSim = c.accountScope === 'SIMULATION';
     const res = await syncUserAccountToPostgres({
       email: c.email,
       fullName: c.fullName,
@@ -950,6 +980,7 @@ export async function syncAllAccountsToPostgres(params: {
     });
     if (res.synced) {
       if (isDemo) demoSynced += 1;
+      else if (isSim) simulationSynced += 1;
       else realSynced += 1;
 
       const ws = params.workspacesByTenantId?.get(c.primaryTenantId);
@@ -969,6 +1000,7 @@ export async function syncAllAccountsToPostgres(params: {
     databaseConfigured: true,
     masterSynced,
     realSynced,
+    simulationSynced,
     demoSynced,
     failed,
   };

@@ -116,7 +116,7 @@ export interface FeatureModule {
   isCore: boolean;
 }
 
-export type AccountScope = 'DEMO' | 'REAL';
+export type AccountScope = 'DEMO' | 'REAL' | 'SIMULATION';
 
 export interface ReceiptDesignConfig {
   showLogo: boolean;
@@ -947,12 +947,15 @@ export interface StaffAccount {
   tenantId: string;
   branchId?: string | null;
   fullName: string;
+  username?: string;
   email: string;
   password: string;
   phone?: string;
   roleTitle: string;
   permissions: StaffPermission[];
   isActive: boolean;
+  /** Auto-logout timeout in minutes when idle (0 or undefined = disabled by default for staff) */
+  idleTimeoutMinutes?: number;
   createdAt: string;
 }
 
@@ -1064,6 +1067,7 @@ export interface SubscriptionInvoice {
 export interface ManagedCustomerAccount {
   id: string;
   fullName: string;
+  username?: string;
   email: string;
   passwordDemo: string;
   passwordHash?: string;
@@ -1089,11 +1093,14 @@ export interface ManagedCustomerAccount {
   lastPaidAt: string;
   validUntil: string;
   adminNotes: string;
+  /** Auto-logout timeout in minutes when idle (0 or undefined = disabled by default for UMKM owner) */
+  idleTimeoutMinutes?: number;
   createdAt: string;
 }
 
 export interface MasterAdminAccountSummary {
   id: string;
+  username?: string;
   email: string;
   fullName: string;
   phone: string;
@@ -1103,6 +1110,8 @@ export interface MasterAdminAccountSummary {
   isPrimaryOwner: boolean;
   hasPassword: boolean;
   notes: string;
+  /** Auto-logout timeout in minutes when idle (defaults to 30 minutes for Master Admin) */
+  idleTimeoutMinutes?: number;
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1111,6 +1120,7 @@ export interface MasterAdminAccountSummary {
 export interface AppSession {
   role: 'GUEST' | 'MASTER_ADMIN' | 'CUSTOMER' | 'STAFF';
   accountScope?: AccountScope;
+  username?: string;
   email: string;
   fullName: string;
   phone?: string;
@@ -1128,6 +1138,8 @@ export interface AppSession {
   staffPermissions?: StaffPermission[];
   impersonatingCustomerId?: string;
   impersonatingCustomerName?: string;
+  /** Active idle auto-logout timeout in minutes (0 = disabled; 30 default for Master Admin) */
+  idleTimeoutMinutes?: number;
   token?: string;
 }
 

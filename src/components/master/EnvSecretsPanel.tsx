@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertCircle,
   BookOpen,
   CheckCircle2,
@@ -15,6 +16,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { EnvironmentDiagnosticPanel } from './EnvironmentDiagnosticPanel';
 
 type EnvSecretCategory =
   | 'AUTH_SSO'
@@ -70,6 +72,7 @@ export function EnvSecretsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [viewMode, setViewMode] = useState<'KEYS' | 'DIAGNOSTIC'>('KEYS');
   const [activeCategory, setActiveCategory] = useState<'ALL' | EnvSecretCategory>('ALL');
   const [expandedGuideKey, setExpandedGuideKey] = useState<string | null>('DATABASE_URL');
 
@@ -430,6 +433,47 @@ export function EnvSecretsPanel() {
         </div>
       </section>
 
+      {/* Clean Sub-View Switcher: Daftar Kunci API vs Environment Diagnostic */}
+      <div className="flex items-center gap-2 border-b border-stone-200 pb-2" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={viewMode === 'KEYS'}
+          data-testid="env-subtab-keys"
+          onClick={() => setViewMode('KEYS')}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors ${
+            viewMode === 'KEYS'
+              ? 'bg-stone-900 text-white border-stone-900'
+              : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
+          }`}
+        >
+          <KeyRound className="w-3.5 h-3.5" strokeWidth={1.75} />
+          <span>Daftar Variabel API ({stats.totalKeys})</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={viewMode === 'DIAGNOSTIC'}
+          data-testid="env-subtab-diagnostic"
+          onClick={() => setViewMode('DIAGNOSTIC')}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors ${
+            viewMode === 'DIAGNOSTIC'
+              ? 'bg-emerald-600 text-white border-emerald-600'
+              : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
+          }`}
+        >
+          <Activity className="w-3.5 h-3.5" strokeWidth={1.75} />
+          <span>Environment Diagnostic (Vercel vs Lokal)</span>
+        </button>
+      </div>
+
+      {viewMode === 'DIAGNOSTIC' ? (
+        <EnvironmentDiagnosticPanel
+          authToken={session.token}
+          onSyncTriggered={fetchSecrets}
+        />
+      ) : (
+        <>
       {feedback && (
         <div
           data-testid="env-secrets-feedback"
@@ -831,6 +875,8 @@ export function EnvSecretsPanel() {
             );
           })}
         </div>
+      )}
+        </>
       )}
     </div>
   );

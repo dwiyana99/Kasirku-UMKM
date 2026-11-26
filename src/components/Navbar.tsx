@@ -11,7 +11,6 @@ import {
   GitBranch,
   Menu,
   ShieldCheck,
-  Sparkles,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { evaluateStockAlerts } from '../lib/inventory/stock-monitoring';
@@ -39,7 +38,6 @@ export function Navbar({
   subtitle,
   primaryAction,
   onOpenMobileMenu,
-  onOpenAiDrawer,
 }: NavbarProps) {
   const {
     activeWorkspace,
@@ -60,7 +58,6 @@ export function Navbar({
   const hasMultiBranchAccess = hasAddOn('ADDON_EXTRA_BRANCH');
   const hasMultipleBranches = hasMultiBranchAccess && branches.length > 1;
   const selectedBranch = branches.find((b) => b.id === activeBranchId) ?? null;
-  const showAiTrigger = Boolean(onOpenAiDrawer) && hasAddOn('ADDON_AI_ASSISTANT');
 
   const stockEvaluation = useMemo(
     () => evaluateStockAlerts(activeWorkspace.products),
@@ -160,20 +157,8 @@ export function Navbar({
           </div>
         )}
 
-        {/* Right Zone: Optional AI (md+, active add-on only) + Notification Bell + Desktop Controls (lg+) */}
+        {/* Right Zone: Notification Bell + Branch Selector (Desktop lg+) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-
-          {showAiTrigger && (
-            <button
-              type="button"
-              onClick={onOpenAiDrawer}
-              data-testid="navbar-ai-assistant-btn"
-              className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg transition-colors whitespace-nowrap"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-700 shrink-0" strokeWidth={1.75} />
-              <span>Asisten AI</span>
-            </button>
-          )}
 
           {/* Persistent Notification Bell (opens responsive centered ModalShell on mobile & desktop) */}
           {showNotifBell && (
@@ -298,18 +283,6 @@ export function Navbar({
             </div>
           )}
 
-          {/* Dedicated Back to Master link — Desktop lg+ only */}
-          {isMaster && (
-            <button
-              type="button"
-              onClick={exitImpersonation}
-              data-testid="navbar-back-to-master"
-              className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-stone-900 hover:bg-stone-800 rounded-lg transition-colors whitespace-nowrap"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" strokeWidth={1.75} />
-              <span>Kembali ke Master</span>
-            </button>
-          )}
         </div>
       </header>
 

@@ -314,11 +314,18 @@ interface AppContextValue {
     phone?: string;
     roleTitle: string;
     permissions: StaffPermission[];
+    idleTimeoutMinutes?: number;
   }) => { ok: boolean; error?: string; staff?: StaffAccount };
   updateStaffAccount: (
     staffId: string,
-    patch: Partial<Pick<StaffAccount, 'fullName' | 'phone' | 'password' | 'roleTitle' | 'permissions' | 'isActive'>>
+    patch: Partial<
+      Pick<
+        StaffAccount,
+        'fullName' | 'phone' | 'password' | 'roleTitle' | 'permissions' | 'isActive' | 'idleTimeoutMinutes'
+      >
+    >
   ) => void;
+  updateTenantStaffIdleTimeout: (tenantId: string, staffId: string, idleTimeoutMinutes: number) => void;
   deleteStaffAccount: (staffId: string) => void;
   saveProductRecipes: (
     menuProductId: string,
@@ -384,6 +391,9 @@ interface AppContextValue {
     currentPassword?: string;
     newPassword?: string;
   }) => { ok: boolean; error?: string };
+  updateOwnIdleTimeout: (
+    idleTimeoutMinutes: number
+  ) => Promise<{ ok: boolean; idleTimeoutMinutes?: number; error?: string }>;
   logoutSession: () => Promise<void>;
   completeCustomerOnboarding: (input: ProvisionOnboardedCustomerInput) => Promise<{
     customer: ManagedCustomerAccount;
@@ -1068,9 +1078,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSession({
         role: 'MASTER_ADMIN',
         accountScope: 'REAL',
+        username: exchanged.username,
         email: exchanged.email,
         fullName: exchanged.fullName,
         phone: exchanged.phone,
+        idleTimeoutMinutes: exchanged.idleTimeoutMinutes ?? 30,
         token: exchanged.token,
         authProvider: exchanged.authProvider ?? 'BETTER_AUTH_EMAIL',
       });
@@ -1089,10 +1101,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSession({
         role: 'CUSTOMER',
         accountScope: exchanged.accountScope,
+        username: cust.username,
         email: cust.email,
         fullName: cust.fullName,
         phone: cust.phone,
         customerId: cust.id,
+        idleTimeoutMinutes: exchanged.idleTimeoutMinutes ?? cust.idleTimeoutMinutes ?? 0,
         token: exchanged.token,
         authProvider: exchanged.authProvider ?? 'BETTER_AUTH_EMAIL',
       });
@@ -1112,6 +1126,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const nextSession: AppSession = {
           role: 'STAFF',
           accountScope: exchanged.accountScope,
+          username: staff.username,
           email: staff.email,
           fullName: staff.fullName,
           phone: staff.phone,
@@ -1119,6 +1134,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           staffTenantId: staffWs.tenant.id,
           staffRoleTitle: staff.roleTitle,
           staffPermissions: staff.permissions,
+          idleTimeoutMinutes: exchanged.idleTimeoutMinutes ?? staff.idleTimeoutMinutes ?? 0,
           token: exchanged.token,
           authProvider: exchanged.authProvider ?? 'BETTER_AUTH_EMAIL',
         };
@@ -1177,10 +1193,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
         if (!res.ok) return;
         const data = (await res.json()) as {
+          idleTimeoutMinutes?: number;
           customers?: ManagedCustomerAccount[];
           workspaces?: TenantWorkspaceData[];
         };
         if (cancelled) return;
+        if (typeof data.idleTimeoutMinutes === 'number') {
+          setSession((prev) =>
+            prev.idleTimeoutMinutes === data.idleTimeoutMinutes
+              ? prev
+              : { ...prev, idleTimeoutMinutes: data.idleTimeoutMinutes }
+          );
+        }
         if (Array.isArray(data.customers) && data.customers.length > 0) {
           setCustomers(data.customers);
         }
@@ -1230,7 +1254,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           authenticated?: boolean;
           accountScope?: AccountScope;
           email?: string;
+          username?: string;
           fullName?: string;
+          phone?: string;
+          idleTimeoutMinutes?: number;
           token?: string;
           customers?: ManagedCustomerAccount[];
           workspaces?: TenantWorkspaceData[];
@@ -1257,8 +1284,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSession({
           role: 'MASTER_ADMIN',
           accountScope: data.accountScope ?? 'REAL',
+          username: data.username,
           email: data.email || email,
           fullName: data.fullName || 'Master Pemilik KasirAkun',
+          phone: data.phone,
+          idleTimeoutMinutes: data.idleTimeoutMinutes ?? 30,
           token: data.token,
         });
         setSyncStatus('synced');
@@ -1282,6 +1312,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           authenticated?: boolean;
           role?: 'CUSTOMER' | 'STAFF';
           accountScope?: AccountScope;
+          idleTimeoutMinutes?: number;
           token?: string;
           customer?: ManagedCustomerAccount;
           staff?: StaffAccount;
@@ -1306,10 +1337,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setSession({
             role: 'CUSTOMER',
             accountScope: data.accountScope ?? data.customer.accountScope ?? 'REAL',
+            username: data.customer.username,
             email: data.customer.email,
             fullName: data.customer.fullName,
             phone: data.customer.phone,
             customerId: data.customer.id,
+            idleTimeoutMinutes: data.idleTimeoutMinutes ?? data.customer.idleTimeoutMinutes ?? 0,
             token: data.token,
           });
           setSyncStatus('synced');
@@ -1340,6 +1373,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const nextSession: AppSession = {
             role: 'STAFF',
             accountScope: data.accountScope ?? staffWs.tenant.accountScope ?? 'REAL',
+            username: data.staff.username,
             email: data.staff.email,
             fullName: data.staff.fullName,
             phone: data.staff.phone,
@@ -1347,6 +1381,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             staffTenantId: staffWs.tenant.id,
             staffRoleTitle: data.staff.roleTitle,
             staffPermissions: data.staff.permissions,
+            idleTimeoutMinutes: data.idleTimeoutMinutes ?? data.staff.idleTimeoutMinutes ?? 0,
             token: data.token,
           };
           setSession(nextSession);
@@ -1453,6 +1488,62 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [customers, session, syncCustomerToServer]
   );
 
+  const updateOwnIdleTimeout: AppContextValue['updateOwnIdleTimeout'] = useCallback(
+    async (idleTimeoutMinutes) => {
+      if (session.role === 'GUEST') {
+        return { ok: false, error: 'Silakan masuk terlebih dahulu.' };
+      }
+      if (session.role === 'STAFF') {
+        return {
+          ok: false,
+          error: 'Batas waktu sesi pegawai diatur oleh Pemilik Usaha atau Master Admin.',
+        };
+      }
+      const normalized =
+        idleTimeoutMinutes <= 0
+          ? 0
+          : Math.min(1440, Math.max(5, Math.round(idleTimeoutMinutes)));
+
+      try {
+        if (session.token) {
+          const res = await fetch('/api/auth/session-timeout', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${session.token}`,
+            },
+            body: JSON.stringify({ idleTimeoutMinutes: normalized }),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            ok?: boolean;
+            idleTimeoutMinutes?: number;
+            customer?: ManagedCustomerAccount;
+            error?: string;
+          };
+          if (!res.ok) {
+            return { ok: false, error: data.error || 'Gagal menyimpan batas waktu sesi.' };
+          }
+          const savedMinutes =
+            typeof data.idleTimeoutMinutes === 'number' ? data.idleTimeoutMinutes : normalized;
+          setSession((prev) => ({ ...prev, idleTimeoutMinutes: savedMinutes }));
+          if (session.role === 'CUSTOMER' && session.customerId) {
+            setCustomers((prev) =>
+              prev.map((c) =>
+                c.id === session.customerId ? { ...c, idleTimeoutMinutes: savedMinutes } : c
+              )
+            );
+          }
+          return { ok: true, idleTimeoutMinutes: savedMinutes };
+        }
+        setSession((prev) => ({ ...prev, idleTimeoutMinutes: normalized }));
+        return { ok: true, idleTimeoutMinutes: normalized };
+      } catch {
+        return { ok: false, error: 'Gagal menghubungi server untuk memperbarui batas waktu sesi.' };
+      }
+    },
+    [session.customerId, session.role, session.token]
+  );
+
   const logoutSession = useCallback(async () => {
     // Clear private user workspaces & customer records from memory & sessionStorage on logout
     setSession(GUEST_SESSION);
@@ -1486,6 +1577,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       const data = (await res.json()) as {
         authenticated?: boolean;
+        accountScope?: AccountScope;
+        idleTimeoutMinutes?: number;
         token?: string;
         customer?: ManagedCustomerAccount;
         workspace?: TenantWorkspaceData;
@@ -1495,18 +1588,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         throw new Error(data.error || 'Gagal menyimpan akun & usaha baru ke database.');
       }
 
-      // Strictly isolate state to ONLY this newly registered REAL user
+      const resolvedScope: AccountScope =
+        data.accountScope ?? data.customer.accountScope ?? input.accountScope ?? 'REAL';
+
+      // Strictly isolate state to ONLY this newly registered REAL or SIMULATION user
       setOauthPendingUser(null);
       setCustomers([data.customer]);
       setWorkspaces([data.workspace]);
       setActiveTenantId(data.workspace.tenant.id);
       setSession({
         role: 'CUSTOMER',
-        accountScope: 'REAL',
+        accountScope: resolvedScope,
+        username: data.customer.username,
         email: data.customer.email,
         fullName: data.customer.fullName,
         phone: data.customer.phone,
         customerId: data.customer.id,
+        idleTimeoutMinutes: data.idleTimeoutMinutes ?? data.customer.idleTimeoutMinutes ?? 0,
         token: data.token,
       });
       setSyncStatus('synced');
@@ -3157,6 +3255,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         roleTitle: input.roleTitle.trim() || 'Pegawai',
         permissions: Array.from(new Set(input.permissions)),
         isActive: true,
+        idleTimeoutMinutes:
+          typeof input.idleTimeoutMinutes === 'number' && input.idleTimeoutMinutes > 0
+            ? Math.min(1440, Math.max(5, Math.round(input.idleTimeoutMinutes)))
+            : 0,
         createdAt: new Date().toISOString(),
       };
 
@@ -3183,6 +3285,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const ws = activeWorkspace;
       const target = (ws.staffAccounts ?? []).find((s) => s.id === staffId);
       if (!target) return;
+      const normalizedTimeout =
+        patch.idleTimeoutMinutes !== undefined
+          ? patch.idleTimeoutMinutes <= 0
+            ? 0
+            : Math.min(1440, Math.max(5, Math.round(patch.idleTimeoutMinutes)))
+          : target.idleTimeoutMinutes ?? 0;
       updateWorkspaceById(ws.tenant.id, (prev) => ({
         ...prev,
         staffAccounts: (prev.staffAccounts ?? []).map((s) =>
@@ -3190,6 +3298,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ? {
                 ...s,
                 ...patch,
+                idleTimeoutMinutes: normalizedTimeout,
                 permissions: patch.permissions ? Array.from(new Set(patch.permissions)) : s.permissions,
               }
             : s
@@ -3211,6 +3320,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }));
     },
     [activeWorkspace, makeActivityLog, updateWorkspaceById]
+  );
+
+  const updateTenantStaffIdleTimeout: AppContextValue['updateTenantStaffIdleTimeout'] = useCallback(
+    (tenantId, staffId, idleTimeoutMinutes) => {
+      const normalizedTimeout =
+        idleTimeoutMinutes <= 0
+          ? 0
+          : Math.min(1440, Math.max(5, Math.round(idleTimeoutMinutes)));
+      updateWorkspaceById(tenantId, (prev) => ({
+        ...prev,
+        staffAccounts: (prev.staffAccounts ?? []).map((s) =>
+          s.id === staffId ? { ...s, idleTimeoutMinutes: normalizedTimeout } : s
+        ),
+      }));
+    },
+    [updateWorkspaceById]
   );
 
   const deleteStaffAccount: AppContextValue['deleteStaffAccount'] = useCallback(
@@ -5436,6 +5561,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     bulkAdjustInventoryStock,
     addStaffAccount,
     updateStaffAccount,
+    updateTenantStaffIdleTimeout,
     deleteStaffAccount,
     saveProductRecipes,
     saveRecipeTemplate,
@@ -5460,6 +5586,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     impersonateCustomer,
     exitImpersonation,
     updateOwnAccountProfile,
+    updateOwnIdleTimeout,
     logoutSession,
     completeCustomerOnboarding,
     updateManagedCustomer,

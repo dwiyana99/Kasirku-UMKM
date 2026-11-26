@@ -52,7 +52,8 @@ export interface BetterAuthCurrentSessionResponse {
     fullName: string;
     role: 'MASTER_ADMIN' | 'TENANT_OWNER' | 'STAFF';
     allowedTenantIds: string[];
-    accountScope: 'MASTER' | 'PAID' | 'DEMO';
+    accountScope: 'MASTER' | 'PAID' | 'SIMULATION' | 'DEMO';
+    idleTimeoutMinutes?: number;
     needsOnboarding: boolean;
     image?: string | null;
   };
@@ -94,8 +95,10 @@ export type BetterAuthExchangeResponse =
       accountScope: 'REAL';
       authProvider?: 'BETTER_AUTH_GOOGLE' | 'BETTER_AUTH_EMAIL';
       email: string;
+      username?: string;
       fullName: string;
       phone?: string;
+      idleTimeoutMinutes?: number;
       token: string;
       customers: unknown[];
       workspaces: unknown[];
@@ -104,8 +107,9 @@ export type BetterAuthExchangeResponse =
       authenticated: true;
       needsOnboarding?: false;
       role: 'CUSTOMER';
-      accountScope: 'REAL' | 'DEMO';
+      accountScope: 'REAL' | 'SIMULATION' | 'DEMO';
       authProvider?: 'BETTER_AUTH_GOOGLE' | 'BETTER_AUTH_EMAIL';
+      idleTimeoutMinutes?: number;
       token: string;
       customer: unknown;
       workspaces: unknown[];
@@ -114,8 +118,9 @@ export type BetterAuthExchangeResponse =
       authenticated: true;
       needsOnboarding?: false;
       role: 'STAFF';
-      accountScope: 'REAL' | 'DEMO';
+      accountScope: 'REAL' | 'SIMULATION' | 'DEMO';
       authProvider?: 'BETTER_AUTH_GOOGLE' | 'BETTER_AUTH_EMAIL';
+      idleTimeoutMinutes?: number;
       token: string;
       staff: unknown;
       ownerAccount: unknown | null;

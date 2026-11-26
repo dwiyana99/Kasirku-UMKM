@@ -15,10 +15,18 @@ import {
   buildMasterProvisionedAccountAndWorkspace,
   canDeactivateOrDeleteMasterAdmin,
   hashAccountPassword,
+  isValidUsername,
+  normalizeUsername,
   sanitizeCustomerForApi,
   sanitizeMasterAdminAccount,
+  suggestUsernameFromEmail,
   type MasterAdminAccountRecord,
 } from '../lib/auth/account-management.ts';
+import {
+  DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+  normalizeIdleTimeoutMinutes,
+} from '../lib/auth/session-timeout.ts';
 import {
   countPostgresUsersSafe,
   removeUserFromPostgresByEmail,
@@ -57,16 +65,18 @@ const ALL_VERTICALS_ENUM = [
 ] as const;
 
 const createMasterAccountSchema = z.object({
-  accountType: z.enum(['MASTER', 'REAL', 'DEMO']),
+  accountType: z.enum(['MASTER', 'REAL', 'SIMULATION', 'DEMO']),
   fullName: z.string().trim().min(2, 'Nama lengkap minimal 2 karakter.').max(150),
+  username: z.string().trim().max(36).optional(),
   email: z.string().trim().email('Format email tidak valid.').max(255),
   password: z.string().min(6, 'Kata sandi minimal 6 karakter.').max(120).optional(),
   phone: z.string().trim().max(30).optional().default(''),
   allowGoogleLogin: z.boolean().optional().default(true),
   allowPasswordLogin: z.boolean().optional().default(true),
+  idleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
   status: z.enum(['ACTIVE', 'TRIAL', 'SUSPENDED']).optional(),
   notes: z.string().trim().max(400).optional().default(''),
-  // Fields for REAL / DEMO accounts
+  // Fields for REAL / SIMULATION / DEMO accounts
   businessName: z.string().trim().max(150).optional(),
   vertical: z.enum(ALL_VERTICALS_ENUM).optional().default('WARUNG_SEMBAKO'),
   planCode: z.enum(['LITE', 'BASIC', 'PRO', 'EXPERT']).optional().default('PRO'),
@@ -77,10 +87,12 @@ const createMasterAccountSchema = z.object({
 
 const patchAccountSchema = z.object({
   fullName: z.string().trim().min(2).max(150).optional(),
+  username: z.string().trim().max(36).optional(),
   phone: z.string().trim().max(30).optional(),
   status: z.enum(['ACTIVE', 'TRIAL', 'SUSPENDED', 'DEACTIVATED']).optional(),
   allowGoogleLogin: z.boolean().optional(),
   allowPasswordLogin: z.boolean().optional(),
+  idleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
   notes: z.string().trim().max(400).optional(),
   newPassword: z.string().min(6, 'Kata sandi baru minimal 6 karakter.').max(120).optional(),
   planCode: z.enum(['LITE', 'BASIC', 'PRO', 'EXPERT']).optional(),
@@ -120,7 +132,10 @@ export function mountMasterAccountsRoutes(
     };
 
     const realAccounts = allCustomers
-      .filter((c) => !c.isDemoAccount && c.accountScope !== 'DEMO')
+      .filter((c) => !c.isDemoAccount && c.accountScope !== 'DEMO' && c.accountScope !== 'SIMULATION')
+      .map(mapCustomer);
+    const simulationAccounts = allCustomers
+      .filter((c) => c.accountScope === 'SIMULATION')
       .map(mapCustomer);
     const demoAccounts = allCustomers
       .filter((c) => c.isDemoAccount || c.accountScope === 'DEMO')
@@ -132,6 +147,7 @@ export function mountMasterAccountsRoutes(
     return {
       masterAccounts,
       realAccounts,
+      simulationAccounts,
       demoAccounts,
       authInfraStatus: {
         ...authStatus,
@@ -173,7 +189,7 @@ export function mountMasterAccountsRoutes(
     const input = parsed.data;
     const emailNorm = input.email.toLowerCase();
 
-    // Prevent email collision across login directories
+    // Prevent email & username collision across login directories
     const existingMaster = tenantDb.findMasterAccountByEmail(emailNorm);
     const existingCustomer = tenantDb.findCustomerByEmail(emailNorm);
     if (existingMaster || existingCustomer) {
@@ -182,9 +198,27 @@ export function mountMasterAccountsRoutes(
       });
     }
 
+    let resolvedUsername = normalizeUsername(input.username);
+    if (input.username && input.username.trim().length > 0 && (!resolvedUsername || !isValidUsername(resolvedUsername))) {
+      return res.status(400).json({
+        error: 'Username harus 3–32 karakter (huruf kecil, angka, titik, garis bawah, atau tanda hubung).',
+      });
+    }
+    if (!resolvedUsername) {
+      let candidate = suggestUsernameFromEmail(emailNorm);
+      if (tenantDb.isUsernameTaken(candidate)) {
+        candidate = `${candidate.slice(0, 24)}_${Date.now().toString(36).slice(-4)}`;
+      }
+      resolvedUsername = candidate;
+    } else if (tenantDb.isUsernameTaken(resolvedUsername)) {
+      return res.status(409).json({
+        error: `Username "${resolvedUsername}" sudah digunakan akun lain. Pilih username berbeda.`,
+      });
+    }
+
     if (input.allowPasswordLogin && !input.password) {
       return res.status(400).json({
-        error: 'Masukkan kata sandi minimal 6 karakter atau matikan opsi Login Email & Sandi.',
+        error: 'Masukkan kata sandi minimal 6 karakter atau matikan opsi Login Email/Username & Sandi.',
       });
     }
 
@@ -195,6 +229,7 @@ export function mountMasterAccountsRoutes(
     if (input.accountType === 'MASTER') {
       const newMaster: MasterAdminAccountRecord = {
         id: `master-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+        username: resolvedUsername,
         email: emailNorm,
         fullName: input.fullName,
         phone: input.phone || '',
@@ -203,6 +238,10 @@ export function mountMasterAccountsRoutes(
         allowGoogleLogin: input.allowGoogleLogin,
         allowPasswordLogin: input.allowPasswordLogin && Boolean(input.password),
         isPrimaryOwner: false,
+        idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+          input.idleTimeoutMinutes,
+          DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+        ),
         notes: input.notes || `Ditambahkan oleh ${session.email}`,
         lastLoginAt: null,
         createdAt: nowIso,
@@ -224,14 +263,14 @@ export function mountMasterAccountsRoutes(
         accountType: 'MASTER',
         createdMaster: sanitizeMasterAdminAccount(newMaster),
         pgSynced: pgSync.synced,
-        message: `Akun Master Admin ${newMaster.email} berhasil dibuat${
+        message: `Akun Master Admin ${newMaster.email} (@${resolvedUsername}) berhasil dibuat${
           pgSync.synced ? ' dan tersinkron ke Neon PostgreSQL.' : '.'
         }`,
         ...payload,
       });
     }
 
-    // REAL or DEMO account provisioning
+    // REAL, SIMULATION (100% clean slate), or DEMO account provisioning
     const businessName = input.businessName?.trim() || `Usaha ${input.fullName}`;
     const vertical = input.vertical as BusinessVertical;
     const templateMatch =
@@ -244,6 +283,7 @@ export function mountMasterAccountsRoutes(
     const provisioned = buildMasterProvisionedAccountAndWorkspace({
       accountScope: input.accountType,
       fullName: input.fullName,
+      username: resolvedUsername,
       email: emailNorm,
       password: rawPassword,
       phone: input.phone,
@@ -261,6 +301,10 @@ export function mountMasterAccountsRoutes(
       demoDurationDays: input.demoDurationDays,
       allowGoogleLogin: input.allowGoogleLogin,
       allowPasswordLogin: input.allowPasswordLogin,
+      idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+        input.idleTimeoutMinutes,
+        DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+      ),
       notes: input.notes,
       passwordHash,
       templateWorkspace: templateMatch,
@@ -286,6 +330,12 @@ export function mountMasterAccountsRoutes(
       });
     }
 
+    const scopeText =
+      input.accountType === 'DEMO'
+        ? 'Demo'
+        : input.accountType === 'SIMULATION'
+        ? 'Simulasi (setara Akun Real)'
+        : 'Usaha Real';
     const payload = await buildPayload();
     return res.status(201).json({
       ok: true,
@@ -293,8 +343,8 @@ export function mountMasterAccountsRoutes(
       createdCustomer: sanitizeCustomerForApi(provisioned.customer),
       createdWorkspace: provisioned.workspace,
       pgSynced: pgSync.synced,
-      message: `Akun ${input.accountType === 'DEMO' ? 'Demo' : 'Usaha Real'} ${emailNorm} (${businessName}) berhasil dibuat${
-        pgSync.synced ? ' dan disinkronkan ke Neon PostgreSQL.' : '.'
+      message: `Akun ${scopeText} ${emailNorm} (@${resolvedUsername}) untuk ${businessName} berhasil dibuat${
+        pgSync.synced ? ' dan siap login via Google maupun Username/Email.' : '.'
       }`,
       ...payload,
     });
@@ -337,11 +387,24 @@ export function mountMasterAccountsRoutes(
         }
       }
 
+      let nextUsername = existing.username;
+      if (patch.username !== undefined) {
+        const norm = normalizeUsername(patch.username);
+        if (patch.username.trim().length > 0 && (!norm || !isValidUsername(norm))) {
+          return res.status(400).json({ error: 'Format username tidak valid (3–32 karakter huruf kecil/angka/._-).' });
+        }
+        if (norm && tenantDb.isUsernameTaken(norm, existing.id)) {
+          return res.status(409).json({ error: `Username "${norm}" sudah dipakai akun lain.` });
+        }
+        nextUsername = norm;
+      }
+
       const nextHash = patch.newPassword
         ? await hashAccountPassword(patch.newPassword)
         : existing.passwordHash;
       const updated: MasterAdminAccountRecord = {
         ...existing,
+        username: nextUsername,
         fullName: patch.fullName ?? existing.fullName,
         phone: patch.phone ?? existing.phone,
         status:
@@ -352,6 +415,16 @@ export function mountMasterAccountsRoutes(
             : existing.status,
         allowGoogleLogin: patch.allowGoogleLogin ?? existing.allowGoogleLogin,
         allowPasswordLogin: patch.allowPasswordLogin ?? existing.allowPasswordLogin,
+        idleTimeoutMinutes:
+          patch.idleTimeoutMinutes !== undefined
+            ? normalizeIdleTimeoutMinutes(
+                patch.idleTimeoutMinutes,
+                DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+              )
+            : normalizeIdleTimeoutMinutes(
+                existing.idleTimeoutMinutes,
+                DEFAULT_MASTER_IDLE_TIMEOUT_MINUTES,
+              ),
         notes: patch.notes ?? existing.notes,
         passwordHash: nextHash,
         updatedAt: nowIso,
@@ -378,12 +451,25 @@ export function mountMasterAccountsRoutes(
       });
     }
 
-    if (accountType === 'REAL' || accountType === 'DEMO') {
+    if (accountType === 'REAL' || accountType === 'SIMULATION' || accountType === 'DEMO') {
       const existing = tenantDb.findCustomerById(targetId);
       if (!existing) {
         return res.status(404).json({ error: 'Akun pengguna tidak ditemukan.' });
       }
+      let nextUsername = existing.username;
+      if (patch.username !== undefined) {
+        const norm = normalizeUsername(patch.username);
+        if (patch.username.trim().length > 0 && (!norm || !isValidUsername(norm))) {
+          return res.status(400).json({ error: 'Format username tidak valid (3–32 karakter huruf kecil/angka/._-).' });
+        }
+        if (norm && tenantDb.isUsernameTaken(norm, existing.id)) {
+          return res.status(409).json({ error: `Username "${norm}" sudah dipakai akun lain.` });
+        }
+        nextUsername = norm;
+      }
+
       const isDemo = existing.isDemoAccount || existing.accountScope === 'DEMO';
+      const isSim = existing.accountScope === 'SIMULATION';
       const nextPlan = patch.planCode ?? existing.subscriptionPlan ?? 'BASIC';
       const nextCycle = patch.billingCycle ?? existing.billingCycle;
       const addOns = existing.activeAddOns ?? [];
@@ -415,6 +501,7 @@ export function mountMasterAccountsRoutes(
 
       const updatedCustomer: ManagedCustomerAccount = {
         ...existing,
+        username: nextUsername,
         fullName: patch.fullName ?? existing.fullName,
         phone: patch.phone ?? existing.phone,
         status: patch.status ?? existing.status,
@@ -423,8 +510,18 @@ export function mountMasterAccountsRoutes(
         subscriptionPlan: nextPlan,
         billingCycle: nextCycle,
         activeModules: nextModules,
-        monthlyRecurringRevenue: isDemo ? '0.0000' : pricing.effectiveMonthlySubtotal,
+        monthlyRecurringRevenue: isDemo || isSim ? '0.0000' : pricing.effectiveMonthlySubtotal,
         maxTenantsAllowed: patch.maxTenantsAllowed ?? existing.maxTenantsAllowed,
+        idleTimeoutMinutes:
+          patch.idleTimeoutMinutes !== undefined
+            ? normalizeIdleTimeoutMinutes(
+                patch.idleTimeoutMinutes,
+                DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+              )
+            : normalizeIdleTimeoutMinutes(
+                existing.idleTimeoutMinutes,
+                DEFAULT_USER_IDLE_TIMEOUT_MINUTES,
+              ),
         adminNotes: patch.notes ?? existing.adminNotes,
         demoExpiresAt: nextDemoExpires,
         validUntil: nextDemoExpires || existing.validUntil,
@@ -439,7 +536,7 @@ export function mountMasterAccountsRoutes(
       tenantDb.upsertCustomer(updatedCustomer);
 
       // Keep associated workspaces in sync with plan & modules
-      const scope = isDemo ? 'DEMO' : 'REAL';
+      const scope = isDemo ? 'DEMO' : isSim ? 'SIMULATION' : 'REAL';
       for (const tid of updatedCustomer.tenantIds) {
         const ws = tenantDb.getWorkspace(scope, updatedCustomer.id, tid);
         if (ws) {
@@ -514,7 +611,7 @@ export function mountMasterAccountsRoutes(
       });
     }
 
-    if (accountType === 'REAL' || accountType === 'DEMO') {
+    if (accountType === 'REAL' || accountType === 'SIMULATION' || accountType === 'DEMO') {
       const target = tenantDb.findCustomerById(targetId);
       if (!target) {
         return res.status(404).json({ error: 'Akun pengguna tidak ditemukan.' });
@@ -524,7 +621,13 @@ export function mountMasterAccountsRoutes(
       const payload = await buildPayload();
       return res.status(200).json({
         ok: true,
-        message: `Akun ${accountType === 'DEMO' ? 'Demo' : 'Real'} ${target.email} berhasil dihapus.`,
+        message: `Akun ${
+          accountType === 'DEMO'
+            ? 'Demo'
+            : accountType === 'SIMULATION'
+            ? 'Simulasi'
+            : 'Real'
+        } ${target.email} berhasil dihapus.`,
         ...payload,
       });
     }
@@ -532,7 +635,58 @@ export function mountMasterAccountsRoutes(
     return res.status(400).json({ error: 'Tipe akun tidak valid.' });
   });
 
-  // POST /api/master/accounts/sync-postgres — Push all Master, Real, Demo accounts into Neon PostgreSQL
+  // POST /api/master/accounts/simulation/:id/reset — Reset simulation workspace transactions/stock cleanly
+  app.post('/api/master/accounts/simulation/:id/reset', async (req, res) => {
+    const session = extractSessionFromRequest(req);
+    if (!session || session.role !== 'MASTER_ADMIN') {
+      return res.status(403).json({ error: 'Hanya Master Admin yang dapat mereset ruang kerja simulasi.' });
+    }
+    const targetId = String(req.params.id || '');
+    const target = tenantDb.findCustomerById(targetId);
+    if (!target || target.accountScope !== 'SIMULATION') {
+      return res.status(404).json({ error: 'Akun Simulasi tidak ditemukan.' });
+    }
+    const existingWs = tenantDb.getWorkspace('SIMULATION', target.id, target.primaryTenantId);
+    const rebuilt = buildMasterProvisionedAccountAndWorkspace({
+      accountScope: 'SIMULATION',
+      fullName: target.fullName,
+      username: target.username,
+      email: target.email,
+      password: '••••••••',
+      phone: target.phone,
+      businessName: existingWs?.tenant.name || `Simulasi ${target.fullName}`,
+      vertical: existingWs?.tenant.vertical || target.demoVertical || 'WARUNG_SEMBAKO',
+      planCode: target.subscriptionPlan || 'PRO',
+      billingCycle: target.billingCycle,
+      allowGoogleLogin: target.allowGoogleLogin ?? true,
+      allowPasswordLogin: target.allowPasswordLogin ?? true,
+      passwordHash: target.passwordHash || '',
+    });
+    const resetWs: TenantWorkspaceData = {
+      ...rebuilt.workspace,
+      tenant: {
+        ...rebuilt.workspace.tenant,
+        id: target.primaryTenantId,
+        slug: existingWs?.tenant.slug || rebuilt.workspace.tenant.slug,
+        ownerAccountId: target.id,
+        accountScope: 'SIMULATION',
+      },
+    };
+    tenantDb.saveWorkspace('SIMULATION', target.id, resetWs);
+    await syncTenantWorkspaceToPostgres({
+      email: target.email,
+      customer: target,
+      workspace: resetWs,
+    });
+    const payload = await buildPayload();
+    return res.status(200).json({
+      ok: true,
+      message: `Data ruang kerja simulasi ${resetWs.tenant.name} berhasil direset bersih seperti awal.`,
+      ...payload,
+    });
+  });
+
+  // POST /api/master/accounts/sync-postgres — Push all Master, Real, Simulation, Demo accounts into Neon PostgreSQL
   app.post('/api/master/accounts/sync-postgres', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session || session.role !== 'MASTER_ADMIN') {
@@ -562,7 +716,7 @@ export function mountMasterAccountsRoutes(
     return res.status(200).json({
       ok: true,
       ...syncRes,
-      message: `Sinkronisasi ke Neon PostgreSQL selesai: ${syncRes.masterSynced} Master Admin, ${syncRes.realSynced} Akun Real, ${syncRes.demoSynced} Akun Demo berhasil disinkronkan.`,
+      message: `Sinkronisasi ke Neon PostgreSQL selesai: ${syncRes.masterSynced} Master Admin, ${syncRes.realSynced} Akun Real, ${syncRes.simulationSynced} Akun Simulasi, ${syncRes.demoSynced} Akun Demo berhasil disinkronkan.`,
       ...payload,
     });
   });

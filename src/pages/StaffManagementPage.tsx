@@ -18,6 +18,10 @@ import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { ModalShell } from '../components/ui/ModalShell';
 import { useApp } from '../context/AppContext';
 import {
+  formatIdleTimeoutLabel,
+  IDLE_TIMEOUT_PRESETS,
+} from '../lib/auth/session-timeout';
+import {
   getAvailablePermissionsForVertical,
   STAFF_PERMISSIONS_META,
   STAFF_ROLE_PRESETS,
@@ -111,6 +115,7 @@ export function StaffManagementPage() {
   const [phone, setPhone] = useState('');
   const [roleTitle, setRoleTitle] = useState('Kasir');
   const [selectedPerms, setSelectedPerms] = useState<StaffPermission[]>(['POS_CASHIER']);
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState<number>(0);
   const [formError, setFormError] = useState<string | null>(null);
 
   const flashNotice = (msg: string) => {
@@ -126,6 +131,7 @@ export function StaffManagementPage() {
     setPhone('');
     setRoleTitle('Kasir');
     setSelectedPerms(['POS_CASHIER']);
+    setIdleTimeoutMinutes(0);
     setFormError(null);
     setModalOpen(true);
   };
@@ -138,6 +144,7 @@ export function StaffManagementPage() {
     setPhone(staff.phone ?? '');
     setRoleTitle(staff.roleTitle);
     setSelectedPerms([...staff.permissions]);
+    setIdleTimeoutMinutes(staff.idleTimeoutMinutes ?? 0);
     setFormError(null);
     setModalOpen(true);
   };
@@ -164,6 +171,9 @@ export function StaffManagementPage() {
       return;
     }
 
+    const normalizedTimeout =
+      idleTimeoutMinutes <= 0 ? 0 : Math.min(1440, Math.max(5, Math.round(idleTimeoutMinutes)));
+
     if (editingStaff) {
       updateStaffAccount(editingStaff.id, {
         fullName: fullName.trim(),
@@ -171,8 +181,9 @@ export function StaffManagementPage() {
         password: password.trim() || editingStaff.password,
         roleTitle: roleTitle.trim() || 'Pegawai',
         permissions: selectedPerms,
+        idleTimeoutMinutes: normalizedTimeout,
       });
-      flashNotice(`Hak akses pegawai "${fullName.trim()}" berhasil diperbarui.`);
+      flashNotice(`Hak akses & batas waktu sesi pegawai "${fullName.trim()}" berhasil diperbarui.`);
       setModalOpen(false);
     } else {
       const res = addStaffAccount({
@@ -182,6 +193,7 @@ export function StaffManagementPage() {
         phone,
         roleTitle,
         permissions: selectedPerms,
+        idleTimeoutMinutes: normalizedTimeout,
       });
       if (!res.ok) {
         setFormError(res.error || 'Gagal membuat akun pegawai.');
@@ -227,6 +239,15 @@ export function StaffManagementPage() {
             .map((code) => STAFF_PERMISSIONS_META.find((m) => m.code === code)?.shortLabel ?? code)
             .join(' · ')}
         </div>
+      ),
+    },
+    {
+      key: 'timeout',
+      header: 'Auto-Logout',
+      render: (staff) => (
+        <span className="font-mono text-[11px] tabular-nums text-stone-700 whitespace-nowrap">
+          {formatIdleTimeoutLabel(staff.idleTimeoutMinutes ?? 0)}
+        </span>
       ),
     },
     {
@@ -686,6 +707,56 @@ export function StaffManagementPage() {
                 placeholder="0812-xxxx-xxxx"
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-600"
               />
+            </div>
+          </div>
+
+          {/* Per-Staff Auto-Logout Idle Timeout */}
+          <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="staff-idle-timeout" className="text-xs font-semibold text-stone-800">
+                Batas Waktu Sesi Pegawai (Auto-Logout Tidak Aktif)
+              </label>
+              <span className="font-mono text-[11px] font-semibold text-stone-600">
+                {formatIdleTimeoutLabel(idleTimeoutMinutes)}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <select
+                id="staff-idle-timeout"
+                data-testid="staff-idle-timeout-select"
+                value={
+                  IDLE_TIMEOUT_PRESETS.some((p) => p.minutes === idleTimeoutMinutes)
+                    ? String(idleTimeoutMinutes)
+                    : 'CUSTOM'
+                }
+                onChange={(e) => {
+                  if (e.target.value === 'CUSTOM') {
+                    setIdleTimeoutMinutes(idleTimeoutMinutes > 0 ? idleTimeoutMinutes : 45);
+                  } else {
+                    setIdleTimeoutMinutes(Number(e.target.value));
+                  }
+                }}
+                className="w-full px-3 py-2 text-xs bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
+              >
+                {IDLE_TIMEOUT_PRESETS.map((p) => (
+                  <option key={p.minutes} value={String(p.minutes)}>
+                    {p.label}
+                  </option>
+                ))}
+                <option value="CUSTOM">Durasi Kustom (Menit)...</option>
+              </select>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={idleTimeoutMinutes}
+                  onChange={(e) => setIdleTimeoutMinutes(Math.max(0, Number(e.target.value) || 0))}
+                  placeholder="0 = nonaktif"
+                  className="w-full px-3 py-2 text-xs font-mono tabular-nums bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
+                />
+                <span className="text-[11px] text-stone-500 shrink-0">menit (0 = mati)</span>
+              </div>
             </div>
           </div>
 

@@ -1,19 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  Clock,
+  Eye,
+  EyeOff,
   KeyRound,
-  Landmark,
   Loader2,
   Lock,
-  LogIn,
-  Play,
+  Mail,
   ShieldCheck,
   Store,
-  UserCheck,
-  UserPlus,
+  User,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -21,53 +21,32 @@ import {
   fetchAuthConfigStatus,
   type AuthConfigStatusResponse,
 } from '../lib/auth-client';
-import { deriveLegacyModulesFromHybrid } from '../lib/saas/hybrid-pricing';
-import {
-  ACTIVE_VERTICAL_DEFINITIONS,
-  VERTICAL_GROUP_LABELS,
-  type VerticalCategoryGroup,
-} from '../lib/verticals/vertical-registry';
-import {
-  buildDefaultTenantRegionalTax,
-  describeNationalAndRegionalTaxSummary,
-  getVerticalPbjtCategory,
-} from '../lib/tax/regional-tax-indonesia';
-import {
-  detectRegionFromLocationText,
-  lookupRegionalTaxRecommendations,
-} from '../lib/tax/regional-tax-lookup';
-import type { BusinessVertical } from '../types/domain';
 
-const SIGNUP_GROUP_ORDER: VerticalCategoryGroup[] = [
-  'RETAIL_DAGANG',
-  'KULINER_FNB',
-  'JASA_PERAWATAN',
-  'RENTAL_PROPETI',
-  'PRODUKSI_AGRO',
-];
+interface LoginPageProps {
+  initialTab?: 'CUSTOMER' | 'MASTER';
+  initialMode?: 'LOGIN' | 'REGISTER';
+}
 
-function GoogleBrandMark() {
+type RecoveryView = 'NONE' | 'FORGOT_PASSWORD' | 'FIND_ACCOUNT';
+
+function GoogleLogoIcon() {
   return (
-    <svg
-      className="w-4 h-4 shrink-0"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
+    <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
       <path
         fill="#4285F4"
-        d="M23.49 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h6.47a5.54 5.54 0 0 1-2.4 3.63v3.01h3.88c2.27-2.09 3.54-5.17 3.54-8.88z"
+        d="M23.49 12.27c0-.79-.07-1.55-.2-2.27H12v4.3h6.45a5.52 5.52 0 0 1-2.39 3.62v3h3.87c2.26-2.08 3.56-5.15 3.56-8.65z"
       />
       <path
         fill="#34A853"
-        d="M12 24c3.24 0 5.95-1.07 7.94-2.91l-3.88-3.01c-1.08.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.72-4.95H1.27v3.11A12 12 0 0 0 12 24z"
+        d="M12 24c3.24 0 5.95-1.07 7.93-2.9l-3.87-3c-1.07.72-2.44 1.15-4.06 1.15-3.12 0-5.77-2.11-6.71-4.95H1.29v3.1A12 12 0 0 0 12 24z"
       />
       <path
         fill="#FBBC05"
-        d="M5.28 14.28A7.2 7.2 0 0 1 4.9 12c0-.79.14-1.56.38-2.28V6.61H1.27A12 12 0 0 0 0 12c0 1.94.46 3.77 1.27 5.39l4.01-3.11z"
+        d="M5.29 14.3a7.2 7.2 0 0 1 0-4.6V6.6H1.29a12 12 0 0 0 0 10.8l4-3.1z"
       />
       <path
         fill="#EA4335"
-        d="M12 4.77c1.76 0 3.34.61 4.58 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.27 6.61l4.01 3.11C6.23 6.88 8.88 4.77 12 4.77z"
+        d="M12 4.75c1.76 0 3.34.61 4.59 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.29 6.6l4 3.1C6.23 6.86 8.88 4.75 12 4.75z"
       />
     </svg>
   );
@@ -76,24 +55,55 @@ function GoogleBrandMark() {
 export function LoginPage({
   initialTab = 'CUSTOMER',
   initialMode = 'LOGIN',
-}: {
-  initialTab?: 'CUSTOMER' | 'MASTER';
-  initialMode?: 'LOGIN' | 'REGISTER';
-}) {
+}: LoginPageProps) {
   const {
-    navigate,
     loginAsMaster,
     loginAsCustomer,
-    completeCustomerOnboarding,
     hydrateFromBetterAuthSession,
     betterAuthError,
-    enterInstantDemo,
-    systemDemoConfig,
-    regionalTaxRegistry,
+    navigate,
   } = useApp();
 
   const [tab, setTab] = useState<'CUSTOMER' | 'MASTER'>(initialTab);
-  const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>(initialMode);
+  const [customerMode, setCustomerMode] = useState<'LOGIN' | 'REGISTER'>(initialMode);
+  const [recoveryView, setRecoveryView] = useState<RecoveryView>('NONE');
+
+  // Shared credentials state
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Registration state (unified Better Auth email sign-up -> onboarding)
+  const [regName, setRegName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regConfirmPassword, setRegConfirmPassword] = useState('');
+
+  // Recovery state (Forgot Password / Find Account)
+  const [recIdentifier, setRecIdentifier] = useState('');
+  const [recStep, setRecStep] = useState<'REQUEST' | 'VERIFY'>('REQUEST');
+  const [recCode, setRecCode] = useState('');
+  const [recNewPassword, setRecNewPassword] = useState('');
+  const [recConfirmPassword, setRecConfirmPassword] = useState('');
+  const [recMaskedTarget, setRecMaskedTarget] = useState('');
+  const [recDevCode, setRecDevCode] = useState<string | null>(null);
+  const [recMessage, setRecMessage] = useState<string | null>(null);
+  const [recFoundAccounts, setRecFoundAccounts] = useState<
+    Array<{
+      roleLabel: string;
+      maskedEmail: string;
+      maskedUsername: string | null;
+      fullName: string;
+      allowGoogleLogin: boolean;
+      allowPasswordLogin: boolean;
+    }>
+  >([]);
+
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+
   const [authConfig, setAuthConfig] = useState<AuthConfigStatusResponse>({
     googleAuthConfigured: false,
     betterAuthSecretConfigured: false,
@@ -101,13 +111,24 @@ export function LoginPage({
     betterAuthReady: false,
   });
 
-  // Sync mode when navigating directly between /login and /register
+  // Sync tab/mode with route changes & detect ?reason=idle_timeout
   useEffect(() => {
     setTab(initialTab);
-    setAuthMode(initialMode);
+    setCustomerMode(initialMode);
+    setRecoveryView('NONE');
+    setError(null);
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('reason') === 'idle_timeout') {
+        setNotice(
+          'Sesi Anda berakhir otomatis karena tidak ada aktivitas. Silakan masuk kembali.'
+        );
+      } else {
+        setNotice(null);
+      }
+    }
   }, [initialTab, initialMode]);
 
-  // Check server auth capabilities
   useEffect(() => {
     let active = true;
     void fetchAuthConfigStatus().then((cfg) => {
@@ -119,1237 +140,918 @@ export function LoginPage({
   }, []);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const oauthErr = params.get('error') || params.get('oauth_error');
-      if (oauthErr) {
-        setCustError(
-          oauthErr === '1'
-            ? 'Login Google dibatalkan atau Redirect URI belum cocok di Google Cloud Console.'
-            : `Autentikasi Google gagal: ${oauthErr}. Periksa Authorized Redirect URI & BETTER_AUTH_URL.`,
-        );
-      }
+    if (betterAuthError) {
+      setError(betterAuthError);
     }
-  }, []);
+  }, [betterAuthError]);
 
-  const isEmbeddedIframe = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      return window.self !== window.top;
-    } catch {
-      return true;
-    }
-  }, []);
-
-  // Listen for iframe-safe Google OAuth popup completion postMessage
+  // Listen for Google OAuth popup completion postMessage (iframe-safe)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handleOAuthPopupMessage = async (event: MessageEvent) => {
-      const data = event.data as
-        | { type?: string; handoffCode?: string | null; error?: string | null }
-        | null
-        | undefined;
-      if (!data || data.type !== 'KASIRAKUN_OAUTH_SUCCESS') return;
-
-      const trustedOrigin =
-        event.origin === window.location.origin ||
-        event.origin.endsWith('.run.app') ||
-        event.origin.startsWith('http://localhost:') ||
-        event.origin.startsWith('http://127.0.0.1:');
-      if (!trustedOrigin) return;
-
-      if (data.error || !data.handoffCode) {
-        const msg =
-          data.error ||
-          'Login Google gagal atau dibatalkan. Pastikan Authorized Redirect URI di Google Cloud Console sudah ditambahkan.';
-        if (tab === 'MASTER') {
-          setMasterError(msg);
-        } else {
-          setCustError(msg);
-        }
-        setGoogleSubmitting(false);
+    const onMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data as
+        | { type?: string; handoffCode?: string; error?: string }
+        | null;
+      if (!payload || payload.type !== 'KASIRAKUN_OAUTH_COMPLETE') return;
+      if (payload.error) {
+        setIsGoogleLoading(false);
+        setError(payload.error);
         return;
       }
-
-      setGoogleSubmitting(true);
-      const exchanged = await hydrateFromBetterAuthSession(data.handoffCode);
-      setGoogleSubmitting(false);
-      if (!exchanged.ok) {
-        const msg =
-          exchanged.error ||
-          'Sesi Google tidak dapat ditukar. Silakan coba klik Masuk dengan Google lagi.';
-        if (tab === 'MASTER') {
-          setMasterError(msg);
-        } else {
-          setCustError(msg);
-        }
+      if (!payload.handoffCode) {
+        setIsGoogleLoading(false);
+        setError('Kode verifikasi Google tidak ditemukan. Silakan coba lagi.');
         return;
       }
-
-      if (exchanged.needsOnboarding) {
+      const res = await hydrateFromBetterAuthSession(payload.handoffCode);
+      setIsGoogleLoading(false);
+      if (!res.ok) {
+        setError(res.error || 'Gagal memuat sesi Google.');
+        return;
+      }
+      if (res.needsOnboarding) {
         navigate('/onboarding?mode=real&source=oauth');
-      } else {
-        navigate(exchanged.defaultRoute || (tab === 'MASTER' ? '/master' : '/dashboard'));
+      } else if (res.defaultRoute) {
+        navigate(res.defaultRoute);
       }
     };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [hydrateFromBetterAuthSession, navigate]);
 
-    window.addEventListener('message', handleOAuthPopupMessage);
-    return () => window.removeEventListener('message', handleOAuthPopupMessage);
-  }, [hydrateFromBetterAuthSession, navigate, tab]);
-
-  useEffect(() => {
-    if (!betterAuthError) return;
-    if (tab === 'MASTER') {
-      setMasterError(betterAuthError);
-    } else {
-      setCustError(betterAuthError);
-    }
-  }, [betterAuthError, tab]);
-
-  // Master Login state
-  const [masterEmail, setMasterEmail] = useState('master@kasirakun.id');
-  const [masterPassword, setMasterPassword] = useState('');
-  const [masterError, setMasterError] = useState('');
-  const [masterSubmitting, setMasterSubmitting] = useState(false);
-
-  // Customer Login & Register state
-  const [custEmail, setCustEmail] = useState('');
-  const [custPassword, setCustPassword] = useState('');
-  const [custError, setCustError] = useState('');
-  const [custSuccess, setCustSuccess] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [googleSubmitting, setGoogleSubmitting] = useState(false);
-  const [demoLoading, setDemoLoading] = useState(false);
-
-  // Registration form fields
-  const [signupFullName, setSignupFullName] = useState('');
-  const [signupBusinessName, setSignupBusinessName] = useState('');
-  const [signupVertical, setSignupVertical] = useState<BusinessVertical>('WARUNG_SEMBAKO');
-  const [signupRegionCode, setSignupRegionCode] = useState<string>('ID-NONE');
-  const [signupApplyRegionalTax, setSignupApplyRegionalTax] = useState<boolean>(false);
-  const [signupCustomTaxName, setSignupCustomTaxName] = useState<string>('');
-  const [signupCustomRatePct, setSignupCustomRatePct] = useState<string>('');
-  const [signupLocationQuery, setSignupLocationQuery] = useState<string>('');
-  const [showSignupCustomTax, setShowSignupCustomTax] = useState<boolean>(false);
-  const [signupWaNumber, setSignupWaNumber] = useState('');
-  const [signupEmail, setSignupEmail] = useState('');
-  const [signupPassword, setSignupPassword] = useState('');
-
-  const signupTaxLookup = useMemo(
-    () =>
-      lookupRegionalTaxRecommendations({
-        vertical: signupVertical,
-        regionCode: signupRegionCode,
-        taxEntity: 'WP_OP',
-        isPkp: false,
-        registry: regionalTaxRegistry,
-      }),
-    [signupVertical, signupRegionCode, regionalTaxRegistry]
-  );
-
-  const signupCustomRateDecimal = useMemo(() => {
-    const num = Number(signupCustomRatePct.replace(',', '.'));
-    if (!Number.isFinite(num) || num <= 0 || num > 100) return null;
-    return (num / 100).toFixed(4);
-  }, [signupCustomRatePct]);
-
-  const signupTaxPreview = useMemo(() => {
-    const baseRegional = buildDefaultTenantRegionalTax(
-      signupVertical,
-      signupRegionCode,
-      regionalTaxRegistry,
-    );
-    const hasCustom = signupRegionCode !== 'ID-NONE' && signupCustomRateDecimal !== null;
-    return describeNationalAndRegionalTaxSummary({
-      vertical: signupVertical,
-      taxEntity: 'WP_OP',
-      isPkp: false,
-      regionalTax: {
-        ...baseRegional,
-        applyRegionalTax:
-          signupRegionCode !== 'ID-NONE' && (signupApplyRegionalTax || hasCustom),
-        customTaxName: signupCustomTaxName.trim() || null,
-        customRateOverride: signupCustomRateDecimal,
-      },
-      registry: regionalTaxRegistry,
-    });
-  }, [
-    regionalTaxRegistry,
-    signupApplyRegionalTax,
-    signupCustomRateDecimal,
-    signupCustomTaxName,
-    signupRegionCode,
-    signupVertical,
-  ]);
-
-  const isPublicInstantDemo =
-    (systemDemoConfig.globalDemoMode ?? systemDemoConfig.demoMode ?? 'PUBLIC_INSTANT') ===
-      'PUBLIC_INSTANT' && !systemDemoConfig.requireRegistrationForDemo;
-
-  const handleMasterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMasterError('');
-    setMasterSubmitting(true);
-    const res = await loginAsMaster(masterEmail, masterPassword);
-    setMasterSubmitting(false);
-    if (!res.ok) {
-      setMasterError(res.error || 'Email atau kata sandi Master Admin tidak cocok.');
-      return;
-    }
-    navigate('/master');
+  const handleTabSwitch = (nextTab: 'CUSTOMER' | 'MASTER') => {
+    setTab(nextTab);
+    setCustomerMode('LOGIN');
+    setRecoveryView('NONE');
+    setError(null);
+    setRecMessage(null);
+    setIdentifier('');
+    setPassword('');
   };
 
-  const handleQuickMasterLogin = async () => {
-    setMasterEmail('master@kasirakun.id');
-    setMasterPassword('Master2026!');
-    setMasterError('');
-    setMasterSubmitting(true);
-    const res = await loginAsMaster('master@kasirakun.id', 'Master2026!');
-    setMasterSubmitting(false);
-    if (res.ok) {
-      navigate('/master');
-    } else {
-      setMasterError(res.error || 'Masuk cepat Master gagal.');
-    }
-  };
-
+  /**
+   * Unified Google OAuth launcher shared by BOTH Pemilik/Staf and Master Admin tabs.
+   * Uses Better Auth social sign-in (`provider: 'google'`) matching the single
+   * Google Cloud Console Redirect URI: `{origin}/api/auth/callback/google`.
+   */
   const launchGoogleOAuth = async (targetRole: 'CUSTOMER' | 'MASTER') => {
-    const setErr = targetRole === 'MASTER' ? setMasterError : setCustError;
-    setErr('');
-    if (targetRole === 'CUSTOMER') setCustSuccess('');
-
-    if (!authConfig.betterAuthReady || !authConfig.googleAuthConfigured) {
-      setErr(
-        !authConfig.betterAuthReady
-          ? 'Login Google memerlukan Neon PostgreSQL (DATABASE_URL) aktif di server ini. Buka Master Admin -> Pengaturan API & Secret Key lalu tempel DATABASE_URL Neon agar semua kunci dari Vercel otomatis tersinkron.'
-          : 'Google OAuth belum aktif di server ini. Isi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key (atau sinkronkan dari Neon DB).',
+    setError(null);
+    if (!authConfig.googleAuthConfigured || !authConfig.betterAuthReady) {
+      setError(
+        'Login Google belum aktif di server ini. Gunakan email/username dan kata sandi, atau lengkapi konfigurasi Google OAuth di server.'
       );
       return;
     }
 
-    setGoogleSubmitting(true);
-    let popupRef: Window | null = null;
-
+    setIsGoogleLoading(true);
     try {
-      if (isEmbeddedIframe && typeof window !== 'undefined') {
-        popupRef = window.open(
-          '',
-          'kasirakun_google_oauth',
-          'width=520,height=660,menubar=no,toolbar=no,status=no,resizable=yes,scrollbars=yes',
-        );
-        if (!popupRef) {
-          setErr(
-            'Browser memblokir jendela popup Login Google. Izinkan popup untuk situs ini lalu klik tombol Login Google kembali.',
-          );
-          setGoogleSubmitting(false);
+      let inIframe = false;
+      try {
+        inIframe = window.self !== window.top;
+      } catch {
+        inIframe = true;
+      }
+
+      const callbackURL = inIframe
+        ? `${window.location.origin}/api/auth/oauth-popup-done`
+        : targetRole === 'MASTER'
+        ? `${window.location.origin}/master`
+        : `${window.location.origin}/dashboard`;
+
+      if (inIframe) {
+        const res = await authClient.signIn.social({
+          provider: 'google',
+          callbackURL,
+          newUserCallbackURL: `${window.location.origin}/api/auth/oauth-popup-done`,
+          disableRedirect: true,
+        });
+        if (res.error) {
+          setIsGoogleLoading(false);
+          setError(res.error.message || 'Gagal memulai login Google.');
           return;
         }
-      }
-
-      const result = await authClient.signIn.social({
-        provider: 'google',
-        disableRedirect: true,
-        callbackURL: isEmbeddedIframe
-          ? '/api/auth/oauth-popup-done'
-          : targetRole === 'MASTER'
-          ? '/master'
-          : '/dashboard',
-        newUserCallbackURL: isEmbeddedIframe
-          ? '/api/auth/oauth-popup-done'
-          : '/onboarding?mode=real&source=oauth',
-        errorCallbackURL: isEmbeddedIframe
-          ? '/api/auth/oauth-popup-done?error=oauth_failed'
-          : '/login?oauth_error=1',
-      });
-
-      if (result?.error) {
-        if (popupRef && !popupRef.closed) popupRef.close();
-        setErr(
-          result.error.message ||
-            'Gagal menghubungkan akun Google via Better Auth. Periksa GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, dan Redirect URI.',
-        );
-        setGoogleSubmitting(false);
-        return;
-      }
-
-      const redirectUrl =
-        result?.data && typeof result.data === 'object' && 'url' in result.data
-          ? String((result.data as { url?: unknown }).url || '')
-          : '';
-
-      if (!redirectUrl) {
-        if (popupRef && !popupRef.closed) popupRef.close();
-        setErr('Server autentikasi tidak mengembalikan tautan OAuth Google.');
-        setGoogleSubmitting(false);
-        return;
-      }
-
-      if (isEmbeddedIframe && popupRef) {
-        if (targetRole === 'CUSTOMER') {
-          setCustSuccess('Jendela Login Google terbuka di popup. Selesaikan pemilihan akun Google Anda...');
+        const authUrl = (res.data as { url?: string } | null)?.url;
+        if (!authUrl) {
+          setIsGoogleLoading(false);
+          setError('URL otorisasi Google tidak tersedia dari server.');
+          return;
         }
-        popupRef.location.replace(redirectUrl);
-        // Stop spinner if user closes popup manually without finishing
-        const pollClosed = window.setInterval(() => {
-          if (!popupRef || popupRef.closed) {
-            window.clearInterval(pollClosed);
-            setGoogleSubmitting(false);
+        const popup = window.open(
+          authUrl,
+          'kasirakun_google_oauth',
+          'width=520,height=660,menubar=no,toolbar=no,status=no'
+        );
+        if (!popup) {
+          setIsGoogleLoading(false);
+          setError('Jendela popup diblokir browser. Izinkan popup untuk melanjutkan login Google.');
+          return;
+        }
+        const pollTimer = window.setInterval(() => {
+          if (popup.closed) {
+            window.clearInterval(pollTimer);
+            setIsGoogleLoading(false);
           }
         }, 700);
         return;
       }
 
-      if (targetRole === 'CUSTOMER') {
-        setCustSuccess('Mengarahkan ke halaman persetujuan Google...');
-      }
-      if (typeof window !== 'undefined') {
-        window.location.assign(redirectUrl);
+      const res = await authClient.signIn.social({
+        provider: 'google',
+        callbackURL,
+        newUserCallbackURL: `${window.location.origin}/onboarding?mode=real&source=oauth`,
+      });
+      if (res.error) {
+        setIsGoogleLoading(false);
+        setError(res.error.message || 'Gagal memulai login Google.');
       }
     } catch {
-      if (popupRef && !popupRef.closed) popupRef.close();
-      setErr('Terjadi kendala saat menghubungkan akun Google. Coba lagi beberapa saat.');
-      setGoogleSubmitting(false);
+      setIsGoogleLoading(false);
+      setError('Gagal menghubungi layanan autentikasi Google.');
     }
   };
 
-  const handleGoogleCustomer = async () => {
-    await launchGoogleOAuth('CUSTOMER');
-  };
-
-  const handleEmailLoginSubmit = async (e: React.FormEvent) => {
+  const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setCustError('');
-    setCustSuccess('');
-    setSubmitting(true);
+    setError(null);
+    const idTrim = identifier.trim();
+    if (!idTrim || !password) {
+      setError('Masukkan email atau username beserta kata sandi.');
+      return;
+    }
 
+    setIsSubmitting(true);
     try {
-      const normalizedEmail = custEmail.trim().toLowerCase();
-
-      // 1. When Better Auth + Neon PostgreSQL is active, verify via Better Auth first
-      if (authConfig.betterAuthReady) {
-        const baRes = await authClient.signIn.email({
-          email: normalizedEmail,
-          password: custPassword,
-        });
-        if (!baRes?.error && baRes?.data) {
-          const exchanged = await hydrateFromBetterAuthSession();
-          if (!exchanged.ok) {
-            setCustError(
-              exchanged.error || 'Akses akun ditolak atau sesi tidak dapat dimuat.',
-            );
-            return;
-          }
-          setCustSuccess('Berhasil masuk via Better Auth. Mengarahkan ke ruang kerja...');
-          navigate(exchanged.defaultRoute || '/dashboard');
+      if (tab === 'MASTER') {
+        const res = await loginAsMaster(idTrim, password);
+        if (!res.ok) {
+          setError(res.error || 'Email/username atau kata sandi Master Admin tidak cocok.');
           return;
         }
-      }
-
-      // 2. Check registered SaaS Owner / Demo / Staff accounts in partitioned backend DB
-      const saasRes = await loginAsCustomer(normalizedEmail, custPassword);
-      if (saasRes.ok) {
-        setCustSuccess('Berhasil masuk. Mengarahkan ke ruang kerja Anda...');
-        navigate(saasRes.defaultRoute || '/dashboard');
+        navigate('/master');
         return;
       }
 
-      setCustError(
-        saasRes.error || 'Email atau kata sandi tidak cocok. Periksa kembali data masuk Anda.',
-      );
-    } catch {
-      setCustError('Gagal memverifikasi akun. Periksa koneksi internet Anda lalu coba lagi.');
+      const res = await loginAsCustomer(idTrim, password);
+      if (!res.ok) {
+        setError(res.error || 'Email/username atau kata sandi tidak cocok.');
+        return;
+      }
+      navigate(res.defaultRoute || '/dashboard');
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
-  const handleEmailRegisterSubmit = async (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setCustError('');
-    setCustSuccess('');
-
-    if (!signupFullName.trim() || !signupBusinessName.trim()) {
-      setCustError('Nama pemilik dan nama usaha wajib diisi.');
+    setError(null);
+    if (!regName.trim() || !regEmail.trim() || !regPassword) {
+      setError('Lengkapi nama lengkap, email, dan kata sandi.');
       return;
     }
-    if (signupPassword.length < 6) {
-      setCustError('Kata sandi minimal 6 karakter.');
+    if (regPassword.length < 8) {
+      setError('Kata sandi minimal 8 karakter.');
+      return;
+    }
+    if (regPassword !== regConfirmPassword) {
+      setError('Konfirmasi kata sandi tidak sama.');
       return;
     }
 
-    setSubmitting(true);
+    setIsSubmitting(true);
     try {
-      const normalizedEmail = signupEmail.trim().toLowerCase();
-      const baseRegional = buildDefaultTenantRegionalTax(
-        signupVertical,
-        signupRegionCode,
-        regionalTaxRegistry,
-      );
-      const hasCustom = signupRegionCode !== 'ID-NONE' && signupCustomRateDecimal !== null;
-      const regionalTax = {
-        ...baseRegional,
-        applyRegionalTax:
-          signupRegionCode !== 'ID-NONE' && (signupApplyRegionalTax || hasCustom),
-        customTaxName: signupCustomTaxName.trim() || null,
-        customRateOverride: signupCustomRateDecimal,
-      };
-
-      // 1. Primary path when Neon PostgreSQL + Better Auth is active
       if (authConfig.betterAuthReady) {
-        const baSignUp = await authClient.signUp.email({
-          name: signupFullName.trim(),
-          email: normalizedEmail,
-          password: signupPassword,
+        const signUpRes = await authClient.signUp.email({
+          email: regEmail.trim().toLowerCase(),
+          password: regPassword,
+          name: regName.trim(),
         });
-        if (baSignUp?.error) {
-          setCustError(
-            baSignUp.error.message || 'Pendaftaran gagal. Pastikan email belum terdaftar.',
+        if (signUpRes.error) {
+          setError(
+            signUpRes.error.message ||
+              'Pendaftaran akun gagal. Pastikan email belum pernah terdaftar.'
           );
           return;
         }
+        await hydrateFromBetterAuthSession();
       }
-
-      const nowIso = new Date().toISOString();
-      const suffix = Date.now().toString(36).toUpperCase();
-      await completeCustomerOnboarding({
-        invoice: {
-          id: `inv-reg-${suffix}`,
-          invoiceNumber: `REG-${suffix}`,
-          customerEmail: normalizedEmail,
-          billingCycle: 'MONTHLY',
-          planCode: 'LITE',
-          selectedAddOns: [],
-          selectedModules: deriveLegacyModulesFromHybrid('LITE', []),
-          subtotalAmount: '49000.0000',
-          dppNilaiLain: '0.0000',
-          ppnAmount: '0.0000',
-          grandTotal: '49000.0000',
-          paymentMethod: 'QRIS_DYNAMIC',
-          paymentStatus: 'VERIFIED_PAID',
-          gatewayRefId: authConfig.betterAuthReady
-            ? `BA-SIGNUP-${suffix}`
-            : `LOCAL-SIGNUP-${suffix}`,
-          paidAt: nowIso,
-          createdAt: nowIso,
-        },
-        fullName: signupFullName.trim(),
-        email: normalizedEmail,
-        passwordDemo: signupPassword,
-        phone: signupWaNumber.trim() || '081200000000',
-        businessName: signupBusinessName.trim(),
-        vertical: signupVertical,
-        taxEntity: 'WP_OP',
-        isPkp: false,
-        npwp16: '3174010000000001',
-        nitku22: '3174010000000001000001',
-        address: 'Indonesia',
-        receiptFooter: `Terima kasih telah berkunjung ke ${signupBusinessName.trim()}!`,
-        thermalPaperWidth: '80mm',
-        autoPrintQrOrders: true,
-        tableCount:
-          signupVertical === 'RESTORAN' || signupVertical === 'KEDAI_MAKAN' ? 6 : 0,
-        initialCapital: '25000000',
-        menuDrafts: [],
-        customFields: [],
-        regionalTax,
-        businessWhatsappNumber: signupWaNumber.trim() || undefined,
-      });
-
-      setCustSuccess(
-        authConfig.betterAuthReady
-          ? 'Akun Better Auth & ruang kerja usaha siap digunakan!'
-          : 'Akun usaha siap digunakan. Membuka dashboard...',
-      );
-      navigate('/dashboard');
-    } catch (err) {
-      setCustError(
-        err instanceof Error
-          ? err.message
-          : 'Terjadi kendala saat membuat akun baru. Coba beberapa saat lagi.',
-      );
+      navigate('/onboarding?mode=real');
+    } catch {
+      setError('Gagal membuat akun baru. Silakan coba kembali.');
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
-  const handleQuickDemoEntry = async () => {
-    setDemoLoading(true);
-    setCustError('');
+  const handleForgotPasswordRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setRecMessage(null);
+    if (!recIdentifier.trim()) {
+      setError('Masukkan email atau username akun Anda.');
+      return;
+    }
+    setIsSubmitting(true);
     try {
-      const res = await enterInstantDemo('WARUNG_SEMBAKO');
-      if (res.ok) {
-        navigate('/dashboard');
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: recIdentifier.trim() }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        maskedEmail?: string;
+        devCode?: string;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) {
+        setError(data.error || 'Gagal mengirim kode pemulihan.');
         return;
       }
-      navigate('/demo');
+      setRecMaskedTarget(data.maskedEmail || recIdentifier.trim());
+      setRecDevCode(data.devCode ?? null);
+      setRecMessage(data.message || 'Kode pemulihan 6 digit telah dibuat.');
+      setRecStep('VERIFY');
     } catch {
-      navigate('/demo');
+      setError('Gagal menghubungi server pemulihan sandi.');
     } finally {
-      setDemoLoading(false);
+      setIsSubmitting(false);
     }
   };
 
-  const handleGoogleMaster = async () => {
-    await launchGoogleOAuth('MASTER');
+  const handleResetPasswordConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!recCode.trim() || recNewPassword.length < 6) {
+      setError('Masukkan kode 6 digit dan kata sandi baru minimal 6 karakter.');
+      return;
+    }
+    if (recNewPassword !== recConfirmPassword) {
+      setError('Konfirmasi kata sandi baru tidak cocok.');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/reset-password-confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: recIdentifier.trim(),
+          code: recCode.trim(),
+          newPassword: recNewPassword,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
+      if (!res.ok || !data.ok) {
+        setError(data.error || 'Kode verifikasi salah atau kedaluwarsa.');
+        return;
+      }
+      setRecoveryView('NONE');
+      setRecStep('REQUEST');
+      setRecCode('');
+      setRecNewPassword('');
+      setRecConfirmPassword('');
+      setRecDevCode(null);
+      setNotice(data.message || 'Kata sandi berhasil diperbarui. Silakan masuk.');
+    } catch {
+      setError('Gagal memperbarui kata sandi.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const busy = submitting || googleSubmitting;
+  const handleFindAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setRecFoundAccounts([]);
+    if (!recIdentifier.trim()) {
+      setError('Masukkan nomor HP, username, atau nama usaha Anda.');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/recover-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: recIdentifier.trim() }),
+      });
+      const data = (await res.json()) as {
+        matches?: typeof recFoundAccounts;
+        error?: string;
+      };
+      if (!res.ok) {
+        setError(data.error || 'Pencarian akun gagal.');
+        return;
+      }
+      setRecFoundAccounts(data.matches ?? []);
+      if (!data.matches || data.matches.length === 0) {
+        setError('Tidak ditemukan akun yang cocok dengan data tersebut.');
+      }
+    } catch {
+      setError('Gagal mencari akun di server.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#FAFAF9] text-stone-900 flex flex-col">
-      <header className="h-16 bg-white border-b border-stone-200 px-4 sm:px-6 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => navigate('/')}
-          className="inline-flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg px-2 py-1"
-        >
-          <ArrowLeft className="w-4 h-4" strokeWidth={1.75} />
-          <span>Beranda</span>
-        </button>
-        <span className="text-base font-bold tracking-[-0.02em] text-stone-900">
-          KasirAkun UMKM
-        </span>
-        <button
-          type="button"
-          onClick={() => navigate('/demo')}
-          className="text-xs sm:text-sm font-semibold text-emerald-700 hover:text-emerald-800 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg px-2 py-1"
-        >
-          Coba Demo Gratis
-        </button>
+      {/* Minimal Header */}
+      <header className="w-full border-b border-stone-200 bg-white">
+        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4 sm:px-6">
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-stone-600 transition-colors hover:text-stone-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-md px-1.5 py-1"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Beranda
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-md"
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-600 text-white">
+              <Store className="h-4 w-4" strokeWidth={1.75} />
+            </span>
+            <span className="text-sm font-bold tracking-tight text-stone-900">
+              KasirAkun <span className="font-medium text-stone-500">UMKM</span>
+            </span>
+          </button>
+
+          <div className="w-16" aria-hidden="true" />
+        </div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center p-4 sm:p-8">
-        <div className="w-full max-w-5xl grid lg:grid-cols-12 gap-6 items-start">
-          {/* Left: Auth Card */}
-          <section className="lg:col-span-7 bg-white border border-stone-200 rounded-xl p-6 sm:p-8 space-y-6">
-            <div className="space-y-1.5">
-              <h1 className="text-2xl font-bold tracking-[-0.03em] leading-[1.15] text-stone-900">
-                {tab === 'MASTER'
-                  ? 'Masuk Konsol Master Admin'
-                  : authMode === 'REGISTER'
-                  ? 'Daftar Akun KasirAkun UMKM'
-                  : 'Masuk ke Ruang Kerja Usaha'}
+      {/* Single-Column Centered Auth Card */}
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-10">
+        <div className="w-full max-w-[420px]">
+          <div className="rounded-xl border border-stone-200 bg-white p-6 sm:p-7">
+            {/* Heading */}
+            <div className="mb-5">
+              <h1 className="text-xl font-bold tracking-[-0.02em] text-stone-900">
+                {recoveryView === 'FORGOT_PASSWORD'
+                  ? 'Reset Kata Sandi'
+                  : recoveryView === 'FIND_ACCOUNT'
+                  ? 'Cari Akun Anda'
+                  : tab === 'MASTER'
+                  ? 'Masuk Master Admin'
+                  : customerMode === 'REGISTER'
+                  ? 'Buat Akun Usaha'
+                  : 'Masuk ke KasirAkun'}
               </h1>
-              <p className="text-sm text-stone-600 leading-relaxed max-w-[58ch]">
-                {tab === 'MASTER'
-                  ? 'Akses khusus pengelola platform untuk memantau tenant, kebijakan demo, dan brankas API.'
-                  : authMode === 'REGISTER'
-                  ? 'Buat akun pemilik usaha untuk mulai mencatat kasir, stok barang, dan pembukuan otomatis.'
-                  : 'Masuk sebagai pemilik usaha atau pegawai kasir, dapur, dan gudang menggunakan akun terdaftar.'}
+              <p className="mt-1 text-xs text-stone-500">
+                {recoveryView === 'FORGOT_PASSWORD'
+                  ? 'Verifikasi dengan kode 6 digit untuk membuat sandi baru.'
+                  : recoveryView === 'FIND_ACCOUNT'
+                  ? 'Temukan email atau username terdaftar melalui nomor HP atau nama usaha.'
+                  : tab === 'MASTER'
+                  ? 'Akses konsol pengelolaan platform dan akun pelanggan.'
+                  : customerMode === 'REGISTER'
+                  ? 'Mulai daftar akun pemilik usaha baru.'
+                  : 'Masuk sebagai pemilik usaha atau pegawai.'}
               </p>
             </div>
 
-            {/* Role Tabs */}
-            <div
-              className="grid grid-cols-2 gap-1.5 p-1 bg-stone-100 border border-stone-200 rounded-xl"
-              role="tablist"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === 'CUSTOMER'}
-                onClick={() => {
-                  setTab('CUSTOMER');
-                  setCustError('');
-                  setCustSuccess('');
-                }}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
-                  tab === 'CUSTOMER'
-                    ? 'bg-white text-stone-900 border border-stone-200'
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
+            {/* Clean 2-Tab Switcher (hidden while inside Recovery view) */}
+            {recoveryView === 'NONE' && (
+              <div
+                role="tablist"
+                aria-label="Pilih tipe akun"
+                className="mb-5 grid grid-cols-2 rounded-lg border border-stone-200 bg-stone-50 p-1"
               >
-                <Store className="w-4 h-4 text-emerald-600" strokeWidth={1.75} />
-                <span>Pemilik Usaha &amp; Staf</span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === 'MASTER'}
-                data-testid="login-tab-master"
-                onClick={() => {
-                  setTab('MASTER');
-                  setMasterError('');
-                }}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
-                  tab === 'MASTER'
-                    ? 'bg-stone-900 text-white'
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === 'CUSTOMER'}
+                  onClick={() => handleTabSwitch('CUSTOMER')}
+                  className={`flex items-center justify-center gap-1.5 rounded-md py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
+                    tab === 'CUSTOMER'
+                      ? 'bg-white text-stone-900 shadow-xs border border-stone-200'
+                      : 'text-stone-600 hover:text-stone-900'
+                  }`}
+                >
+                  <Store className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  Pemilik & Staf
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === 'MASTER'}
+                  onClick={() => handleTabSwitch('MASTER')}
+                  className={`flex items-center justify-center gap-1.5 rounded-md py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
+                    tab === 'MASTER'
+                      ? 'bg-white text-stone-900 shadow-xs border border-stone-200'
+                      : 'text-stone-600 hover:text-stone-900'
+                  }`}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  Master Admin
+                </button>
+              </div>
+            )}
+
+            {/* Idle timeout / success notice */}
+            {notice && (
+              <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                <span>{notice}</span>
+              </div>
+            )}
+
+            {/* Error Alert */}
+            {error && (
+              <div
+                role="alert"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
               >
-                <ShieldCheck className="w-4 h-4" strokeWidth={1.75} />
-                <span>Master Admin</span>
-              </button>
-            </div>
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                <span>{error}</span>
+              </div>
+            )}
 
-            {tab === 'MASTER' ? (
-              <form onSubmit={handleMasterSubmit} className="space-y-4">
-                <div className="bg-stone-50 border border-stone-200 rounded-lg p-4 space-y-1 text-xs text-stone-600">
-                  <p className="font-semibold text-stone-900 flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-emerald-700" strokeWidth={1.75} />
-                    <span>Akses Pengelola Platform</span>
-                  </p>
-                  <p className="leading-relaxed">
-                    Kelola akun pelanggan, paket langganan, kebijakan demo, serta brankas API
-                    terenkripsi (Neon PostgreSQL, Better Auth, Midtrans, dan WhatsApp Fonnte).
-                  </p>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="master-email"
-                    className="block text-xs font-semibold text-stone-700 mb-1.5"
-                  >
-                    Email Master Admin
-                  </label>
-                  <input
-                    id="master-email"
-                    type="email"
-                    required
-                    value={masterEmail}
-                    onChange={(e) => setMasterEmail(e.target.value)}
-                    placeholder="master@kasirakun.id"
-                    className="w-full px-3.5 py-2.5 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="master-password"
-                    className="block text-xs font-semibold text-stone-700 mb-1.5"
-                  >
-                    Kata Sandi Master
-                  </label>
-                  <input
-                    id="master-password"
-                    type="password"
-                    required
-                    value={masterPassword}
-                    onChange={(e) => setMasterPassword(e.target.value)}
-                    placeholder="Masukkan kata sandi Master"
-                    className="w-full px-3.5 py-2.5 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
-                  />
-                </div>
-
-                {masterError && (
-                  <div
-                    role="alert"
-                    className="flex items-start gap-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3.5 py-2.5"
-                  >
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" strokeWidth={1.75} />
-                    <span>{masterError}</span>
+            {/* ================= RECOVERY: FORGOT PASSWORD ================= */}
+            {recoveryView === 'FORGOT_PASSWORD' && (
+              <div className="space-y-4">
+                {recMessage && (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-800">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                      <div>
+                        <p>{recMessage}</p>
+                        {recDevCode && (
+                          <p className="mt-1 font-mono font-bold tabular-nums text-emerald-900">
+                            Kode Verifikasi: {recDevCode}
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
 
-                <div className="space-y-2.5 pt-1">
+                {recStep === 'REQUEST' ? (
+                  <form onSubmit={handleForgotPasswordRequest} className="space-y-3.5">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Email atau Username
+                      </label>
+                      <input
+                        type="text"
+                        value={recIdentifier}
+                        onChange={(e) => setRecIdentifier(e.target.value)}
+                        placeholder="nama@usaha.com atau username"
+                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                        required
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {isSubmitting ? (
+                        <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+                      ) : (
+                        <KeyRound className="h-4 w-4" strokeWidth={1.75} />
+                      )}
+                      Kirim Kode Reset
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleResetPasswordConfirm} className="space-y-3.5">
+                    <p className="text-xs text-stone-600">
+                      Akun target: <span className="font-semibold text-stone-900">{recMaskedTarget}</span>
+                    </p>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Kode 6 Digit
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={recCode}
+                        onChange={(e) => setRecCode(e.target.value)}
+                        placeholder="000000"
+                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 font-mono text-sm tracking-widest tabular-nums text-stone-900 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Kata Sandi Baru
+                      </label>
+                      <input
+                        type="password"
+                        value={recNewPassword}
+                        onChange={(e) => setRecNewPassword(e.target.value)}
+                        placeholder="Minimal 6 karakter"
+                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-900 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Ulangi Kata Sandi Baru
+                      </label>
+                      <input
+                        type="password"
+                        value={recConfirmPassword}
+                        onChange={(e) => setRecConfirmPassword(e.target.value)}
+                        placeholder="Ulangi kata sandi baru"
+                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-900 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                        required
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />}
+                      Simpan Kata Sandi Baru
+                    </button>
+                  </form>
+                )}
+
+                <div className="flex items-center justify-between pt-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecoveryView('NONE');
+                      setRecStep('REQUEST');
+                      setError(null);
+                      setRecMessage(null);
+                    }}
+                    className="font-medium text-stone-600 hover:text-stone-900"
+                  >
+                    Kembali ke Login
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecoveryView('FIND_ACCOUNT');
+                      setError(null);
+                      setRecMessage(null);
+                    }}
+                    className="font-medium text-emerald-700 hover:text-emerald-800"
+                  >
+                    Lupa email / username?
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ================= RECOVERY: FIND ACCOUNT ================= */}
+            {recoveryView === 'FIND_ACCOUNT' && (
+              <div className="space-y-4">
+                <form onSubmit={handleFindAccount} className="space-y-3.5">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                      Nomor HP, Username, atau Nama Usaha
+                    </label>
+                    <input
+                      type="text"
+                      value={recIdentifier}
+                      onChange={(e) => setRecIdentifier(e.target.value)}
+                      placeholder="Contoh: 081234567890"
+                      className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-900 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                      required
+                    />
+                  </div>
                   <button
                     type="submit"
-                    data-testid="master-login-submit-btn"
-                    disabled={masterSubmitting}
-                    className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-semibold text-white bg-stone-900 hover:bg-stone-800 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+                    disabled={isSubmitting}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
                   >
-                    {masterSubmitting ? (
-                      <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />
-                    ) : (
-                      <ShieldCheck className="w-4 h-4" strokeWidth={1.75} />
-                    )}
-                    <span>{masterSubmitting ? 'Memverifikasi...' : 'Masuk ke Konsol Master'}</span>
+                    {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />}
+                    Cari Akun
                   </button>
+                </form>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <button
-                      type="button"
-                      data-testid="master-quick-login-btn"
-                      disabled={masterSubmitting}
-                      onClick={() => void handleQuickMasterLogin()}
-                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" strokeWidth={1.75} />
-                      <span>Masuk Cepat Master</span>
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="master-google-login-btn"
-                      disabled={masterSubmitting}
-                      onClick={() => void handleGoogleMaster()}
-                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium text-stone-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-lg transition-colors"
-                    >
-                      <GoogleBrandMark />
-                      <span>Masuk Google Master</span>
-                    </button>
+                {recFoundAccounts.length > 0 && (
+                  <div className="divide-y divide-stone-200 rounded-lg border border-stone-200 bg-stone-50">
+                    {recFoundAccounts.map((acc, idx) => (
+                      <div key={idx} className="p-3 text-xs">
+                        <p className="font-semibold text-stone-900">
+                          {acc.fullName}{' '}
+                          <span className="font-normal text-stone-500">({acc.roleLabel})</span>
+                        </p>
+                        <p className="mt-0.5 font-mono text-stone-700">
+                          {acc.maskedEmail}
+                          {acc.maskedUsername ? ` · @${acc.maskedUsername}` : ''}
+                        </p>
+                      </div>
+                    ))}
                   </div>
+                )}
+
+                <div className="flex items-center justify-between pt-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecoveryView('NONE');
+                      setError(null);
+                    }}
+                    className="font-medium text-stone-600 hover:text-stone-900"
+                  >
+                    Kembali ke Login
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecoveryView('FORGOT_PASSWORD');
+                      setRecStep('REQUEST');
+                      setError(null);
+                    }}
+                    className="font-medium text-emerald-700 hover:text-emerald-800"
+                  >
+                    Reset kata sandi
+                  </button>
                 </div>
-              </form>
-            ) : (
-              <div className="space-y-5">
+              </div>
+            )}
+
+            {/* ================= MAIN LOGIN / REGISTER FORM ================= */}
+            {recoveryView === 'NONE' && (
+              <div className="space-y-4">
+                {/* Unified Google OAuth Button (Identical across Customer & Master Admin) */}
                 <button
                   type="button"
-                  disabled={busy}
-                  onClick={() => void handleGoogleCustomer()}
-                  data-testid="google-cloud-login-btn"
-                  className="w-full inline-flex items-center justify-center gap-2.5 py-2.5 px-4 text-sm font-semibold text-stone-800 bg-white hover:bg-stone-50 border border-stone-300 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+                  disabled={isGoogleLoading}
+                  onClick={() => void launchGoogleOAuth(tab)}
+                  className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-semibold text-stone-800 transition-colors hover:bg-stone-50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
                 >
-                  {googleSubmitting ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" strokeWidth={1.75} />
+                  {isGoogleLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-stone-600" strokeWidth={1.75} />
                   ) : (
-                    <GoogleBrandMark />
+                    <GoogleLogoIcon />
                   )}
                   <span>
-                    {googleSubmitting
-                      ? 'Menghubungkan akun Google...'
-                      : authMode === 'REGISTER'
+                    {customerMode === 'REGISTER' && tab === 'CUSTOMER'
                       ? 'Daftar dengan Google'
                       : 'Masuk dengan Google'}
                   </span>
                 </button>
 
-                <div className="relative flex items-center">
-                  <div className="flex-1 border-t border-stone-200" />
-                  <span className="px-3 text-xs font-medium text-stone-500">
-                    atau gunakan email &amp; kata sandi
-                  </span>
-                  <div className="flex-1 border-t border-stone-200" />
+                <div className="relative flex items-center py-0.5">
+                  <div className="flex-grow border-t border-stone-200" />
+                  <span className="mx-3 text-[11px] font-medium text-stone-400">atau</span>
+                  <div className="flex-grow border-t border-stone-200" />
                 </div>
 
-                <p
-                  data-testid="auth-provider-status-note"
-                  className="text-[11px] text-stone-500 text-center"
-                >
-                  {authConfig.betterAuthReady
-                    ? authConfig.googleAuthConfigured
-                      ? 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email & Google aktif untuk semua akun)'
-                      : 'Terhubung ke Better Auth + Neon PostgreSQL (Untuk tombol Google, isi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin / Vercel)'
-                    : 'Login Email & Akun Terkelola aktif · Lengkapi DATABASE_URL & Google OAuth di Master Admin / Vercel'}
-                </p>
-
-                {/* Clean 2-option Login / Register Toggle */}
-                <div className="grid grid-cols-2 gap-1.5 p-1 bg-stone-100 rounded-lg text-xs font-semibold">
-                  <button
-                    type="button"
-                    data-testid="auth-mode-login-btn"
-                    onClick={() => {
-                      setAuthMode('LOGIN');
-                      setCustError('');
-                      setCustSuccess('');
-                    }}
-                    className={`py-2 px-3 rounded-md transition-colors ${
-                      authMode === 'LOGIN'
-                        ? 'bg-white text-stone-900 border border-stone-200'
-                        : 'text-stone-600 hover:text-stone-900'
-                    }`}
-                  >
-                    Masuk Akun
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="signup-tab-btn"
-                    onClick={() => {
-                      setAuthMode('REGISTER');
-                      setCustError('');
-                      setCustSuccess('');
-                    }}
-                    className={`py-2 px-3 rounded-md transition-colors ${
-                      authMode === 'REGISTER'
-                        ? 'bg-white text-emerald-800 border border-stone-200'
-                        : 'text-stone-600 hover:text-stone-900'
-                    }`}
-                  >
-                    Daftar Akun Baru
-                  </button>
-                </div>
-
-                {custSuccess && (
-                  <div
-                    role="status"
-                    className="flex items-start gap-2 text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3.5 py-2.5"
-                  >
-                    <CheckCircle2
-                      className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5"
-                      strokeWidth={1.75}
-                    />
-                    <span>{custSuccess}</span>
-                  </div>
-                )}
-
-                {custError && (
-                  <div
-                    role="alert"
-                    className="flex items-start gap-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3.5 py-2.5"
-                  >
-                    <AlertCircle
-                      className="w-4 h-4 text-rose-600 shrink-0 mt-0.5"
-                      strokeWidth={1.75}
-                    />
-                    <span>{custError}</span>
-                  </div>
-                )}
-
-                {authMode === 'REGISTER' ? (
-                  <form onSubmit={handleEmailRegisterSubmit} className="space-y-3.5">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label
-                          htmlFor="reg-fullname"
-                          className="block text-xs font-semibold text-stone-700 mb-1"
-                        >
-                          Nama Pemilik
-                        </label>
-                        <input
-                          id="reg-fullname"
-                          type="text"
-                          required
-                          value={signupFullName}
-                          onChange={(e) => setSignupFullName(e.target.value)}
-                          placeholder="Sari Kusuma"
-                          className="w-full px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
+                {tab === 'CUSTOMER' && customerMode === 'REGISTER' ? (
+                  <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Nama Lengkap
+                      </label>
+                      <div className="relative">
+                        <User
+                          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
+                          strokeWidth={1.75}
                         />
-                      </div>
-                      <div>
-                        <label
-                          htmlFor="reg-biz"
-                          className="block text-xs font-semibold text-stone-700 mb-1"
-                        >
-                          Nama Usaha / Toko
-                        </label>
                         <input
-                          id="reg-biz"
                           type="text"
+                          value={regName}
+                          onChange={(e) => setRegName(e.target.value)}
+                          placeholder="Nama pemilik usaha"
+                          className="w-full rounded-lg border border-stone-300 bg-white py-2.5 pl-9 pr-3 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
                           required
-                          value={signupBusinessName}
-                          onChange={(e) => setSignupBusinessName(e.target.value)}
-                          placeholder="Warung Berkah Mandiri"
-                          className="w-full px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label
-                        htmlFor="reg-vertical"
-                        className="block text-xs font-semibold text-stone-700 mb-1"
-                      >
-                        Jenis Usaha UMKM
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Email
                       </label>
-                      <select
-                        id="reg-vertical"
-                        value={signupVertical}
-                        onChange={(e) => {
-                          const nextV = e.target.value as BusinessVertical;
-                          setSignupVertical(nextV);
-                          const pbjtCat = getVerticalPbjtCategory(nextV);
-                          setSignupApplyRegionalTax(
-                            signupRegionCode !== 'ID-NONE' && pbjtCat !== 'NONE',
-                          );
-                        }}
-                        className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg bg-white focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
-                      >
-                        {SIGNUP_GROUP_ORDER.map((groupKey) => (
-                          <optgroup key={groupKey} label={VERTICAL_GROUP_LABELS[groupKey]}>
-                            {ACTIVE_VERTICAL_DEFINITIONS.filter(
-                              (v) => v.categoryGroup === groupKey,
-                            ).map((v) => (
-                              <option key={v.id} value={v.id}>
-                                {v.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label
-                          htmlFor="reg-region"
-                          className="block text-xs font-semibold text-stone-700 mb-1"
-                        >
-                          Domisili Pajak Daerah (PBJT)
-                        </label>
-                        <select
-                          id="reg-region"
-                          value={signupRegionCode}
-                          onChange={(e) => {
-                            const code = e.target.value;
-                            setSignupRegionCode(code);
-                            const pbjtCat = getVerticalPbjtCategory(signupVertical);
-                            setSignupApplyRegionalTax(code !== 'ID-NONE' && pbjtCat !== 'NONE');
-                          }}
-                          className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg bg-white focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
-                        >
-                          {regionalTaxRegistry.map((r) => (
-                            <option key={r.regionCode} value={r.regionCode}>
-                              {r.regionCode === 'ID-NONE'
-                                ? 'Tanpa Pajak Daerah (0%)'
-                                : `${r.cityName} (${r.province})`}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label
-                          htmlFor="reg-wa"
-                          className="block text-xs font-semibold text-stone-700 mb-1"
-                        >
-                          Nomor WhatsApp Usaha
-                        </label>
-                        <input
-                          id="reg-wa"
-                          type="tel"
-                          value={signupWaNumber}
-                          onChange={(e) => setSignupWaNumber(e.target.value)}
-                          placeholder="0812-xxxx-xxxx"
-                          className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
+                      <div className="relative">
+                        <Mail
+                          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
+                          strokeWidth={1.75}
                         />
-                      </div>
-                    </div>
-
-                    <div
-                      data-testid="signup-regional-tax-preview"
-                      className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 space-y-2 text-[11px]"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-950">
-                          <Landmark className="w-3.5 h-3.5 text-emerald-700 shrink-0" strokeWidth={1.75} />
-                          Deteksi Lokasi &amp; Pajak Daerah (Perda)
-                        </span>
-                        <span className="font-mono font-semibold tabular-nums text-emerald-800">
-                          Daerah: {signupTaxPreview.regionalResolution.ratePercentLabel}
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        data-testid="signup-location-lookup-input"
-                        value={signupLocationQuery}
-                        onChange={(e) => {
-                          const q = e.target.value;
-                          setSignupLocationQuery(q);
-                          if (q.trim().length >= 3) {
-                            const found = detectRegionFromLocationText(q, regionalTaxRegistry);
-                            if (found) {
-                              setSignupRegionCode(found.region.regionCode);
-                              const pbjtCat = getVerticalPbjtCategory(signupVertical);
-                              setSignupApplyRegionalTax(
-                                found.region.regionCode !== 'ID-NONE' && pbjtCat !== 'NONE'
-                              );
-                            }
-                          }
-                        }}
-                        placeholder="Ketik cepat kota/kecamatan (misal: Canggu, Tebet, Dago, Sleman)..."
-                        className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-emerald-200 rounded-md focus:outline-none focus:border-emerald-600"
-                      />
-                      <p className="text-stone-700">
-                        <span className="font-semibold text-stone-900">Nasional:</span>{' '}
-                        {signupTaxPreview.nationalLabel}
-                      </p>
-                      <p className="text-stone-700">
-                        <span className="font-semibold text-stone-900">
-                          Daerah ({signupTaxPreview.regionalResolution.regionName}):
-                        </span>{' '}
-                        {signupTaxPreview.regionalResolution.taxLabel}
-                        {signupRegionCode !== 'ID-NONE' && (
-                          <span className="text-stone-500">
-                            {' '}
-                            · {signupTaxPreview.regionalResolution.perdaReference}
-                          </span>
-                        )}
-                      </p>
-                      {signupTaxLookup.suggestions.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-1">
-                          {signupTaxLookup.suggestions.slice(0, 2).map((sug) => (
-                            <button
-                              key={sug.id}
-                              type="button"
-                              onClick={() => {
-                                setSignupApplyRegionalTax(sug.presetConfig.applyRegionalTax);
-                                setSignupCustomTaxName(sug.presetConfig.customTaxName ?? '');
-                                if (sug.presetConfig.customRateOverride) {
-                                  setSignupCustomRatePct(
-                                    String(Number(sug.presetConfig.customRateOverride) * 100)
-                                  );
-                                  setShowSignupCustomTax(true);
-                                } else {
-                                  setSignupCustomRatePct('');
-                                }
-                              }}
-                              className="px-2 py-1 rounded border border-emerald-300 bg-white hover:bg-emerald-100 text-[10px] font-semibold text-emerald-900 transition-colors"
-                            >
-                              Terapkan: {sug.title}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {signupRegionCode !== 'ID-NONE' && (
-                        <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-200/70">
-                          <span className="text-stone-600">
-                            Batas bebas UMKM:{' '}
-                            <span className="font-mono tabular-nums font-medium text-stone-800">
-                              {signupTaxPreview.monthlyThresholdRupiah}
-                            </span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setShowSignupCustomTax((prev) => !prev)}
-                            className="font-semibold text-emerald-800 hover:text-emerald-950 underline"
-                          >
-                            {showSignupCustomTax
-                              ? 'Sembunyikan tarif Perda khusus'
-                              : '+ Tambah pajak daerah khusus (Perda)'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {signupRegionCode !== 'ID-NONE' &&
-                      getVerticalPbjtCategory(signupVertical) !== 'NONE' && (
-                        <label className="flex items-start gap-2 text-xs text-stone-600 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={signupApplyRegionalTax}
-                            onChange={(e) => setSignupApplyRegionalTax(e.target.checked)}
-                            className="mt-0.5 rounded border-stone-300 text-emerald-600 focus:ring-emerald-600"
-                          />
-                          <span>
-                            Aktifkan Pajak Daerah (PBJT) sesuai kota. Hapus centang bila omzet di
-                            bawah batas ketentuan daerah.
-                          </span>
-                        </label>
-                      )}
-
-                    {signupRegionCode !== 'ID-NONE' && showSignupCustomTax && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 rounded-lg border border-stone-200 bg-stone-50 p-3">
-                        <div>
-                          <label
-                            htmlFor="reg-custom-tax-name"
-                            className="block text-[11px] font-semibold text-stone-700 mb-1"
-                          >
-                            Nama Pungutan Perda Tambahan
-                          </label>
-                          <input
-                            id="reg-custom-tax-name"
-                            type="text"
-                            value={signupCustomTaxName}
-                            onChange={(e) => setSignupCustomTaxName(e.target.value)}
-                            placeholder="Contoh: PBJT Kost >10 Kamar / Retribusi"
-                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
-                          />
-                        </div>
-                        <div>
-                          <label
-                            htmlFor="reg-custom-tax-rate"
-                            className="block text-[11px] font-semibold text-stone-700 mb-1"
-                          >
-                            Tarif Tambahan Daerah (%)
-                          </label>
-                          <input
-                            id="reg-custom-tax-rate"
-                            type="number"
-                            min={0}
-                            max={100}
-                            step={0.5}
-                            value={signupCustomRatePct}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setSignupCustomRatePct(v);
-                              if (Number(v) > 0) setSignupApplyRegionalTax(true);
-                            }}
-                            placeholder="Contoh: 10"
-                            className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label
-                          htmlFor="reg-email"
-                          className="block text-xs font-semibold text-stone-700 mb-1"
-                        >
-                          Email
-                        </label>
                         <input
-                          id="reg-email"
                           type="email"
+                          value={regEmail}
+                          onChange={(e) => setRegEmail(e.target.value)}
+                          placeholder="pemilik@usaha.com"
+                          className="w-full rounded-lg border border-stone-300 bg-white py-2.5 pl-9 pr-3 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
                           required
-                          value={signupEmail}
-                          onChange={(e) => setSignupEmail(e.target.value)}
-                          placeholder="pemilik@usahaku.id"
-                          className="w-full px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
-                        />
-                      </div>
-                      <div>
-                        <label
-                          htmlFor="reg-pass"
-                          className="block text-xs font-semibold text-stone-700 mb-1"
-                        >
-                          Kata Sandi (min. 6 karakter)
-                        </label>
-                        <input
-                          id="reg-pass"
-                          type="password"
-                          required
-                          minLength={6}
-                          value={signupPassword}
-                          onChange={(e) => setSignupPassword(e.target.value)}
-                          placeholder="Minimal 6 karakter"
-                          className="w-full px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
                         />
                       </div>
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={busy}
-                      data-testid="signup-submit-btn"
-                      className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
-                    >
-                      {submitting ? (
-                        <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />
-                      ) : (
-                        <UserPlus className="w-4 h-4" strokeWidth={1.75} />
-                      )}
-                      <span>{submitting ? 'Membuat Akun...' : 'Daftar & Siapkan Usaha'}</span>
-                    </button>
-                  </form>
-                ) : (
-                  <form onSubmit={handleEmailLoginSubmit} className="space-y-4">
                     <div>
-                      <label
-                        htmlFor="cust-email"
-                        className="block text-xs font-semibold text-stone-700 mb-1.5"
-                      >
-                        Email Pemilik Usaha atau Pegawai
-                      </label>
-                      <input
-                        id="cust-email"
-                        type="email"
-                        required
-                        value={custEmail}
-                        onChange={(e) => setCustEmail(e.target.value)}
-                        placeholder="nama@usahaku.id"
-                        className="w-full px-3.5 py-2.5 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
-                      />
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor="cust-password"
-                        className="block text-xs font-semibold text-stone-700 mb-1.5"
-                      >
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
                         Kata Sandi
                       </label>
+                      <div className="relative">
+                        <Lock
+                          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
+                          strokeWidth={1.75}
+                        />
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={regPassword}
+                          onChange={(e) => setRegPassword(e.target.value)}
+                          placeholder="Minimal 8 karakter"
+                          className="w-full rounded-lg border border-stone-300 bg-white py-2.5 pl-9 pr-10 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((p) => !p)}
+                          aria-label={showPassword ? 'Sembunyikan sandi' : 'Lihat sandi'}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-700"
+                        >
+                          {showPassword ? (
+                            <EyeOff className="h-4 w-4" strokeWidth={1.75} />
+                          ) : (
+                            <Eye className="h-4 w-4" strokeWidth={1.75} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">
+                        Ulangi Kata Sandi
+                      </label>
                       <input
-                        id="cust-password"
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
+                        value={regConfirmPassword}
+                        onChange={(e) => setRegConfirmPassword(e.target.value)}
+                        placeholder="Ulangi kata sandi"
+                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
                         required
-                        value={custPassword}
-                        onChange={(e) => setCustPassword(e.target.value)}
-                        placeholder="Masukkan kata sandi Anda"
-                        className="w-full px-3.5 py-2.5 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
                       />
                     </div>
 
                     <button
                       type="submit"
-                      disabled={busy}
-                      data-testid="customer-login-submit-btn"
-                      className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+                      disabled={isSubmitting}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-1"
                     >
-                      {submitting ? (
-                        <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />
+                      {isSubmitting ? (
+                        <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
                       ) : (
-                        <UserCheck className="w-4 h-4" strokeWidth={1.75} />
+                        <>
+                          Lanjut Pilih Paket
+                          <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+                        </>
                       )}
-                      <span>{submitting ? 'Memeriksa Akun...' : 'Masuk ke Ruang Kerja'}</span>
                     </button>
 
-                    <p className="text-xs text-stone-500 leading-relaxed">
-                      Satu pintu masuk untuk pemilik usaha, akun demo terdaftar, maupun pegawai
-                      kasir, dapur, gudang, dan pembukuan.
+                    <p className="pt-1 text-center text-xs text-stone-500">
+                      Sudah punya akun?{' '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomerMode('LOGIN');
+                          setError(null);
+                        }}
+                        className="font-semibold text-emerald-700 hover:text-emerald-800"
+                      >
+                        Masuk di sini
+                      </button>
                     </p>
+                  </form>
+                ) : (
+                  <form onSubmit={handleManualLogin} className="space-y-3.5">
+                    <div>
+                      <label
+                        htmlFor="login-identifier"
+                        className="mb-1.5 block text-xs font-medium text-stone-700"
+                      >
+                        Email atau Username
+                      </label>
+                      <div className="relative">
+                        <Mail
+                          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
+                          strokeWidth={1.75}
+                        />
+                        <input
+                          id="login-identifier"
+                          type="text"
+                          autoComplete="username"
+                          value={identifier}
+                          onChange={(e) => setIdentifier(e.target.value)}
+                          placeholder={
+                            tab === 'MASTER'
+                              ? 'master@kasirakun.id atau master'
+                              : 'email@usaha.com atau username'
+                          }
+                          className="w-full rounded-lg border border-stone-300 bg-white py-2.5 pl-9 pr-3 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <label
+                          htmlFor="login-password"
+                          className="block text-xs font-medium text-stone-700"
+                        >
+                          Kata Sandi
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRecoveryView('FORGOT_PASSWORD');
+                            setRecStep('REQUEST');
+                            setRecIdentifier(identifier);
+                            setError(null);
+                          }}
+                          className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
+                        >
+                          Lupa sandi?
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <Lock
+                          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
+                          strokeWidth={1.75}
+                        />
+                        <input
+                          id="login-password"
+                          type={showPassword ? 'text' : 'password'}
+                          autoComplete="current-password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="Masukkan kata sandi"
+                          className="w-full rounded-lg border border-stone-300 bg-white py-2.5 pl-9 pr-10 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((p) => !p)}
+                          aria-label={showPassword ? 'Sembunyikan sandi' : 'Lihat sandi'}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-700"
+                        >
+                          {showPassword ? (
+                            <EyeOff className="h-4 w-4" strokeWidth={1.75} />
+                          ) : (
+                            <Eye className="h-4 w-4" strokeWidth={1.75} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-1"
+                    >
+                      {isSubmitting ? (
+                        <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+                      ) : (
+                        <>
+                          Masuk
+                          <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+                        </>
+                      )}
+                    </button>
                   </form>
                 )}
               </div>
             )}
-          </section>
+          </div>
 
-          {/* Right: Guidance & Quick Demo Panel */}
-          <aside className="lg:col-span-5 space-y-4">
-            <div className="bg-white border border-stone-200 rounded-xl p-6 space-y-4">
-              <div className="space-y-1.5">
-                <h2 className="text-base font-bold text-stone-900 tracking-[-0.02em]">
-                  Belum Berlangganan? Pilih Paket Usaha
-                </h2>
-                <p className="text-xs text-stone-600 leading-relaxed">
-                  Mulai dari paket LITE Rp49rb, BASIC Rp95rb, PRO Rp175rb, hingga EXPERT Rp279rb
-                  per bulan dengan ruang data bersih dan daftar akun otomatis.
-                </p>
-              </div>
-              <button
-                type="button"
-                data-testid="login-goto-onboarding-btn"
-                onClick={() => navigate('/onboarding?mode=real')}
-                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
-              >
-                <span>Pilih Paket &amp; Buat Akun Asli</span>
-                <ArrowRight className="w-4 h-4" strokeWidth={1.75} />
-              </button>
-            </div>
-
-            <div className="bg-white border border-stone-200 rounded-xl p-6 space-y-4">
-              <div className="space-y-1.5">
-                <h2 className="text-sm font-bold text-stone-900">
-                  Coba Langsung Tanpa Daftar
-                </h2>
-                <p className="text-xs text-stone-600 leading-relaxed">
-                  Lihat cara kerja kasir, stok gudang, QR meja, dan laporan laba rugi memakai data
-                  contoh untuk 22 jenis usaha UMKM.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                {isPublicInstantDemo && (
-                  <button
-                    type="button"
-                    data-testid="login-quick-demo-btn"
-                    disabled={demoLoading}
-                    onClick={() => void handleQuickDemoEntry()}
-                    className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors disabled:opacity-60"
-                  >
-                    {demoLoading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />
-                    ) : (
-                      <Play className="w-4 h-4" strokeWidth={1.75} />
-                    )}
-                    <span>
-                      {demoLoading ? 'Membuka Demo...' : 'Masuk Cepat Akun Demo (Warung)'}
-                    </span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  data-testid="login-goto-demo-btn"
-                  onClick={() => navigate('/demo')}
-                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold text-stone-800 bg-stone-100 hover:bg-stone-200/80 border border-stone-200 rounded-lg transition-colors"
-                >
-                  <span>Pilih Jenis Usaha Demo Lainnya</span>
-                  <ArrowRight className="w-4 h-4" strokeWidth={1.75} />
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-stone-900 text-stone-300 rounded-xl p-5 space-y-2 text-xs">
-              <p className="font-semibold text-white flex items-center gap-2">
-                <Lock className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />
-                <span>Data Usaha Terpisah &amp; Terlindungi</span>
-              </p>
-              <p className="leading-relaxed">
-                Setiap akun usaha memiliki ruang data tersendiri. Transaksi kasir, stok barang,
-                harga modal, dan laporan pajak tidak pernah bercampur dengan akun lain.
-              </p>
-            </div>
-          </aside>
+          {/* Compact Single-Line Footer Links */}
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-xs text-stone-500">
+            <button
+              type="button"
+              onClick={() => navigate('/onboarding?mode=real')}
+              className="font-medium text-stone-700 transition-colors hover:text-emerald-700"
+            >
+              Daftar Akun
+            </button>
+            <span aria-hidden="true" className="text-stone-300">
+              ·
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/onboarding?mode=simulation')}
+              className="font-semibold text-emerald-700 transition-colors hover:text-emerald-800"
+            >
+              Mulai Simulasi
+            </button>
+            <span aria-hidden="true" className="text-stone-300">
+              ·
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/demo')}
+              className="font-medium text-stone-700 transition-colors hover:text-emerald-700"
+            >
+              Coba Demo
+            </button>
+          </div>
         </div>
       </main>
     </div>

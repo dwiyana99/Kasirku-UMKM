@@ -12,9 +12,9 @@ import type {
   ContractCategory,
   DigitalContractTemplate,
   SubscriptionPlanCode,
-} from '../../types/domain';
-import { formatDateIndo } from '../date/indonesia-date';
-import { buildDirectWaMeUrl } from '../messaging/whatsapp-direct';
+} from '../../types/domain.ts';
+import { formatDateIndo } from '../date/indonesia-date.ts';
+import { buildDirectWaMeUrl } from '../messaging/whatsapp-direct.ts';
 
 export const CONTRACT_CATEGORY_LABELS: Record<ContractCategory, string> = {
   RENTAL_KENDARAAN: 'Rental Mobil & Motor',

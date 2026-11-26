@@ -16,9 +16,9 @@
  */
 
 import Decimal from 'decimal.js';
-import type { AppSession, Order, Tenant } from '../../types/domain';
-import { formatRupiah } from '../pos/checkout-service';
-import { normalizeIndonesianWaDigits } from './whatsapp-direct';
+import type { AppSession, Order, Tenant } from '../../types/domain.ts';
+import { formatRupiah } from '../pos/checkout-service.ts';
+import { normalizeIndonesianWaDigits } from './whatsapp-direct.ts';
 
 export type WhatsappSendChannel = 'HIDDEN' | 'WA_ME_DIRECT' | 'FONNTE';
 

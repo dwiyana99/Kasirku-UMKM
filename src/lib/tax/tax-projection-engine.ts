@@ -16,16 +16,16 @@ import type {
   RegionalTaxRule,
   Tenant,
   TenantWorkspaceData,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 import {
   PPH_FINAL_RATE,
   UMKM_ANNUAL_CAP,
   WP_OP_EXEMPT_THRESHOLD,
-} from './indonesia-tax-engine';
+} from './indonesia-tax-engine.ts';
 import {
   DEFAULT_INDONESIA_REGIONAL_TAXES,
   resolveEffectiveRegionalTax,
-} from './regional-tax-indonesia';
+} from './regional-tax-indonesia.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

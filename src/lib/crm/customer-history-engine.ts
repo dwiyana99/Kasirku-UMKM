@@ -4,7 +4,7 @@
  */
 
 import Decimal from 'decimal.js';
-import type { BusinessVertical, CrmCustomer, Order } from '../../types/domain';
+import type { BusinessVertical, CrmCustomer, Order } from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

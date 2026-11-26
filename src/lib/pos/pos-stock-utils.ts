@@ -1,5 +1,5 @@
 import Decimal from 'decimal.js';
-import type { BusinessVertical, Product, ProductRecipe } from '../../types/domain';
+import type { BusinessVertical, Product, ProductRecipe } from '../../types/domain.ts';
 
 export interface LiveStockInfo {
   tracksStock: boolean;

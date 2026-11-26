@@ -26,8 +26,8 @@ import type {
   SalesReturnItem,
   SalesReturnReason,
   SalesReturnRecord,
-} from '../../types/domain';
-import { buildJournalEntry, type DraftJournalLine } from '../accounting/journal-engine';
+} from '../../types/domain.ts';
+import { buildJournalEntry, type DraftJournalLine } from '../accounting/journal-engine.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

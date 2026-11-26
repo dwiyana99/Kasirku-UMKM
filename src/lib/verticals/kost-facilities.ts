@@ -12,8 +12,8 @@ import type {
   BoardingFacilityAddOn,
   BoardingInvoice,
   BoardingRoom,
-} from '../../types/domain';
-import type { DueCountdownResult } from '../date/indonesia-date';
+} from '../../types/domain.ts';
+import type { DueCountdownResult } from '../date/indonesia-date.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

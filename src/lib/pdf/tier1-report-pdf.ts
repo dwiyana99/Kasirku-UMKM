@@ -6,8 +6,8 @@
 
 import Decimal from 'decimal.js';
 import { jsPDF } from 'jspdf';
-import type { Tier1PeriodReport } from '../accounting/tier1-period-report';
-import type { DailyRevenuePoint } from '../analytics/dashboard-analytics';
+import type { Tier1PeriodReport } from '../accounting/tier1-period-report.ts';
+import type { DailyRevenuePoint } from '../analytics/dashboard-analytics.ts';
 
 function formatRupiahPdf(val: string | number): string {
   const num = new Decimal(val || '0').toDecimalPlaces(0, Decimal.ROUND_HALF_UP);

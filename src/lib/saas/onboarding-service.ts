@@ -5,10 +5,10 @@
  */
 
 import Decimal from 'decimal.js';
-import { DEFAULT_CHART_OF_ACCOUNTS, DEFAULT_FEATURE_MODULES } from '../../../prisma/seed';
-import { buildJournalEntry } from '../accounting/journal-engine';
-import { buildHierarchicalTaxonomyFromPresets } from '../catalog/taxonomy-presets';
-import { getVerticalMeta } from '../verticals/vertical-registry';
+import { DEFAULT_CHART_OF_ACCOUNTS, DEFAULT_FEATURE_MODULES } from '../../../prisma/seed.ts';
+import { buildJournalEntry } from '../accounting/journal-engine.ts';
+import { buildHierarchicalTaxonomyFromPresets } from '../catalog/taxonomy-presets.ts';
+import { getVerticalMeta } from '../verticals/vertical-registry.ts';
 import type {
   Account,
   BillingCycle,
@@ -25,7 +25,7 @@ import type {
   Tenant,
   TenantRegionalTaxSettings,
   TenantWorkspaceData,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

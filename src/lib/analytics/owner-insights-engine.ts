@@ -15,9 +15,9 @@ import type {
   Order,
   Product,
   TenantWorkspaceData,
-} from '../../types/domain';
-import { tenantHasAddOn } from '../saas/hybrid-pricing';
-import { resolveReportAnchorDate } from '../accounting/tier1-period-report';
+} from '../../types/domain.ts';
+import { tenantHasAddOn } from '../saas/hybrid-pricing.ts';
+import { resolveReportAnchorDate } from '../accounting/tier1-period-report.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

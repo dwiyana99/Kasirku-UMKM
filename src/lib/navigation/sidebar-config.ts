@@ -16,13 +16,13 @@ import type {
   AppSession,
   BusinessVertical,
   SubscriptionPlanCode,
-} from '../../types/domain';
-import { getVerticalCapabilities } from '../catalog/recipe-bom-utils';
-import { getCrmVerticalCopy } from '../crm/customer-history-engine';
-import { canAccessRouteWithStaffPermissions } from '../rbac/staff-rbac';
-import { getVerticalMeta } from '../verticals/vertical-registry';
-import { verticalSupportsSalesReturns } from '../pos/sales-return-engine';
-import { verticalSupportsDigitalContracts } from '../contracts/digital-contract-engine';
+} from '../../types/domain.ts';
+import { getVerticalCapabilities } from '../catalog/recipe-bom-utils.ts';
+import { getCrmVerticalCopy } from '../crm/customer-history-engine.ts';
+import { canAccessRouteWithStaffPermissions } from '../rbac/staff-rbac.ts';
+import { getVerticalMeta } from '../verticals/vertical-registry.ts';
+import { verticalSupportsSalesReturns } from '../pos/sales-return-engine.ts';
+import { verticalSupportsDigitalContracts } from '../contracts/digital-contract-engine.ts';
 
 export type SidebarIconKey =
   | 'dashboard'

@@ -7,8 +7,8 @@
 
 import Decimal from 'decimal.js';
 import { jsPDF } from 'jspdf';
-import { formatRupiah } from '../pos/checkout-service';
-import type { PurchaseOrder, StockTransfer, Tenant } from '../../types/domain';
+import { formatRupiah } from '../pos/checkout-service.ts';
+import type { PurchaseOrder, StockTransfer, Tenant } from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

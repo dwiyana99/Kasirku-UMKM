@@ -9,7 +9,7 @@ import type {
   RecipeTemplate,
   RecipeTemplateIngredient,
   TenantWorkspaceData,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 export interface VerticalCapabilityConfig {
   vertical: BusinessVertical;

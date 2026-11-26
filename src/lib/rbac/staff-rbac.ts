@@ -3,7 +3,7 @@
  * Supports granular employee permissions across all business verticals (Warung Sembako, Kedai, Restoran, Freelance).
  */
 
-import type { AppSession, BusinessVertical, StaffPermission } from '../../types/domain';
+import type { AppSession, BusinessVertical, StaffPermission } from '../../types/domain.ts';
 
 export interface StaffPermissionMeta {
   code: StaffPermission;

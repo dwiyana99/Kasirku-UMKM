@@ -5,7 +5,7 @@
 
 import { jsPDF } from 'jspdf';
 import Decimal from 'decimal.js';
-import type { Category, Product } from '../../types/domain';
+import type { Category, Product } from '../../types/domain.ts';
 
 function formatRpLabel(value: string): string {
   const num = new Decimal(value || '0').toDecimalPlaces(0, Decimal.ROUND_HALF_UP);

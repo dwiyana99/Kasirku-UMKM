@@ -19,8 +19,8 @@ import type {
   Product,
   PurchaseOrder,
   PurchaseOrderItem,
-} from '../../types/domain';
-import { isStockTrackedProduct } from './stock-monitoring';
+} from '../../types/domain.ts';
+import { isStockTrackedProduct } from './stock-monitoring.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

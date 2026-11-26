@@ -4,8 +4,8 @@
  */
 
 import Decimal from 'decimal.js';
-import { DEFAULT_FEATURE_MODULES } from '../../../prisma/seed';
-import { buildJournalEntry } from '../accounting/journal-engine';
+import { DEFAULT_FEATURE_MODULES } from '../../../prisma/seed.ts';
+import { buildJournalEntry } from '../accounting/journal-engine.ts';
 import type {
   Account,
   CustomerAccountStatus,
@@ -13,7 +13,7 @@ import type {
   JournalEntry,
   Product,
   ProductRecipe,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

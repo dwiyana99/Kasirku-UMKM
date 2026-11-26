@@ -13,13 +13,13 @@ import type {
   RegionalTaxRule,
   TaxEntityType,
   TenantRegionalTaxSettings,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 import {
   DEFAULT_INDONESIA_REGIONAL_TAXES,
   describeNationalAndRegionalTaxSummary,
   getRegionalTaxRuleByCode,
   getVerticalPbjtCategory,
-} from './regional-tax-indonesia';
+} from './regional-tax-indonesia.ts';
 
 export interface RegionGeoMetadata {
   regionCode: string;

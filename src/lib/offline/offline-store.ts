@@ -5,7 +5,7 @@
  * or double-entry journals. Cleared ONLY after a verified HTTP 200 OK sync back to the server.
  */
 
-import type { TenantWorkspaceData } from '../../types/domain';
+import type { TenantWorkspaceData } from '../../types/domain.ts';
 
 export interface PendingWorkspaceSnapshot {
   tenantId: string;

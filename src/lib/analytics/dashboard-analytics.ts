@@ -6,14 +6,14 @@
  */
 
 import Decimal from 'decimal.js';
-import { calculateOrderTax, calculatePPhCompliance } from '../tax/indonesia-tax-engine';
+import { calculateOrderTax, calculatePPhCompliance } from '../tax/indonesia-tax-engine.ts';
 import type {
   Account,
   BusinessVertical,
   JournalEntry,
   Order,
   TaxEntityType,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 export interface DailyRevenuePoint {
   day: number;

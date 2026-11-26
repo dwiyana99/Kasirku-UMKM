@@ -3,7 +3,7 @@
  * Run with: npx tsx prisma/seed-wa-templates.ts (requires DATABASE_URL configured)
  */
 
-import { DEFAULT_WA_MESSAGE_TEMPLATES } from '../src/lib/payments/wa-templates';
+import { DEFAULT_WA_MESSAGE_TEMPLATES } from '../src/lib/payments/wa-templates.ts';
 
 export async function seedWaTemplatesWithPrisma(prismaClient: {
   waMessageTemplate: {

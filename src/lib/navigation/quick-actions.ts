@@ -10,10 +10,10 @@ import type {
   BusinessVertical,
   SubscriptionPlanCode,
   TenantWorkspaceData,
-} from '../../types/domain';
-import { canAccessRouteWithStaffPermissions } from '../rbac/staff-rbac';
-import { getVerticalMeta } from '../verticals/vertical-registry';
-import { verticalSupportsDigitalContracts } from '../contracts/digital-contract-engine';
+} from '../../types/domain.ts';
+import { canAccessRouteWithStaffPermissions } from '../rbac/staff-rbac.ts';
+import { getVerticalMeta } from '../verticals/vertical-registry.ts';
+import { verticalSupportsDigitalContracts } from '../contracts/digital-contract-engine.ts';
 
 export type QuickActionIconKey =
   | 'dashboard'

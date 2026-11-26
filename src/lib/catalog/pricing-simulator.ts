@@ -6,7 +6,7 @@
  */
 
 import Decimal from 'decimal.js';
-import type { AddOnModuleCode, SubscriptionPlanCode } from '../../types/domain';
+import type { AddOnModuleCode, SubscriptionPlanCode } from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

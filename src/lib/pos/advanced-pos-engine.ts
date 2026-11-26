@@ -5,7 +5,7 @@
  */
 
 import Decimal from 'decimal.js';
-import { buildJournalEntry } from '../accounting/journal-engine';
+import { buildJournalEntry } from '../accounting/journal-engine.ts';
 import type {
   Account,
   AuditLog,
@@ -15,7 +15,7 @@ import type {
   PriceTier,
   Product,
   Promotion,
-} from '../../types/domain';
+} from '../../types/domain.ts';
 
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 

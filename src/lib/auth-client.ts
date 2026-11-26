@@ -122,10 +122,17 @@ export type BetterAuthExchangeResponse =
       workspaces: unknown[];
     };
 
-export async function exchangeBetterAuthSession(): Promise<BetterAuthExchangeResponse> {
+export async function exchangeBetterAuthSession(
+  handoffCode?: string,
+): Promise<BetterAuthExchangeResponse> {
   try {
+    const headers: Record<string, string> = {};
+    if (handoffCode && handoffCode.trim()) {
+      headers['x-oauth-handoff'] = handoffCode.trim();
+    }
     const res = await fetch('/api/auth/better-auth/exchange', {
       credentials: 'include',
+      headers,
     });
     const data = (await res.json()) as BetterAuthExchangeResponse;
     if (!res.ok) {

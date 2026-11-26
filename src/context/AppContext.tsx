@@ -364,7 +364,7 @@ interface AppContextValue {
   activeCustomer: ManagedCustomerAccount | null;
   oauthPendingUser: { email: string; fullName: string; image?: string | null } | null;
   betterAuthError: string | null;
-  hydrateFromBetterAuthSession: () => Promise<{
+  hydrateFromBetterAuthSession: (handoffCode?: string) => Promise<{
     ok: boolean;
     needsOnboarding?: boolean;
     defaultRoute?: string;
@@ -1027,14 +1027,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [session.role, session.token]);
 
-  const hydrateFromBetterAuthSession = useCallback(async (): Promise<{
+  const hydrateFromBetterAuthSession = useCallback(async (handoffCode?: string): Promise<{
     ok: boolean;
     needsOnboarding?: boolean;
     defaultRoute?: string;
     error?: string;
   }> => {
     setBetterAuthError(null);
-    const exchanged = await exchangeBetterAuthSession();
+    const exchanged = await exchangeBetterAuthSession(handoffCode);
     if (!exchanged.authenticated) {
       if (exchanged.error) {
         setBetterAuthError(exchanged.error);

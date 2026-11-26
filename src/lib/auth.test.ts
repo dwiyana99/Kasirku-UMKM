@@ -561,6 +561,99 @@ describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sy
       { key: 'MIDTRANS_SERVER_KEY', value: 'SB-Mid-server-xyz999' },
     ]);
   });
+
+  it('prevents local vault restart deadlock across BETTER_AUTH_SECRET changes and derives identical Neon sync keys for pooler/direct URLs', async () => {
+    const {
+      deriveNeonSyncKey,
+      encryptLocalVaultSecret,
+      decryptLocalVaultSecret,
+      encryptNeonVaultSecret,
+      decryptNeonVaultSecret,
+    } = await import('./payments/crypto.ts');
+
+    const prevSecret = process.env.BETTER_AUTH_SECRET;
+    try {
+      process.env.BETTER_AUTH_SECRET = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const localCipher = encryptLocalVaultSecret('postgresql://user:pass@ep-cool-123-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require');
+
+      // Simulate container restart where OS env BETTER_AUTH_SECRET is absent or changed
+      delete process.env.BETTER_AUTH_SECRET;
+      assert.equal(
+        decryptLocalVaultSecret(localCipher).plaintext,
+        'postgresql://user:pass@ep-cool-123-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+      );
+
+      process.env.BETTER_AUTH_SECRET = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      assert.equal(
+        decryptLocalVaultSecret(localCipher).plaintext,
+        'postgresql://user:pass@ep-cool-123-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+      );
+    } finally {
+      if (prevSecret === undefined) delete process.env.BETTER_AUTH_SECRET;
+      else process.env.BETTER_AUTH_SECRET = prevSecret;
+    }
+
+    const pooledUrl =
+      'postgresql://neondb_owner:secret123@ep-icy-lake-1234-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+    const directUrl =
+      'postgresql://neondb_owner:secret123@ep-icy-lake-1234.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+    assert.deepEqual(deriveNeonSyncKey(pooledUrl), deriveNeonSyncKey(directUrl));
+
+    const neonCipher = encryptNeonVaultSecret('GOCSPX-SyncedFromVercel', pooledUrl);
+    assert.equal(decryptNeonVaultSecret(neonCipher, directUrl).plaintext, 'GOCSPX-SyncedFromVercel');
+  });
+
+  it('honors AI Studio .run.app requestOrigin even when BETTER_AUTH_URL is synced from Vercel and serves iframe popup done HTML', async () => {
+    const aiOrigin = 'https://ais-dev-demo123.asia-southeast1.run.app';
+    assert.equal(
+      resolveBaseUrl(
+        { BETTER_AUTH_URL: 'https://kasirku-umkm.vercel.app' },
+        aiOrigin,
+      ),
+      aiOrigin,
+    );
+    assert.equal(
+      resolveBaseUrl(
+        { VERCEL: '1', BETTER_AUTH_URL: 'https://kasirku-umkm.vercel.app' },
+        aiOrigin,
+      ),
+      'https://kasirku-umkm.vercel.app',
+    );
+    const localOrigins = buildTrustedOrigins({}, aiOrigin);
+    assert.ok(localOrigins.includes(aiOrigin));
+    assert.ok(localOrigins.includes('https://*.run.app'));
+
+    const fs = await import('node:fs');
+    const http = await import('node:http');
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kasirakun-popup-test-'));
+    process.env.KASIRAKUN_SERVERLESS_ONLY = '1';
+    process.env.KASIRAKUN_DATA_ROOT = tempRoot;
+    const { default: vercelHandler } = await import('../../api/index.ts');
+    const srv = http.createServer((req, res) => {
+      void vercelHandler(req, res);
+    });
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+    const addr = srv.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    try {
+      const popupResp = await fetch(`http://127.0.0.1:${port}/api/auth/oauth-popup-done?error=oauth_failed`);
+      assert.equal(popupResp.status, 200);
+      assert.ok((popupResp.headers.get('content-type') || '').includes('text/html'));
+      const html = await popupResp.text();
+      assert.ok(html.includes('KASIRAKUN_OAUTH_SUCCESS'));
+      assert.ok(html.includes('window.opener.postMessage'));
+
+      // Invalid/expired handoff code must be rejected with 401
+      const badExchange = await fetch(`http://127.0.0.1:${port}/api/auth/better-auth/exchange`, {
+        headers: { 'x-oauth-handoff': 'invalid-code-xyz' },
+      });
+      assert.equal(badExchange.status, 401);
+    } finally {
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+      delete process.env.KASIRAKUN_DATA_ROOT;
+    }
+  });
 });
 
 

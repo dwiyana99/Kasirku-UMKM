@@ -24,7 +24,42 @@ export interface AuthConfigurationStatus {
   baseURL: string;
 }
 
-export function resolveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+export function extractRequestOrigin(
+  req?: { headers?: Record<string, string | string[] | undefined> },
+): string | undefined {
+  if (!req?.headers) return undefined;
+  const rawHostHeader = req.headers['x-forwarded-host'] || req.headers.host;
+  const rawHost = Array.isArray(rawHostHeader)
+    ? String(rawHostHeader[0] || '')
+    : String(rawHostHeader || '');
+  const host = rawHost.split(',')[0].trim();
+  if (!host || /[\s/\\]/.test(host)) return undefined;
+  const rawProtoHeader = req.headers['x-forwarded-proto'];
+  const rawProto = Array.isArray(rawProtoHeader)
+    ? String(rawProtoHeader[0] || '')
+    : String(rawProtoHeader || '');
+  const protoCandidate = rawProto.split(',')[0].trim().toLowerCase();
+  const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+  const proto =
+    protoCandidate === 'http' || protoCandidate === 'https'
+      ? protoCandidate
+      : isLocal
+      ? 'http'
+      : 'https';
+  return `${proto}://${host}`;
+}
+
+export function resolveBaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  requestOrigin?: string,
+): string {
+  const cleanReqOrigin = (requestOrigin || '').trim().replace(/\/+$/, '');
+  // Inside Gemini AI Studio Preview (*.run.app), always honor the active preview origin
+  // even when BETTER_AUTH_URL was synced from Vercel via Neon DB so OAuth popup callbacks match.
+  if (!env.VERCEL && cleanReqOrigin && cleanReqOrigin.includes('.run.app')) {
+    return cleanReqOrigin;
+  }
+
   const explicit = (
     env.BETTER_AUTH_URL ||
     env.NEXT_PUBLIC_APP_URL ||
@@ -47,10 +82,17 @@ export function resolveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   if (vercelUrl) return `https://${vercelUrl}`;
   if (vercelProdUrl) return `https://${vercelProdUrl}`;
 
+  if (cleanReqOrigin && (cleanReqOrigin.startsWith('http://') || cleanReqOrigin.startsWith('https://'))) {
+    return cleanReqOrigin;
+  }
+
   return 'http://localhost:3000';
 }
 
-export function buildTrustedOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
+export function buildTrustedOrigins(
+  env: NodeJS.ProcessEnv = process.env,
+  requestOrigin?: string,
+): string[] {
   const origins = new Set<string>([
     'http://localhost:3000',
     'http://127.0.0.1:3000',
@@ -60,6 +102,7 @@ export function buildTrustedOrigins(env: NodeJS.ProcessEnv = process.env): strin
     env.BETTER_AUTH_URL,
     env.NEXT_PUBLIC_APP_URL,
     env.APP_URL,
+    requestOrigin,
   ];
   for (const raw of candidates) {
     const trimmed = (raw || '').trim().replace(/\/+$/, '');
@@ -83,6 +126,8 @@ export function buildTrustedOrigins(env: NodeJS.ProcessEnv = process.env): strin
 
   if (env.VERCEL) {
     origins.add('https://*.vercel.app');
+  } else {
+    origins.add('https://*.run.app');
   }
 
   const customDomain = (env.CUSTOM_DOMAIN || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
@@ -115,6 +160,7 @@ export function isGoogleOAuthConfigured(env: NodeJS.ProcessEnv = process.env): b
 
 export function getAuthConfigurationStatus(
   env: NodeJS.ProcessEnv = process.env,
+  requestOrigin?: string,
 ): AuthConfigurationStatus {
   const secretRaw = (env.BETTER_AUTH_SECRET || '').trim();
   const betterAuthSecretConfigured =
@@ -127,7 +173,7 @@ export function getAuthConfigurationStatus(
     betterAuthSecretConfigured,
     databaseConfigured,
     betterAuthReady: databaseConfigured,
-    baseURL: resolveBaseUrl(env),
+    baseURL: resolveBaseUrl(env, requestOrigin),
   };
 }
 
@@ -228,25 +274,23 @@ function createBetterAuthInstance(params: {
 
 export type KasirAkunAuthInstance = ReturnType<typeof createBetterAuthInstance>;
 
-let cachedAuthFingerprint = '';
-let cachedAuthInstance: KasirAkunAuthInstance | null = null;
+const cachedAuthInstances = new Map<string, KasirAkunAuthInstance>();
 
 export function resetBetterAuthCache(): void {
-  cachedAuthFingerprint = '';
-  cachedAuthInstance = null;
+  cachedAuthInstances.clear();
 }
 
 /**
  * Lazily creates (and caches) the Better Auth instance bound to Prisma PostgreSQL.
  * Returns null if DATABASE_URL is not configured yet so preview builds never crash.
  */
-export function getBetterAuthInstance(): KasirAkunAuthInstance | null {
+export function getBetterAuthInstance(requestOrigin?: string): KasirAkunAuthInstance | null {
   const prismaClient = getPrismaClient();
   if (!prismaClient) {
     return null;
   }
 
-  const baseURL = resolveBaseUrl();
+  const baseURL = resolveBaseUrl(process.env, requestOrigin);
   const secret =
     (process.env.BETTER_AUTH_SECRET || '').trim() ||
     (process.env.SESSION_SIGNING_SECRET || '').trim() ||
@@ -254,7 +298,7 @@ export function getBetterAuthInstance(): KasirAkunAuthInstance | null {
   const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
   const googleClientSecret = (process.env.GOOGLE_CLIENT_SECRET || '').trim();
   const hasGoogle = isGoogleOAuthConfigured();
-  const trustedOrigins = buildTrustedOrigins();
+  const trustedOrigins = buildTrustedOrigins(process.env, requestOrigin);
 
   const fingerprint = [
     baseURL,
@@ -263,11 +307,12 @@ export function getBetterAuthInstance(): KasirAkunAuthInstance | null {
     trustedOrigins.join(','),
   ].join('|');
 
-  if (cachedAuthInstance && cachedAuthFingerprint === fingerprint) {
-    return cachedAuthInstance;
+  const existing = cachedAuthInstances.get(fingerprint);
+  if (existing) {
+    return existing;
   }
 
-  cachedAuthInstance = createBetterAuthInstance({
+  const instance = createBetterAuthInstance({
     prismaClient,
     baseURL,
     secret,
@@ -277,8 +322,11 @@ export function getBetterAuthInstance(): KasirAkunAuthInstance | null {
     hasGoogle,
   });
 
-  cachedAuthFingerprint = fingerprint;
-  return cachedAuthInstance;
+  if (cachedAuthInstances.size > 8) {
+    cachedAuthInstances.clear();
+  }
+  cachedAuthInstances.set(fingerprint, instance);
+  return instance;
 }
 
 export interface UnifiedCurrentSession {
@@ -325,7 +373,7 @@ export async function getCurrentSession(
     }
   }
 
-  const authInstance = getBetterAuthInstance();
+  const authInstance = getBetterAuthInstance(extractRequestOrigin(req));
   const prismaClient = getPrismaClient();
   if (!authInstance || !prismaClient) {
     return null;

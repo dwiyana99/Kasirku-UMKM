@@ -132,6 +132,71 @@ export function LoginPage({
     }
   }, []);
 
+  const isEmbeddedIframe = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true;
+    }
+  }, []);
+
+  // Listen for iframe-safe Google OAuth popup completion postMessage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOAuthPopupMessage = async (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: string; handoffCode?: string | null; error?: string | null }
+        | null
+        | undefined;
+      if (!data || data.type !== 'KASIRAKUN_OAUTH_SUCCESS') return;
+
+      const trustedOrigin =
+        event.origin === window.location.origin ||
+        event.origin.endsWith('.run.app') ||
+        event.origin.startsWith('http://localhost:') ||
+        event.origin.startsWith('http://127.0.0.1:');
+      if (!trustedOrigin) return;
+
+      if (data.error || !data.handoffCode) {
+        const msg =
+          data.error ||
+          'Login Google gagal atau dibatalkan. Pastikan Authorized Redirect URI di Google Cloud Console sudah ditambahkan.';
+        if (tab === 'MASTER') {
+          setMasterError(msg);
+        } else {
+          setCustError(msg);
+        }
+        setGoogleSubmitting(false);
+        return;
+      }
+
+      setGoogleSubmitting(true);
+      const exchanged = await hydrateFromBetterAuthSession(data.handoffCode);
+      setGoogleSubmitting(false);
+      if (!exchanged.ok) {
+        const msg =
+          exchanged.error ||
+          'Sesi Google tidak dapat ditukar. Silakan coba klik Masuk dengan Google lagi.';
+        if (tab === 'MASTER') {
+          setMasterError(msg);
+        } else {
+          setCustError(msg);
+        }
+        return;
+      }
+
+      if (exchanged.needsOnboarding) {
+        navigate('/onboarding?mode=real&source=oauth');
+      } else {
+        navigate(exchanged.defaultRoute || (tab === 'MASTER' ? '/master' : '/dashboard'));
+      }
+    };
+
+    window.addEventListener('message', handleOAuthPopupMessage);
+    return () => window.removeEventListener('message', handleOAuthPopupMessage);
+  }, [hydrateFromBetterAuthSession, navigate, tab]);
+
   useEffect(() => {
     if (!betterAuthError) return;
     if (tab === 'MASTER') {
@@ -248,50 +313,107 @@ export function LoginPage({
     }
   };
 
-  const handleGoogleCustomer = async () => {
-    setCustError('');
-    setCustSuccess('');
+  const launchGoogleOAuth = async (targetRole: 'CUSTOMER' | 'MASTER') => {
+    const setErr = targetRole === 'MASTER' ? setMasterError : setCustError;
+    setErr('');
+    if (targetRole === 'CUSTOMER') setCustSuccess('');
+
+    if (!authConfig.betterAuthReady || !authConfig.googleAuthConfigured) {
+      setErr(
+        !authConfig.betterAuthReady
+          ? 'Login Google memerlukan Neon PostgreSQL (DATABASE_URL) aktif di server ini. Buka Master Admin -> Pengaturan API & Secret Key lalu tempel DATABASE_URL Neon agar semua kunci dari Vercel otomatis tersinkron.'
+          : 'Google OAuth belum aktif di server ini. Isi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key (atau sinkronkan dari Neon DB).',
+      );
+      return;
+    }
+
     setGoogleSubmitting(true);
+    let popupRef: Window | null = null;
+
     try {
-      if (authConfig.betterAuthReady && authConfig.googleAuthConfigured) {
-        const result = await authClient.signIn.social({
-          provider: 'google',
-          callbackURL: '/dashboard',
-          newUserCallbackURL: '/onboarding?mode=real&source=oauth',
-          errorCallbackURL: '/login?oauth_error=1',
-        });
-        if (result?.error) {
-          setCustError(
-            result.error.message || 'Gagal menghubungkan akun Google Better Auth. Silakan coba lagi.',
+      if (isEmbeddedIframe && typeof window !== 'undefined') {
+        popupRef = window.open(
+          '',
+          'kasirakun_google_oauth',
+          'width=520,height=660,menubar=no,toolbar=no,status=no,resizable=yes,scrollbars=yes',
+        );
+        if (!popupRef) {
+          setErr(
+            'Browser memblokir jendela popup Login Google. Izinkan popup untuk situs ini lalu klik tombol Login Google kembali.',
           );
           setGoogleSubmitting(false);
           return;
         }
-        const redirectUrl =
-          result?.data && typeof result.data === 'object' && 'url' in result.data
-            ? String((result.data as { url?: unknown }).url || '')
-            : '';
-        setCustSuccess('Mengarahkan ke halaman persetujuan Google...');
-        if (redirectUrl && typeof window !== 'undefined') {
-          window.location.assign(redirectUrl);
-        }
+      }
+
+      const result = await authClient.signIn.social({
+        provider: 'google',
+        disableRedirect: true,
+        callbackURL: isEmbeddedIframe
+          ? '/api/auth/oauth-popup-done'
+          : targetRole === 'MASTER'
+          ? '/master'
+          : '/dashboard',
+        newUserCallbackURL: isEmbeddedIframe
+          ? '/api/auth/oauth-popup-done'
+          : '/onboarding?mode=real&source=oauth',
+        errorCallbackURL: isEmbeddedIframe
+          ? '/api/auth/oauth-popup-done?error=oauth_failed'
+          : '/login?oauth_error=1',
+      });
+
+      if (result?.error) {
+        if (popupRef && !popupRef.closed) popupRef.close();
+        setErr(
+          result.error.message ||
+            'Gagal menghubungkan akun Google via Better Auth. Periksa GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, dan Redirect URI.',
+        );
+        setGoogleSubmitting(false);
         return;
       }
 
-      if (!authConfig.betterAuthReady) {
-        setCustError(
-          'Login Google membutuhkan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server. Atur di Vercel atau Master Admin -> Pengaturan API & Secret Key.',
-        );
-      } else {
-        setCustError(
-          'Google OAuth belum aktif. Isi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key (atau Vercel Environment Variables).',
-        );
+      const redirectUrl =
+        result?.data && typeof result.data === 'object' && 'url' in result.data
+          ? String((result.data as { url?: unknown }).url || '')
+          : '';
+
+      if (!redirectUrl) {
+        if (popupRef && !popupRef.closed) popupRef.close();
+        setErr('Server autentikasi tidak mengembalikan tautan OAuth Google.');
+        setGoogleSubmitting(false);
+        return;
+      }
+
+      if (isEmbeddedIframe && popupRef) {
+        if (targetRole === 'CUSTOMER') {
+          setCustSuccess('Jendela Login Google terbuka di popup. Selesaikan pemilihan akun Google Anda...');
+        }
+        popupRef.location.replace(redirectUrl);
+        // Stop spinner if user closes popup manually without finishing
+        const pollClosed = window.setInterval(() => {
+          if (!popupRef || popupRef.closed) {
+            window.clearInterval(pollClosed);
+            setGoogleSubmitting(false);
+          }
+        }, 700);
+        return;
+      }
+
+      if (targetRole === 'CUSTOMER') {
+        setCustSuccess('Mengarahkan ke halaman persetujuan Google...');
+      }
+      if (typeof window !== 'undefined') {
+        window.location.assign(redirectUrl);
       }
     } catch {
-      setCustError('Terjadi kendala saat menghubungkan akun Google. Coba lagi beberapa saat.');
-    } finally {
+      if (popupRef && !popupRef.closed) popupRef.close();
+      setErr('Terjadi kendala saat menghubungkan akun Google. Coba lagi beberapa saat.');
       setGoogleSubmitting(false);
     }
+  };
+
+  const handleGoogleCustomer = async () => {
+    await launchGoogleOAuth('CUSTOMER');
   };
 
   const handleEmailLoginSubmit = async (e: React.FormEvent) => {
@@ -468,38 +590,7 @@ export function LoginPage({
   };
 
   const handleGoogleMaster = async () => {
-    setMasterError('');
-    if (authConfig.betterAuthReady && authConfig.googleAuthConfigured) {
-      try {
-        const result = await authClient.signIn.social({
-          provider: 'google',
-          callbackURL: '/master',
-          errorCallbackURL: '/login?oauth_error=1',
-        });
-        if (result?.error) {
-          setMasterError(
-            result.error.message || 'Gagal menghubungkan akun Google Master via Better Auth.',
-          );
-          return;
-        }
-        const redirectUrl =
-          result?.data && typeof result.data === 'object' && 'url' in result.data
-            ? String((result.data as { url?: unknown }).url || '')
-            : '';
-        if (redirectUrl && typeof window !== 'undefined') {
-          window.location.assign(redirectUrl);
-        }
-      } catch {
-        setMasterError('Gagal menghubungi layanan Better Auth untuk Login Google Master.');
-      }
-      return;
-    }
-
-    setMasterError(
-      !authConfig.betterAuthReady
-        ? 'Login Google Master memerlukan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server.'
-        : 'Google OAuth belum dikonfigurasi. Tambahkan GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key atau Vercel.',
-    );
+    await launchGoogleOAuth('MASTER');
   };
 
   const busy = submitting || googleSubmitting;

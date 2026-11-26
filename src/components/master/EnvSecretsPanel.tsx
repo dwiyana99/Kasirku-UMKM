@@ -159,6 +159,7 @@ export function EnvSecretsPanel() {
       }
       setItems(data.items ?? []);
       if (data.stats) setStats(data.stats);
+      if (data.neonVaultSync) setNeonConnected(Boolean(data.neonVaultSync.neonConnected));
       setDraftValues((prev) => ({ ...prev, [item.key]: '' }));
       setFeedback(data.message || `${item.key} berhasil disimpan dan tersinkron otomatis.`);
     } catch (err) {
@@ -308,25 +309,57 @@ export function EnvSecretsPanel() {
               Neon, <strong>Google OAuth (GOOGLE_CLIENT_ID &amp; GOOGLE_CLIENT_SECRET)</strong>{' '}
               untuk login Google Master &amp; user baru, Midtrans Master Admin, dan WhatsApp Fonnte.
             </p>
-            {typeof window !== 'undefined' && (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <p className="text-[11px] font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1 inline-block">
-                  Redirect URI Google OAuth: {window.location.origin}/api/auth/callback/google
-                </p>
-                <span
-                  data-testid="neon-vault-sync-badge"
-                  className={`text-[11px] font-semibold rounded-lg px-2.5 py-1 border ${
-                    neonConnected
-                      ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
-                      : 'text-stone-600 bg-stone-100 border-stone-200'
-                  }`}
-                >
-                  {neonConnected
-                    ? 'Sinkronisasi 2-Arah Neon DB ↔ Vercel ↔ AI Studio Aktif'
-                    : 'Mode Brankas Lokal (Isi DATABASE_URL & BETTER_AUTH_SECRET untuk sinkronisasi otomatis via Neon)'}
-                </span>
-              </div>
-            )}
+            {typeof window !== 'undefined' && (() => {
+              const host = window.location.host;
+              const isAiStudioPreview =
+                host.endsWith('.run.app') ||
+                host.startsWith('localhost') ||
+                host.startsWith('127.0.0.1');
+              const envLabel = isAiStudioPreview
+                ? 'Gemini AI Studio Preview'
+                : host.endsWith('.vercel.app')
+                ? 'Vercel Produksi'
+                : 'Domain Produksi';
+              return (
+                <div className="space-y-2 pt-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      data-testid="active-runtime-env-badge"
+                      className="text-[11px] font-semibold rounded-lg px-2.5 py-1 border border-stone-300 bg-stone-100 text-stone-800"
+                    >
+                      Lingkungan Aktif: {envLabel} ({host})
+                    </span>
+                    <span
+                      data-testid="neon-vault-sync-badge"
+                      className={`text-[11px] font-semibold rounded-lg px-2.5 py-1 border ${
+                        neonConnected
+                          ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
+                          : 'text-amber-900 bg-amber-50 border-amber-200'
+                      }`}
+                    >
+                      {neonConnected
+                        ? 'Sinkronisasi 2-Arah Neon DB ↔ Vercel ↔ AI Studio Aktif'
+                        : 'Belum Terhubung ke Neon DB (Isi DATABASE_URL di bawah untuk tarik otomatis 14–16 variabel dari Vercel)'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1 inline-block break-words">
+                    Redirect URI Google OAuth server ini: {window.location.origin}/api/auth/callback/google
+                  </p>
+                  {isAiStudioPreview && !neonConnected && (
+                    <p
+                      data-testid="ai-studio-sync-hint"
+                      className="text-xs text-stone-700 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 leading-relaxed"
+                    >
+                      <strong>Cara sinkron 1-langkah:</strong> Vercel dan Gemini AI Studio adalah dua
+                      server terpisah yang berbagi kunci lewat Neon PostgreSQL. Cukup tempel{' '}
+                      <code className="font-mono text-stone-900">DATABASE_URL</code> Neon di kartu
+                      pertama lalu klik <strong>Simpan</strong>, maka seluruh variabel dari Vercel
+                      akan otomatis tertarik ke AI Studio.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button

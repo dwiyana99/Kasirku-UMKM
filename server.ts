@@ -51,13 +51,17 @@ import {
 } from './src/lib/infra/pg-migration-builder.ts';
 import { toNodeHandler, fromNodeHeaders } from 'better-auth/node';
 import { mountPaymentAndWaRoutes } from './src/server/payment-routes.ts';
-import { mountMasterEnvSecretsRoutes } from './src/server/env-secrets-routes.ts';
+import {
+  mountMasterEnvSecretsRoutes,
+  type MountedEnvSecretsHandle,
+} from './src/server/env-secrets-routes.ts';
 import { mountLandingPageRoutes } from './src/server/landing-routes.ts';
 import { mountUploadRoutes } from './src/server/upload-routes.ts';
 import { mountMasterAccountsRoutes } from './src/server/master-accounts-routes.ts';
 import { createSubdomainRewriteMiddleware } from './src/middleware.ts';
 import {
   buildTrustedOrigins,
+  extractRequestOrigin,
   getAuthConfigurationStatus,
   getBetterAuthInstance,
   getCurrentSession,
@@ -436,6 +440,24 @@ export async function createExpressApp(
     next();
   });
 
+  let envSecretsHandle: MountedEnvSecretsHandle | null = null;
+
+  interface OAuthPopupHandoffRecord {
+    userId: string;
+    email: string;
+    fullName: string;
+    image: string | null;
+    authMethod: 'GOOGLE' | 'EMAIL';
+    expiresAt: number;
+  }
+  const oauthPopupHandoffs = new Map<string, OAuthPopupHandoffRecord>();
+  const pruneExpiredOAuthHandoffs = () => {
+    const now = Date.now();
+    for (const [code, rec] of oauthPopupHandoffs.entries()) {
+      if (rec.expiresAt <= now) oauthPopupHandoffs.delete(code);
+    }
+  };
+
   app.use((req, res, next) => {
     const reqPath = req.path || '';
     const isBetterAuthPath = BETTER_AUTH_PREFIXES.some(
@@ -446,7 +468,8 @@ export async function createExpressApp(
       return;
     }
 
-    const authInstance = getBetterAuthInstance();
+    const reqOrigin = extractRequestOrigin(req);
+    const authInstance = getBetterAuthInstance(reqOrigin);
     if (!authInstance) {
       return res.status(503).json({
         error:
@@ -475,9 +498,20 @@ export async function createExpressApp(
   );
 
   // Healthcheck endpoint for Vercel, Neon PostgreSQL, Universal S3, and Better Auth verification
-  app.get('/api/health', async (_req, res) => {
+  app.get('/api/health', async (req, res) => {
+    if (envSecretsHandle) {
+      try {
+        await Promise.race([
+          envSecretsHandle.ensureSynced('health-sync'),
+          new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+        ]);
+      } catch {
+        // non-fatal during health check
+      }
+    }
+    const reqOrigin = extractRequestOrigin(req);
     const dbHealth = await checkDatabaseHealth();
-    const authStatus = getAuthConfigurationStatus();
+    const authStatus = getAuthConfigurationStatus(process.env, reqOrigin);
     const storageConfigured = isS3StorageConfigured();
     res.status(200).json({
       status: dbHealth.status === 'error' ? 'degraded' : 'ok',
@@ -493,14 +527,25 @@ export async function createExpressApp(
 
   // Safe, non-secret diagnostic endpoint to inspect Better Auth routing, BETTER_AUTH_URL match, and Google OAuth readiness
   app.get('/api/auth/diagnostics', async (req, res) => {
-    const authStatus = getAuthConfigurationStatus();
-    const authInstance = getBetterAuthInstance();
-    const trustedOrigins = buildTrustedOrigins();
+    if (envSecretsHandle) {
+      try {
+        await Promise.race([
+          envSecretsHandle.ensureSynced('diagnostics-sync'),
+          new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+        ]);
+      } catch {
+        // non-fatal during diagnostics
+      }
+    }
+    const reqOrigin = extractRequestOrigin(req);
+    const authStatus = getAuthConfigurationStatus(process.env, reqOrigin);
+    const authInstance = getBetterAuthInstance(reqOrigin);
+    const trustedOrigins = buildTrustedOrigins(process.env, reqOrigin);
     const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
     const proto = String(req.headers['x-forwarded-proto'] || (rawHost.includes('localhost') ? 'http' : 'https'))
       .split(',')[0]
       .trim();
-    const requestOrigin = rawHost ? `${proto}://${rawHost}` : authStatus.baseURL;
+    const requestOrigin = reqOrigin || (rawHost ? `${proto}://${rawHost}` : authStatus.baseURL);
 
     let configuredHost = '';
     try {
@@ -513,7 +558,8 @@ export async function createExpressApp(
     );
     const requestOriginTrusted =
       trustedOrigins.includes(requestOrigin) ||
-      (rawHost.endsWith('.vercel.app') && trustedOrigins.includes('https://*.vercel.app'));
+      (rawHost.endsWith('.vercel.app') && trustedOrigins.includes('https://*.vercel.app')) ||
+      (rawHost.endsWith('.run.app') && trustedOrigins.includes('https://*.run.app'));
 
     const hints: string[] = [];
     if (!authStatus.databaseConfigured) {
@@ -558,8 +604,8 @@ export async function createExpressApp(
   });
 
   // Public non-sensitive auth capability check for Login & Register pages
-  app.get('/api/auth/config-status', (_req, res) => {
-    const authStatus = getAuthConfigurationStatus();
+  app.get('/api/auth/config-status', (req, res) => {
+    const authStatus = getAuthConfigurationStatus(process.env, extractRequestOrigin(req));
     return res.status(200).json({
       googleAuthConfigured: authStatus.googleAuthConfigured,
       betterAuthSecretConfigured: authStatus.betterAuthSecretConfigured,
@@ -567,6 +613,90 @@ export async function createExpressApp(
       betterAuthReady: authStatus.betterAuthReady,
       storageConfigured: isS3StorageConfigured(),
     });
+  });
+
+  // Iframe-safe OAuth popup completion page: verifies Better Auth top-level cookie,
+  // mints a single-use 90s handoffCode, notifies window.opener via postMessage, and closes the popup.
+  app.get(['/api/auth/oauth-popup-done', '/api/auth/oauth-popup-done/'], async (req, res) => {
+    pruneExpiredOAuthHandoffs();
+    const rawError = typeof req.query.error === 'string' ? req.query.error.trim() : '';
+    let handoffCode = '';
+    let errorMessage = rawError
+      ? rawError === 'oauth_failed'
+        ? 'Login Google dibatalkan atau Authorized Redirect URI belum cocok di Google Cloud Console.'
+        : `Autentikasi Google gagal (${rawError}).`
+      : '';
+
+    if (!errorMessage) {
+      const authInstance = getBetterAuthInstance(extractRequestOrigin(req));
+      if (!authInstance) {
+        errorMessage = 'Layanan Better Auth (Neon PostgreSQL) belum terhubung di server ini.';
+      } else {
+        try {
+          const baSession = await authInstance.api.getSession({
+            headers: fromNodeHeaders(req.headers),
+          });
+          if (baSession?.user?.email) {
+            handoffCode = crypto.randomBytes(32).toString('hex');
+            oauthPopupHandoffs.set(handoffCode, {
+              userId: baSession.user.id,
+              email: baSession.user.email.trim().toLowerCase(),
+              fullName: baSession.user.name || baSession.user.email.split('@')[0] || 'Pengguna KasirAkun',
+              image: baSession.user.image ?? null,
+              authMethod: 'GOOGLE',
+              expiresAt: Date.now() + 90_000,
+            });
+          } else {
+            errorMessage =
+              'Sesi Google tidak ditemukan setelah callback. Pastikan Authorized Redirect URI di Google Cloud Console cocok dengan domain ini.';
+          }
+        } catch {
+          errorMessage = 'Gagal memverifikasi sesi Google dari server autentikasi.';
+        }
+      }
+    }
+
+    const safePayloadJson = JSON.stringify({
+      type: 'KASIRAKUN_OAUTH_SUCCESS',
+      handoffCode: handoffCode || null,
+      error: errorMessage || null,
+    }).replace(/</g, '\\u003c');
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Autentikasi Google — KasirAkun UMKM</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #FAFAF9; color: #1C1917; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; }
+    .card { max-width: 420px; width: 100%; background: #FFFFFF; border: 1px solid #E7E5E4; border-radius: 12px; padding: 24px; text-align: center; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    p { font-size: 13px; color: #57534E; margin: 0; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${errorMessage ? 'Login Google Belum Berhasil' : 'Login Google Berhasil'}</h1>
+    <p>${errorMessage ? 'Mengirim detail kendala ke jendela utama...' : 'Menghubungkan sesi ke KasirAkun UMKM. Jendela ini akan tertutup otomatis.'}</p>
+  </div>
+  <script>
+    (function () {
+      var payload = ${safePayloadJson};
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage(payload, '*');
+        } catch (e) {}
+        setTimeout(function () { window.close(); }, 250);
+      } else {
+        window.location.replace(payload.error ? '/login?oauth_error=1' : '/dashboard');
+      }
+    })();
+  </script>
+</body>
+</html>`);
   });
 
   // Unified current session reader (Better Auth cookie OR existing HMAC Bearer token)
@@ -581,22 +711,69 @@ export async function createExpressApp(
     });
   });
 
-  // Exchange an active Better Auth cookie session (Email/Password or Google OAuth via Neon PostgreSQL)
+  // Exchange an active Better Auth cookie session OR single-use popup handoff code
   // into a scoped KasirAkun workspace session + HMAC Bearer token.
   app.get('/api/auth/better-auth/exchange', async (req, res) => {
-    const authInstance = getBetterAuthInstance();
-    if (!authInstance) {
+    pruneExpiredOAuthHandoffs();
+    const rawHandoffHeader = req.headers['x-oauth-handoff'];
+    const rawHandoffQuery = typeof req.query.handoffCode === 'string' ? req.query.handoffCode : '';
+    const handoffCode = (
+      Array.isArray(rawHandoffHeader) ? rawHandoffHeader[0] : rawHandoffHeader || rawHandoffQuery
+    )?.trim();
+
+    let resolvedIdentity: {
+      userId: string;
+      email: string;
+      fullName: string;
+      image: string | null;
+      authMethod: 'GOOGLE' | 'EMAIL';
+    } | null = null;
+
+    if (handoffCode) {
+      const rec = oauthPopupHandoffs.get(handoffCode);
+      if (rec && rec.expiresAt > Date.now()) {
+        oauthPopupHandoffs.delete(handoffCode);
+        resolvedIdentity = {
+          userId: rec.userId,
+          email: rec.email,
+          fullName: rec.fullName,
+          image: rec.image,
+          authMethod: rec.authMethod,
+        };
+      } else {
+        return res.status(401).json({
+          authenticated: false,
+          error: 'Kode sesi popup Google sudah kedaluwarsa atau sudah dipakai. Silakan klik Masuk dengan Google lagi.',
+        });
+      }
+    }
+
+    const authInstance = getBetterAuthInstance(extractRequestOrigin(req));
+    if (!resolvedIdentity && !authInstance) {
       return res.status(200).json({ authenticated: false, betterAuthReady: false });
     }
     try {
-      const baSession = await authInstance.api.getSession({
-        headers: fromNodeHeaders(req.headers),
-      });
-      if (!baSession?.user?.email) {
+      if (!resolvedIdentity && authInstance) {
+        const baSession = await authInstance.api.getSession({
+          headers: fromNodeHeaders(req.headers),
+        });
+        if (!baSession?.user?.email) {
+          return res.status(200).json({ authenticated: false, betterAuthReady: true });
+        }
+        resolvedIdentity = {
+          userId: baSession.user.id,
+          email: baSession.user.email.trim().toLowerCase(),
+          fullName: baSession.user.name || baSession.user.email.split('@')[0] || 'Pengguna KasirAkun',
+          image: baSession.user.image ?? null,
+          authMethod: 'EMAIL',
+        };
+      }
+
+      if (!resolvedIdentity) {
         return res.status(200).json({ authenticated: false, betterAuthReady: true });
       }
 
-      const emailNorm = baSession.user.email.trim().toLowerCase();
+      const emailNorm = resolvedIdentity.email;
       const prismaClient = getPrismaClient();
       const dbUser = prismaClient
         ? await prismaClient.user.findUnique({
@@ -606,10 +783,10 @@ export async function createExpressApp(
         : null;
 
       // Determine whether user signed in via Google OAuth or credential
-      let authMethod: 'GOOGLE' | 'EMAIL' = 'EMAIL';
-      if (prismaClient) {
+      let authMethod: 'GOOGLE' | 'EMAIL' = resolvedIdentity.authMethod;
+      if (authMethod !== 'GOOGLE' && prismaClient) {
         const googleAcct = await prismaClient.authAccount.findFirst({
-          where: { userId: baSession.user.id, providerId: 'google' },
+          where: { userId: resolvedIdentity.userId, providerId: 'google' },
           select: { id: true },
         });
         if (googleAcct) {
@@ -673,7 +850,7 @@ export async function createExpressApp(
           accountScope: 'REAL',
           authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
           email: emailNorm,
-          fullName: masterAcc?.fullName || dbUser?.fullName || baSession.user.name || 'Master Admin',
+          fullName: masterAcc?.fullName || dbUser?.fullName || resolvedIdentity.fullName || 'Master Admin',
           phone: masterAcc?.phone || '',
           token,
           customers: tenantDb.listCustomers().map(sanitizeCustomerForApi),
@@ -733,10 +910,10 @@ export async function createExpressApp(
         needsOnboarding: true,
         authProvider: authMethod === 'GOOGLE' ? 'BETTER_AUTH_GOOGLE' : 'BETTER_AUTH_EMAIL',
         profile: {
-          userId: baSession.user.id,
+          userId: resolvedIdentity.userId,
           email: emailNorm,
-          fullName: dbUser?.fullName || baSession.user.name || emailNorm.split('@')[0],
-          image: baSession.user.image ?? null,
+          fullName: dbUser?.fullName || resolvedIdentity.fullName || emailNorm.split('@')[0],
+          image: resolvedIdentity.image,
         },
       });
     } catch {
@@ -2679,7 +2856,7 @@ export async function createExpressApp(
   });
 
   // Mount Master Admin Encrypted Environment API & Secret Key Vault (Auto-Sync to process.env)
-  mountMasterEnvSecretsRoutes(app, {
+  envSecretsHandle = mountMasterEnvSecretsRoutes(app, {
     DATA_ROOT,
     extractSessionFromRequest,
     loadJsonFile,

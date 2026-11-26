@@ -520,6 +520,47 @@ describe('Environment Mapping, Gateway Env Fallback & Neon Workspace Snapshot Sy
     assert.equal(restored.accounts.length, prov.workspace.accounts.length);
     assert.equal(extractWorkspaceSnapshotFromSettings({}), null);
   });
+
+  it('keeps vault secrets readable after BETTER_AUTH_SECRET is hydrated and parses bulk .env text', async () => {
+    const { encryptSecret, decryptSecretWithFallback } = await import('./payments/crypto.ts');
+    const { parseBulkEnvText } = await import('../server/env-secrets-routes.ts');
+
+    const prevSecret = process.env.BETTER_AUTH_SECRET;
+    try {
+      delete process.env.BETTER_AUTH_SECRET;
+      const encryptedBeforeSecret = encryptSecret('SB-Mid-server-TestKey123');
+      process.env.BETTER_AUTH_SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+      const fallbackRes = decryptSecretWithFallback(encryptedBeforeSecret);
+      assert.equal(fallbackRes.plaintext, 'SB-Mid-server-TestKey123');
+      assert.equal(fallbackRes.usedFallbackKey, true);
+
+      const encryptedAfterSecret = encryptSecret('GOCSPX-RealGoogleSecret999');
+      const primaryRes = decryptSecretWithFallback(encryptedAfterSecret);
+      assert.equal(primaryRes.plaintext, 'GOCSPX-RealGoogleSecret999');
+      assert.equal(primaryRes.usedFallbackKey, false);
+    } finally {
+      if (prevSecret === undefined) {
+        delete process.env.BETTER_AUTH_SECRET;
+      } else {
+        process.env.BETTER_AUTH_SECRET = prevSecret;
+      }
+    }
+
+    const parsed = parseBulkEnvText(`
+      # Comment line
+      GOOGLE_CLIENT_ID="12345.apps.googleusercontent.com"
+      export GOOGLE_CLIENT_SECRET='GOCSPX-abc123'
+      MIDTRANS_SERVER_KEY=SB-Mid-server-xyz999
+      FONNTE_TOKEN=REPLACE_WITH_TOKEN
+      EMPTY_VAL=
+    `);
+    assert.deepEqual(parsed, [
+      { key: 'GOOGLE_CLIENT_ID', value: '12345.apps.googleusercontent.com' },
+      { key: 'GOOGLE_CLIENT_SECRET', value: 'GOCSPX-abc123' },
+      { key: 'MIDTRANS_SERVER_KEY', value: 'SB-Mid-server-xyz999' },
+    ]);
+  });
 });
 
 

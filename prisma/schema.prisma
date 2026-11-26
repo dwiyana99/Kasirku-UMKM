@@ -1453,6 +1453,16 @@ model Verification {
   @@map("verifications")
 }
 
+model MasterEnvVaultItem {
+  key            String   @id @db.VarChar(80)
+  encryptedValue String   @map("encrypted_value") @db.Text
+  metaJson       Json     @default("{}") @map("meta_json") @db.JsonB
+  updatedBy      String   @default("") @map("updated_by") @db.VarChar(180)
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("master_env_vault_items")
+}
+
 
 
 

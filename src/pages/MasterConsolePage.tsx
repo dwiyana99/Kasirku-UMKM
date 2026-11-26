@@ -278,12 +278,12 @@ export function MasterConsolePage() {
     ENV_SECRETS: {
       title: 'Pengaturan API & Secret Key Server',
       subtitle:
-        'Peta 14 variabel inti untuk produksi Vercel: Neon PostgreSQL, Neon Object Storage, Better Auth (Neon), Midtrans, dan Fonnte.',
+        'Peta 16 variabel produksi Vercel: Neon PostgreSQL, Neon Object Storage, Better Auth & Google OAuth, Midtrans, dan Fonnte.',
     },
     INFRA_MIGRATION: {
       title: 'Migrasi Database, Storage & Sinkronisasi Otomatis',
       subtitle:
-        'Kelola kesiapan Neon PostgreSQL, Neon Object Storage, Better Auth (Neon), Midtrans, dan Fonnte untuk deployment Vercel.',
+        'Kelola kesiapan Neon PostgreSQL, Neon Object Storage, Better Auth & Google OAuth, Midtrans, dan Fonnte untuk deployment Vercel & VPS.',
     },
   };
 

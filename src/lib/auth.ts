@@ -145,6 +145,8 @@ function createBetterAuthInstance(params: {
         google: {
           clientId: params.googleClientId,
           clientSecret: params.googleClientSecret,
+          prompt: 'select_account' as const,
+          redirectURI: `${params.baseURL}/api/auth/callback/google`,
         },
       }
     : undefined;

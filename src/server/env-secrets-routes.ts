@@ -9,9 +9,13 @@
 import path from 'node:path';
 import type express from 'express';
 import { z } from 'zod';
-import { decryptSecret, encryptSecret, maskSecretKey } from '../lib/payments/crypto.ts';
+import {
+  decryptSecretWithFallback,
+  encryptSecret,
+  maskSecretKey,
+} from '../lib/payments/crypto.ts';
 import { resetBetterAuthCache } from '../lib/auth.ts';
-import { resetPrismaClientCache } from '../lib/prisma.ts';
+import { getPrismaClient, resetPrismaClientCache } from '../lib/prisma.ts';
 import { resetS3ClientCache } from '../lib/storage/s3-client.ts';
 import type { SignedSessionPayload } from '../lib/db/tenant-db.ts';
 
@@ -327,6 +331,50 @@ interface MountEnvSecretsDeps {
   saveJsonFile: (filePath: string, data: unknown) => void;
 }
 
+const HOST_SPECIFIC_KEYS = new Set(['BETTER_AUTH_URL']);
+
+function isPlaceholderEnvValue(val: string): boolean {
+  const s = val.trim();
+  if (!s) return true;
+  return (
+    s.includes('YOUR_') ||
+    s.includes('USER:PASSWORD') ||
+    s.includes('REPLACE_WITH_') ||
+    s.includes('PASSWORD@ep-xxx') ||
+    s.includes('<PASSWORD>') ||
+    s.includes('<ISI_') ||
+    s === 'nak_live_xxxx' ||
+    s === 'nsk_live_xxxx'
+  );
+}
+
+export function parseBulkEnvText(
+  rawText: string,
+): Array<{ key: string; value: string }> {
+  const entries: Array<{ key: string; value: string }> = [];
+  for (const rawLine of rawText.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const withoutExport = trimmed.startsWith('export ')
+      ? trimmed.slice('export '.length).trim()
+      : trimmed;
+    const eqIdx = withoutExport.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const key = withoutExport.slice(0, eqIdx).trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key) || key.length > 80) continue;
+    let val = withoutExport.slice(eqIdx + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"') && val.length >= 2) ||
+      (val.startsWith("'") && val.endsWith("'") && val.length >= 2)
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (!val || isPlaceholderEnvValue(val)) continue;
+    entries.push({ key, value: val });
+  }
+  return entries;
+}
+
 export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnvSecretsDeps): void {
   const { DATA_ROOT, extractSessionFromRequest, loadJsonFile, saveJsonFile } = deps;
   const VAULT_FILE = path.join(DATA_ROOT, '_env_secrets.enc.json');
@@ -339,31 +387,258 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
     saveJsonFile(VAULT_FILE, vault);
   };
 
+  const decryptVaultRecord = (rec: StoredEncryptedSecretRecord): { plain: string; usedFallbackKey: boolean } => {
+    const res = decryptSecretWithFallback(rec.encryptedValue);
+    return { plain: res.plaintext, usedFallbackKey: res.usedFallbackKey };
+  };
+
+  const reencryptVaultWithCurrentKey = (
+    vault: Record<string, StoredEncryptedSecretRecord>,
+    plainEntries: Array<[string, string]>,
+  ): boolean => {
+    let dirty = false;
+    for (const [k, plain] of plainEntries) {
+      const rec = vault[k];
+      if (!rec || !plain) continue;
+      rec.encryptedValue = encryptSecret(plain);
+      dirty = true;
+    }
+    return dirty;
+  };
+
   const hydrateAllIntoRuntimeEnv = (): { syncedKeys: string[]; failedKeys: string[] } => {
     const vault = readVault();
     const syncedKeys: string[] = [];
     const failedKeys: string[] = [];
+    const decryptedEntries: Array<[string, string, boolean]> = [];
+
+    // Decrypt all vault keys before applying BETTER_AUTH_SECRET so the encryption key never flips mid-loop
     for (const [key, rec] of Object.entries(vault)) {
       try {
-        const plain = decryptSecret(rec.encryptedValue);
-        if (plain) {
-          process.env[key] = plain;
+        const { plain, usedFallbackKey } = decryptVaultRecord(rec);
+        if (plain && !isPlaceholderEnvValue(plain)) {
+          decryptedEntries.push([key, plain, usedFallbackKey]);
           syncedKeys.push(key);
         }
       } catch {
         failedKeys.push(key);
       }
     }
+
+    for (const [key, plain] of decryptedEntries) {
+      if (!process.env[key] || isPlaceholderEnvValue(process.env[key] || '')) {
+        process.env[key] = plain;
+      } else if (vault[key]) {
+        process.env[key] = plain;
+      }
+    }
+
+    // Self-heal vault ciphertexts that were still encrypted with the pre-BETTER_AUTH_SECRET fallback key
+    const fallbackEntries = decryptedEntries
+      .filter(([, , usedFallback]) => usedFallback)
+      .map(([k, p]) => [k, p] as [string, string]);
+    if (fallbackEntries.length > 0 && reencryptVaultWithCurrentKey(vault, fallbackEntries)) {
+      writeVault(vault);
+    }
+
     return { syncedKeys, failedKeys };
+  };
+
+  // Sync encrypted shared secrets between local vault / Vercel process.env and Neon PostgreSQL
+  const syncVaultWithNeonPostgres = async (
+    actorEmail = 'system-sync',
+  ): Promise<{ neonConnected: boolean; pulledKeys: string[]; pushedKeys: string[] }> => {
+    const prisma = getPrismaClient();
+    if (!prisma) {
+      return { neonConnected: false, pulledKeys: [], pushedKeys: [] };
+    }
+
+    const pulledKeys: string[] = [];
+    const pushedKeys: string[] = [];
+
+    try {
+      const neonRows = await prisma.masterEnvVaultItem.findMany();
+      const neonMap = new Map(neonRows.map((row) => [row.key, row]));
+      const vault = readVault();
+      let vaultDirty = false;
+      let authOrStorageChanged = false;
+
+      // 1. Pull shared secrets stored in Neon into runtime + local vault (never overwrite host-specific BETTER_AUTH_URL)
+      for (const row of neonRows) {
+        if (HOST_SPECIFIC_KEYS.has(row.key)) continue;
+        try {
+          const { plaintext, usedFallbackKey } = decryptSecretWithFallback(row.encryptedValue);
+          if (!plaintext || isPlaceholderEnvValue(plaintext)) continue;
+
+          const localVaultRec = vault[row.key];
+          const neonUpdatedMs = row.updatedAt.getTime();
+          const localUpdatedMs = localVaultRec?.updatedAt
+            ? new Date(localVaultRec.updatedAt).getTime()
+            : 0;
+
+          if (!localVaultRec || neonUpdatedMs > localUpdatedMs) {
+            const meta = (row.metaJson && typeof row.metaJson === 'object'
+              ? row.metaJson
+              : {}) as Record<string, unknown>;
+            const preset = STANDARD_ENV_CATALOG.find((item) => item.key === row.key);
+            vault[row.key] = {
+              key: row.key,
+              encryptedValue: usedFallbackKey ? encryptSecret(plaintext) : row.encryptedValue,
+              label: typeof meta.label === 'string' ? meta.label : preset?.label || row.key,
+              category:
+                typeof meta.category === 'string'
+                  ? (meta.category as EnvSecretCategory)
+                  : preset?.category || 'SECURITY_CUSTOM',
+              serviceName:
+                typeof meta.serviceName === 'string'
+                  ? meta.serviceName
+                  : preset?.serviceName || 'Custom Environment Key',
+              description:
+                typeof meta.description === 'string' ? meta.description : preset?.description || '',
+              isSecret:
+                typeof meta.isSecret === 'boolean' ? meta.isSecret : preset?.isSecret ?? true,
+              isCustom: !preset,
+              updatedAt: row.updatedAt.toISOString(),
+              updatedBy: row.updatedBy || 'neon-sync',
+            };
+            vaultDirty = true;
+
+            if (process.env[row.key] !== plaintext) {
+              process.env[row.key] = plaintext;
+              pulledKeys.push(row.key);
+              authOrStorageChanged = true;
+            }
+          }
+        } catch {
+          // Ignore entries encrypted under a different BETTER_AUTH_SECRET
+        }
+      }
+
+      if (vaultDirty) {
+        writeVault(vault);
+      }
+
+      // 2. Push local/Vercel process.env or local vault entries into Neon so AI Studio & Vercel share one truth
+      const pushCandidates = new Map<
+        string,
+        {
+          plain: string;
+          label?: string;
+          category?: EnvSecretCategory;
+          serviceName?: string;
+          description?: string;
+          isSecret?: boolean;
+          updatedBy: string;
+          updatedAtMs: number;
+        }
+      >();
+
+      for (const preset of STANDARD_ENV_CATALOG) {
+        if (HOST_SPECIFIC_KEYS.has(preset.key)) continue;
+        const envVal = (process.env[preset.key] || '').trim();
+        if (envVal && !isPlaceholderEnvValue(envVal)) {
+          pushCandidates.set(preset.key, {
+            plain: envVal,
+            label: preset.label,
+            category: preset.category,
+            serviceName: preset.serviceName,
+            description: preset.description,
+            isSecret: preset.isSecret,
+            updatedBy: process.env.VERCEL ? 'vercel-runtime' : actorEmail,
+            updatedAtMs: Date.now(),
+          });
+        }
+      }
+
+      for (const [k, rec] of Object.entries(vault)) {
+        if (HOST_SPECIFIC_KEYS.has(k)) continue;
+        try {
+          const { plain } = decryptVaultRecord(rec);
+          if (plain && !isPlaceholderEnvValue(plain)) {
+            pushCandidates.set(k, {
+              plain,
+              label: rec.label,
+              category: rec.category,
+              serviceName: rec.serviceName,
+              description: rec.description,
+              isSecret: rec.isSecret,
+              updatedBy: rec.updatedBy || actorEmail,
+              updatedAtMs: rec.updatedAt ? new Date(rec.updatedAt).getTime() : Date.now(),
+            });
+          }
+        } catch {
+          // Skip unreadable vault record
+        }
+      }
+
+      for (const [key, candidate] of pushCandidates.entries()) {
+        const existingNeon = neonMap.get(key);
+        let shouldUpsert = !existingNeon;
+        if (existingNeon) {
+          let existingPlain = '';
+          try {
+            existingPlain = decryptSecretWithFallback(existingNeon.encryptedValue).plaintext;
+          } catch {
+            existingPlain = '';
+          }
+          const existingMs = existingNeon.updatedAt.getTime();
+          if (!existingPlain || (existingPlain !== candidate.plain && candidate.updatedAtMs > existingMs)) {
+            shouldUpsert = true;
+          }
+        }
+
+        if (shouldUpsert) {
+          const encrypted = encryptSecret(candidate.plain);
+          await prisma.masterEnvVaultItem.upsert({
+            where: { key },
+            create: {
+              key,
+              encryptedValue: encrypted,
+              metaJson: {
+                label: candidate.label || key,
+                category: candidate.category || 'SECURITY_CUSTOM',
+                serviceName: candidate.serviceName || 'KasirAkun Env',
+                description: candidate.description || '',
+                isSecret: candidate.isSecret ?? true,
+              },
+              updatedBy: candidate.updatedBy,
+            },
+            update: {
+              encryptedValue: encrypted,
+              metaJson: {
+                label: candidate.label || key,
+                category: candidate.category || 'SECURITY_CUSTOM',
+                serviceName: candidate.serviceName || 'KasirAkun Env',
+                description: candidate.description || '',
+                isSecret: candidate.isSecret ?? true,
+              },
+              updatedBy: candidate.updatedBy,
+            },
+          });
+          pushedKeys.push(key);
+        }
+      }
+
+      if (authOrStorageChanged) {
+        resetBetterAuthCache();
+        resetS3ClientCache();
+      }
+
+      return { neonConnected: true, pulledKeys, pushedKeys };
+    } catch {
+      return { neonConnected: false, pulledKeys: [], pushedKeys: [] };
+    }
   };
 
   // Immediately hydrate saved encrypted keys into process.env on server startup
   hydrateAllIntoRuntimeEnv();
+  void syncVaultWithNeonPostgres('boot-sync');
 
   const buildSummaries = (): MasterEnvSecretSummary[] => {
     const vault = readVault();
     const standardKeys = new Set(STANDARD_ENV_CATALOG.map((item) => item.key));
     const list: MasterEnvSecretSummary[] = [];
+    const fallbackToHeal: Array<[string, string]> = [];
 
     for (const preset of STANDARD_ENV_CATALOG) {
       const vaultRec = vault[preset.key];
@@ -371,15 +646,19 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       let source: MasterEnvSecretSummary['source'] = 'NOT_SET';
       if (vaultRec) {
         try {
-          const decrypted = decryptSecret(vaultRec.encryptedValue);
-          if (decrypted) {
-            runtimeVal = decrypted;
+          const { plain, usedFallbackKey } = decryptVaultRecord(vaultRec);
+          if (plain && !isPlaceholderEnvValue(plain)) {
+            runtimeVal = plain;
             source = 'MASTER_VAULT';
+            if (usedFallbackKey) {
+              fallbackToHeal.push([preset.key, plain]);
+            }
           }
         } catch {
-          source = 'NOT_SET';
+          // Fall back safely to SERVER_ENV below if runtime env var is already active
         }
-      } else if (runtimeVal && !runtimeVal.includes('YOUR_') && !runtimeVal.includes('USER:PASSWORD')) {
+      }
+      if (source === 'NOT_SET' && runtimeVal && !isPlaceholderEnvValue(runtimeVal)) {
         source = 'SERVER_ENV';
       }
 
@@ -415,12 +694,16 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       if (standardKeys.has(key)) continue;
       let plain = '';
       try {
-        plain = decryptSecret(rec.encryptedValue);
+        const dec = decryptVaultRecord(rec);
+        plain = dec.plain ?? '';
+        if (dec.usedFallbackKey && plain) {
+          fallbackToHeal.push([key, plain]);
+        }
       } catch {
-        plain = '';
+        plain = process.env[key] || '';
       }
       const isSecret = rec.isSecret ?? true;
-      const configured = Boolean(plain);
+      const configured = Boolean(plain) && !isPlaceholderEnvValue(plain);
       list.push({
         key,
         label: rec.label || key,
@@ -446,15 +729,20 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       });
     }
 
+    if (fallbackToHeal.length > 0 && reencryptVaultWithCurrentKey(vault, fallbackToHeal)) {
+      writeVault(vault);
+    }
+
     return list;
   };
 
-  // GET /api/master/env-secrets — Masked status & Indonesian setup guides
-  app.get('/api/master/env-secrets', (req, res) => {
+  // GET /api/master/env-secrets — Sync with Neon shared vault then return masked status & Indonesian setup guides
+  app.get('/api/master/env-secrets', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session || session.role !== 'MASTER_ADMIN') {
       return res.status(403).json({ error: 'Hanya Master Admin yang dapat mengakses brankas API & Secret Key.' });
     }
+    const syncInfo = await syncVaultWithNeonPostgres(session.email);
     const items = buildSummaries();
     const configuredCount = items.filter((i) => i.configured).length;
     return res.status(200).json({
@@ -465,12 +753,13 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
         syncedCount: items.filter((i) => i.syncedToRuntime).length,
         customCount: items.filter((i) => i.isCustom).length,
       },
+      neonVaultSync: syncInfo,
       lastCheckedAt: new Date().toISOString(),
     });
   });
 
-  // PUT /api/master/env-secrets — Save/update standard or custom key, encrypt AES-256-GCM, and auto-sync to process.env
-  app.put('/api/master/env-secrets', (req, res) => {
+  // PUT /api/master/env-secrets — Save/update standard or custom key, encrypt AES-256-GCM, and auto-sync to process.env + Neon
+  app.put('/api/master/env-secrets', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session || session.role !== 'MASTER_ADMIN') {
       return res.status(403).json({ error: 'Hanya Master Admin yang berwenang menyimpan Environment API & Secret Key.' });
@@ -488,6 +777,23 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
     const vault = readVault();
     const nowIso = new Date().toISOString();
 
+    // If BETTER_AUTH_SECRET is about to change, decrypt existing vault values first so we can re-encrypt under the new key
+    const existingPlains: Array<[string, string]> = [];
+    if (key === 'BETTER_AUTH_SECRET') {
+      for (const [k, rec] of Object.entries(vault)) {
+        if (k === key) continue;
+        try {
+          const { plain } = decryptVaultRecord(rec);
+          if (plain) existingPlains.push([k, plain]);
+        } catch {
+          // Skip unreadable record
+        }
+      }
+    }
+
+    // Immediate live auto-sync to active Node.js runtime process.env
+    process.env[key] = value;
+
     vault[key] = {
       key,
       encryptedValue: encryptSecret(value),
@@ -501,21 +807,103 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       updatedBy: session.email,
     };
 
+    if (key === 'BETTER_AUTH_SECRET' && existingPlains.length > 0) {
+      reencryptVaultWithCurrentKey(vault, existingPlains);
+    }
+
     writeVault(vault);
-    // Immediate live auto-sync to active Node.js runtime process.env
-    process.env[key] = value;
     resetBetterAuthCache();
     resetS3ClientCache();
     if (key === 'DATABASE_URL' || key === 'DIRECT_URL') {
       resetPrismaClientCache();
     }
 
+    const syncInfo = await syncVaultWithNeonPostgres(session.email);
     const items = buildSummaries();
     const savedItem = items.find((i) => i.key === key);
     return res.status(200).json({
       ok: true,
-      message: `${key} berhasil dienkripsi (AES-256-GCM) dan langsung tersinkron otomatis ke runtime server.`,
+      message: syncInfo.neonConnected
+        ? `${key} berhasil dienkripsi (AES-256-GCM), aktif di server ini, dan tersinkron ke Neon PostgreSQL.`
+        : `${key} berhasil dienkripsi (AES-256-GCM) dan langsung tersinkron otomatis ke runtime server.`,
       item: savedItem,
+      items,
+      neonVaultSync: syncInfo,
+      stats: {
+        totalKeys: items.length,
+        configuredCount: items.filter((i) => i.configured).length,
+        syncedCount: items.filter((i) => i.syncedToRuntime).length,
+        customCount: items.filter((i) => i.isCustom).length,
+      },
+    });
+  });
+
+  // POST /api/master/env-secrets/bulk-import — 1-click import from Vercel .env copy-paste
+  app.post('/api/master/env-secrets/bulk-import', async (req, res) => {
+    const session = extractSessionFromRequest(req);
+    if (!session || session.role !== 'MASTER_ADMIN') {
+      return res.status(403).json({ error: 'Hanya Master Admin yang berwenang mengimpor Environment Variables.' });
+    }
+    const rawEnvText = typeof req.body?.rawEnvText === 'string' ? req.body.rawEnvText : '';
+    const parsedEntries = parseBulkEnvText(rawEnvText);
+    if (parsedEntries.length === 0) {
+      return res.status(400).json({
+        error: 'Tidak ditemukan baris KEY=VALUE yang valid. Tempel isi .env atau variabel Vercel Anda.',
+      });
+    }
+
+    const vault = readVault();
+    const nowIso = new Date().toISOString();
+
+    // Decrypt existing keys first in case BETTER_AUTH_SECRET is among imported entries
+    const existingPlains = new Map<string, string>();
+    for (const [k, rec] of Object.entries(vault)) {
+      try {
+        const { plain } = decryptVaultRecord(rec);
+        if (plain) existingPlains.set(k, plain);
+      } catch {
+        // ignore
+      }
+    }
+
+    // Apply imported plain values to process.env first (BETTER_AUTH_SECRET included)
+    const importedKeys: string[] = [];
+    for (const { key, value } of parsedEntries) {
+      process.env[key] = value;
+      existingPlains.set(key, value);
+      importedKeys.push(key);
+    }
+
+    // Re-encrypt all entries consistently with the active key
+    for (const [key, plainVal] of existingPlains.entries()) {
+      const preset = STANDARD_ENV_CATALOG.find((item) => item.key === key);
+      const prev = vault[key];
+      vault[key] = {
+        key,
+        encryptedValue: encryptSecret(plainVal),
+        label: prev?.label || preset?.label || key,
+        category: prev?.category || preset?.category || 'SECURITY_CUSTOM',
+        serviceName: prev?.serviceName || preset?.serviceName || 'Custom Environment Key',
+        description: prev?.description || preset?.description || '',
+        isSecret: prev?.isSecret ?? preset?.isSecret ?? true,
+        isCustom: !preset,
+        updatedAt: importedKeys.includes(key) ? nowIso : prev?.updatedAt || nowIso,
+        updatedBy: importedKeys.includes(key) ? session.email : prev?.updatedBy || session.email,
+      };
+    }
+
+    writeVault(vault);
+    resetBetterAuthCache();
+    resetS3ClientCache();
+    resetPrismaClientCache();
+
+    const syncInfo = await syncVaultWithNeonPostgres(session.email);
+    const items = buildSummaries();
+    return res.status(200).json({
+      ok: true,
+      importedKeys,
+      neonVaultSync: syncInfo,
+      message: `${importedKeys.length} variabel berhasil diimpor, dienkripsi, dan disinkronkan (${importedKeys.join(', ')}).`,
       items,
       stats: {
         totalKeys: items.length,
@@ -526,8 +914,8 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
     });
   });
 
-  // DELETE /api/master/env-secrets/:key — Remove key from encrypted vault & clear from runtime process.env
-  app.delete('/api/master/env-secrets/:key', (req, res) => {
+  // DELETE /api/master/env-secrets/:key — Remove key from encrypted vault & Neon & clear from runtime process.env
+  app.delete('/api/master/env-secrets/:key', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session || session.role !== 'MASTER_ADMIN') {
       return res.status(403).json({ error: 'Hanya Master Admin yang berwenang menghapus Secret Key.' });
@@ -539,6 +927,14 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
       writeVault(vault);
     }
     delete process.env[targetKey];
+    const prisma = getPrismaClient();
+    if (prisma) {
+      try {
+        await prisma.masterEnvVaultItem.deleteMany({ where: { key: targetKey } });
+      } catch {
+        // ignore if table not created yet
+      }
+    }
     resetBetterAuthCache();
     resetS3ClientCache();
     if (targetKey === 'DATABASE_URL' || targetKey === 'DIRECT_URL') {
@@ -559,29 +955,33 @@ export function mountMasterEnvSecretsRoutes(app: express.Express, deps: MountEnv
     });
   });
 
-  // POST /api/master/env-secrets/sync — Force re-hydrate all encrypted vault keys to process.env
-  app.post('/api/master/env-secrets/sync', (req, res) => {
+  // POST /api/master/env-secrets/sync — Force re-hydrate all encrypted vault keys to process.env + Neon two-way sync
+  app.post('/api/master/env-secrets/sync', async (req, res) => {
     const session = extractSessionFromRequest(req);
     if (!session || session.role !== 'MASTER_ADMIN') {
       return res.status(403).json({ error: 'Hanya Master Admin yang berwenang menjalankan sinkronisasi.' });
     }
     const result = hydrateAllIntoRuntimeEnv();
+    const syncInfo = await syncVaultWithNeonPostgres(session.email);
     resetBetterAuthCache();
     resetS3ClientCache();
     resetPrismaClientCache();
     const items = buildSummaries();
+    const activeCount = items.filter((i) => i.configured).length;
     return res.status(200).json({
       ok: true,
-      message:
-        result.syncedKeys.length > 0
-          ? `${result.syncedKeys.length} kunci API & secret berhasil disinkronisasi ulang ke runtime server dan siap langsung dipakai.`
-          : 'Sinkronisasi selesai. Belum ada secret tersimpan di brankas; tambahkan API Key di bawah untuk mulai sinkron otomatis.',
+      message: syncInfo.neonConnected
+        ? `Sinkronisasi 2-arah Neon selesai: ${activeCount} variabel aktif (${syncInfo.pulledKeys.length} ditarik dari Neon/Vercel, ${syncInfo.pushedKeys.length} dikirim ke Neon).`
+        : result.syncedKeys.length > 0
+        ? `${result.syncedKeys.length} kunci API & secret berhasil disinkronisasi ulang ke runtime server dan siap langsung dipakai.`
+        : 'Sinkronisasi selesai. Belum ada secret tersimpan di brankas; tambahkan API Key atau impor .env Vercel di bawah.',
       syncedKeys: result.syncedKeys,
       failedKeys: result.failedKeys,
+      neonVaultSync: syncInfo,
       items,
       stats: {
         totalKeys: items.length,
-        configuredCount: items.filter((i) => i.configured).length,
+        configuredCount: activeCount,
         syncedCount: items.filter((i) => i.syncedToRuntime).length,
         customCount: items.filter((i) => i.isCustom).length,
       },

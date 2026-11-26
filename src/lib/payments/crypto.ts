@@ -9,6 +9,11 @@ import crypto from 'node:crypto';
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96-bit recommended IV for GCM
 
+const DEFAULT_DEV_KEY = crypto
+  .createHash('sha256')
+  .update('kasirakun-umkm-default-dev-aes256-key-replace-in-production', 'utf8')
+  .digest();
+
 function deriveEncryptionKey(): Buffer {
   const explicitSecret =
     process.env.PAYMENT_KEY_ENCRYPTION_SECRET ||
@@ -32,10 +37,22 @@ function deriveEncryptionKey(): Buffer {
       .digest();
   }
 
-  return crypto
-    .createHash('sha256')
-    .update('kasirakun-umkm-default-dev-aes256-key-replace-in-production', 'utf8')
-    .digest();
+  return DEFAULT_DEV_KEY;
+}
+
+function decryptWithKey(payload: string, key: Buffer): string {
+  const parts = payload.split(':');
+  if (parts.length !== 4 || parts[0] !== 'v1') {
+    throw new Error('Format enkripsi kunci payment gateway tidak valid.');
+  }
+  const [, ivB64, authTagB64, cipherB64] = parts;
+  const iv = Buffer.from(ivB64, 'base64');
+  const authTag = Buffer.from(authTagB64, 'base64');
+  const ciphertext = Buffer.from(cipherB64, 'base64');
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString('utf8');
 }
 
 /**
@@ -58,19 +75,29 @@ export function encryptSecret(plaintext: string): string {
  */
 export function decryptSecret(payload: string | null | undefined): string {
   if (!payload || !payload.trim()) return '';
-  const parts = payload.split(':');
-  if (parts.length !== 4 || parts[0] !== 'v1') {
-    throw new Error('Format enkripsi kunci payment gateway tidak valid.');
+  return decryptWithKey(payload, deriveEncryptionKey());
+}
+
+/**
+ * Decrypts a vault secret with fallback to the pre-BETTER_AUTH_SECRET default key
+ * so secrets encrypted before BETTER_AUTH_SECRET was loaded never appear missing.
+ */
+export function decryptSecretWithFallback(payload: string | null | undefined): {
+  plaintext: string;
+  usedFallbackKey: boolean;
+} {
+  if (!payload || !payload.trim()) {
+    return { plaintext: '', usedFallbackKey: false };
   }
-  const [, ivB64, authTagB64, cipherB64] = parts;
-  const key = deriveEncryptionKey();
-  const iv = Buffer.from(ivB64, 'base64');
-  const authTag = Buffer.from(authTagB64, 'base64');
-  const ciphertext = Buffer.from(cipherB64, 'base64');
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
-  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return decrypted.toString('utf8');
+  const primaryKey = deriveEncryptionKey();
+  try {
+    return { plaintext: decryptWithKey(payload, primaryKey), usedFallbackKey: false };
+  } catch (err) {
+    if (!primaryKey.equals(DEFAULT_DEV_KEY)) {
+      return { plaintext: decryptWithKey(payload, DEFAULT_DEV_KEY), usedFallbackKey: true };
+    }
+    throw err;
+  }
 }
 
 /**

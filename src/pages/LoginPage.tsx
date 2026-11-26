@@ -119,6 +119,20 @@ export function LoginPage({
   }, []);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const oauthErr = params.get('error') || params.get('oauth_error');
+      if (oauthErr) {
+        setCustError(
+          oauthErr === '1'
+            ? 'Login Google dibatalkan atau Redirect URI belum cocok di Google Cloud Console.'
+            : `Autentikasi Google gagal: ${oauthErr}. Periksa Authorized Redirect URI & BETTER_AUTH_URL.`,
+        );
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     if (!betterAuthError) return;
     if (tab === 'MASTER') {
       setMasterError(betterAuthError);
@@ -244,6 +258,7 @@ export function LoginPage({
           provider: 'google',
           callbackURL: '/dashboard',
           newUserCallbackURL: '/onboarding?mode=real&source=oauth',
+          errorCallbackURL: '/login?oauth_error=1',
         });
         if (result?.error) {
           setCustError(
@@ -252,17 +267,24 @@ export function LoginPage({
           setGoogleSubmitting(false);
           return;
         }
+        const redirectUrl =
+          result?.data && typeof result.data === 'object' && 'url' in result.data
+            ? String((result.data as { url?: unknown }).url || '')
+            : '';
         setCustSuccess('Mengarahkan ke halaman persetujuan Google...');
+        if (redirectUrl && typeof window !== 'undefined') {
+          window.location.assign(redirectUrl);
+        }
         return;
       }
 
       if (!authConfig.betterAuthReady) {
         setCustError(
-          'Login Google membutuhkan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server. Silakan masuk dengan Email & Kata Sandi atau lengkapi env Neon di Vercel / Master Admin.',
+          'Login Google membutuhkan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server. Atur di Vercel atau Master Admin -> Pengaturan API & Secret Key.',
         );
       } else {
         setCustError(
-          'Google OAuth belum dikonfigurasi. Lengkapi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Vercel atau Master Admin -> Pengaturan API & Secret Key.',
+          'Google OAuth belum aktif. Isi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key (atau Vercel Environment Variables).',
         );
       }
     } catch {
@@ -448,14 +470,27 @@ export function LoginPage({
   const handleGoogleMaster = async () => {
     setMasterError('');
     if (authConfig.betterAuthReady && authConfig.googleAuthConfigured) {
-      const result = await authClient.signIn.social({
-        provider: 'google',
-        callbackURL: '/master',
-      });
-      if (result?.error) {
-        setMasterError(
-          result.error.message || 'Gagal menghubungkan akun Google Master via Better Auth.',
-        );
+      try {
+        const result = await authClient.signIn.social({
+          provider: 'google',
+          callbackURL: '/master',
+          errorCallbackURL: '/login?oauth_error=1',
+        });
+        if (result?.error) {
+          setMasterError(
+            result.error.message || 'Gagal menghubungkan akun Google Master via Better Auth.',
+          );
+          return;
+        }
+        const redirectUrl =
+          result?.data && typeof result.data === 'object' && 'url' in result.data
+            ? String((result.data as { url?: unknown }).url || '')
+            : '';
+        if (redirectUrl && typeof window !== 'undefined') {
+          window.location.assign(redirectUrl);
+        }
+      } catch {
+        setMasterError('Gagal menghubungi layanan Better Auth untuk Login Google Master.');
       }
       return;
     }
@@ -463,7 +498,7 @@ export function LoginPage({
     setMasterError(
       !authConfig.betterAuthReady
         ? 'Login Google Master memerlukan Neon PostgreSQL (DATABASE_URL) & BETTER_AUTH_SECRET aktif di server.'
-        : 'Google OAuth belum dikonfigurasi (GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET).',
+        : 'Google OAuth belum dikonfigurasi. Tambahkan GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin -> Pengaturan API & Secret Key atau Vercel.',
     );
   };
 
@@ -630,76 +665,60 @@ export function LoginPage({
                     <span>{masterSubmitting ? 'Memverifikasi...' : 'Masuk ke Konsol Master'}</span>
                   </button>
 
-                  {authConfig.googleAuthConfigured ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <button
-                        type="button"
-                        data-testid="master-quick-login-btn"
-                        disabled={masterSubmitting}
-                        onClick={() => void handleQuickMasterLogin()}
-                        className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" strokeWidth={1.75} />
-                        <span>Masuk Cepat Master</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={masterSubmitting}
-                        onClick={() => void handleGoogleMaster()}
-                        className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium text-stone-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-lg transition-colors"
-                      >
-                        <LogIn className="w-3.5 h-3.5" strokeWidth={1.75} />
-                        <span>Masuk Google Master</span>
-                      </button>
-                    </div>
-                  ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <button
                       type="button"
                       data-testid="master-quick-login-btn"
                       disabled={masterSubmitting}
                       onClick={() => void handleQuickMasterLogin()}
-                      className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
+                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" strokeWidth={1.75} />
                       <span>Masuk Cepat Master</span>
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      data-testid="master-google-login-btn"
+                      disabled={masterSubmitting}
+                      onClick={() => void handleGoogleMaster()}
+                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-medium text-stone-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-lg transition-colors"
+                    >
+                      <GoogleBrandMark />
+                      <span>Masuk Google Master</span>
+                    </button>
+                  </div>
                 </div>
               </form>
             ) : (
               <div className="space-y-5">
-                {authConfig.googleAuthConfigured && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handleGoogleCustomer()}
-                      data-testid="google-cloud-login-btn"
-                      className="w-full inline-flex items-center justify-center gap-2.5 py-2.5 px-4 text-sm font-semibold text-stone-800 bg-white hover:bg-stone-50 border border-stone-300 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
-                    >
-                      {googleSubmitting ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-emerald-600" strokeWidth={1.75} />
-                      ) : (
-                        <GoogleBrandMark />
-                      )}
-                      <span>
-                        {googleSubmitting
-                          ? 'Menghubungkan akun Google...'
-                          : authMode === 'REGISTER'
-                          ? 'Daftar dengan Google'
-                          : 'Masuk dengan Google'}
-                      </span>
-                    </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleGoogleCustomer()}
+                  data-testid="google-cloud-login-btn"
+                  className="w-full inline-flex items-center justify-center gap-2.5 py-2.5 px-4 text-sm font-semibold text-stone-800 bg-white hover:bg-stone-50 border border-stone-300 rounded-lg transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+                >
+                  {googleSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" strokeWidth={1.75} />
+                  ) : (
+                    <GoogleBrandMark />
+                  )}
+                  <span>
+                    {googleSubmitting
+                      ? 'Menghubungkan akun Google...'
+                      : authMode === 'REGISTER'
+                      ? 'Daftar dengan Google'
+                      : 'Masuk dengan Google'}
+                  </span>
+                </button>
 
-                    <div className="relative flex items-center">
-                      <div className="flex-1 border-t border-stone-200" />
-                      <span className="px-3 text-xs font-medium text-stone-500">
-                        atau gunakan email &amp; kata sandi
-                      </span>
-                      <div className="flex-1 border-t border-stone-200" />
-                    </div>
-                  </>
-                )}
+                <div className="relative flex items-center">
+                  <div className="flex-1 border-t border-stone-200" />
+                  <span className="px-3 text-xs font-medium text-stone-500">
+                    atau gunakan email &amp; kata sandi
+                  </span>
+                  <div className="flex-1 border-t border-stone-200" />
+                </div>
 
                 <p
                   data-testid="auth-provider-status-note"
@@ -708,8 +727,8 @@ export function LoginPage({
                   {authConfig.betterAuthReady
                     ? authConfig.googleAuthConfigured
                       ? 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email & Google aktif untuk semua akun)'
-                      : 'Terhubung ke Better Auth + Neon PostgreSQL (Login Email aktif · Tambahkan GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Vercel untuk tombol Login Google)'
-                    : 'Login Email & Akun Terkelola aktif · Neon PostgreSQL opsional via Vercel / Master Admin'}
+                      : 'Terhubung ke Better Auth + Neon PostgreSQL (Untuk tombol Google, isi GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET di Master Admin / Vercel)'
+                    : 'Login Email & Akun Terkelola aktif · Lengkapi DATABASE_URL & Google OAuth di Master Admin / Vercel'}
                 </p>
 
                 {/* Clean 2-option Login / Register Toggle */}
